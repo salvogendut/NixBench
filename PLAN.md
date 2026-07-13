@@ -223,6 +223,9 @@ normalized input, pointer capture, monotonic timing, software frame submission,
 asynchronous presentation completion, and suspend/resume transitions. Its
 deterministic headless implementation exercises the contract without a display
 server and provides the test seam for the upcoming SDL and NetBSD adapters.
+The framebuffer conversion layer validates channel masks, stride, and buffer
+arithmetic before converting canonical software frames into native-endian RGB
+16-, 24-, or 32-bit layouts while preserving device row padding.
 
 ## Milestone 8: Add standalone X11 compatibility
 

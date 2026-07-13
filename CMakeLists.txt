@@ -255,6 +255,16 @@ target_include_directories(
 )
 nixbench_configure_c_target(nixbench_host)
 
+add_library(
+  nixbench_framebuffer STATIC
+  src/framebuffer_format.c
+)
+target_include_directories(
+  nixbench_framebuffer
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+nixbench_configure_c_target(nixbench_framebuffer)
+
 if(NIXBENCH_WAYLAND_ENABLED)
   target_link_libraries(nixbench_wayland PUBLIC nixbench_model)
 endif()
@@ -373,6 +383,16 @@ if(BUILD_TESTING)
   target_link_libraries(nixbench_host_tests PRIVATE nixbench_host)
   nixbench_configure_c_target(nixbench_host_tests)
 
+  add_executable(
+    nixbench_framebuffer_format_tests
+    tests/framebuffer_format_test.c
+  )
+  target_link_libraries(
+    nixbench_framebuffer_format_tests
+    PRIVATE nixbench_framebuffer
+  )
+  nixbench_configure_c_target(nixbench_framebuffer_format_tests)
+
   add_executable(nixbench_window_tests tests/window_test.c)
   target_link_libraries(nixbench_window_tests PRIVATE nixbench_model)
   nixbench_configure_c_target(nixbench_window_tests)
@@ -448,6 +468,10 @@ if(BUILD_TESTING)
 
   add_test(NAME nixbench.desktop.model COMMAND nixbench_desktop_tests)
   add_test(NAME nixbench.host.contract COMMAND nixbench_host_tests)
+  add_test(
+    NAME nixbench.framebuffer.format
+    COMMAND nixbench_framebuffer_format_tests
+  )
   add_test(
     NAME nixbench.backend-probe.unit
     COMMAND nixbench_backend_probe_tests
