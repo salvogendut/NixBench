@@ -226,6 +226,11 @@ server and provides the test seam for the upcoming SDL and NetBSD adapters.
 The framebuffer conversion layer validates channel masks, stride, and buffer
 arithmetic before converting canonical software frames into native-endian RGB
 16-, 24-, or 32-bit layouts while preserving device row padding.
+The hosted SDL adapter now implements the same host contract with normalized
+events, a persistent presentation texture, and explicit completion events. A
+separate SDL software canvas produces the canonical CPU frame that will let the
+runtime feed hosted SDL and future `wsdisplay` output without changing shell
+renderers. The next slice routes the existing main loop through these pieces.
 
 ## Milestone 8: Add standalone X11 compatibility
 

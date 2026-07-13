@@ -200,8 +200,8 @@ static void test_event_fifo_and_capacity(void)
     CHECK(nb_host_monotonic_milliseconds(host) == 14);
 
     memset(&actual, 0, sizeof(actual));
-    actual.type = NB_HOST_EVENT_PRESENTED;
-    actual.data.presented.frame_serial = 1;
+    actual.type = NB_HOST_EVENT_FRAME_COMPLETE;
+    actual.data.frame_complete.frame_serial = 1;
     CHECK(!nb_host_headless_enqueue_event(host, &actual));
     actual.type = NB_HOST_EVENT_OUTPUT_CHANGED;
     actual.data.output = initial_output;
@@ -218,7 +218,7 @@ static void test_event_fifo_and_capacity(void)
     CHECK(!nb_host_headless_set_output(host, &resized, 20));
     CHECK(nb_host_get_output(host, &output));
     CHECK(memcmp(&output, &initial_output, sizeof(output)) == 0);
-    CHECK(nb_host_present(host, &frame) == NB_HOST_PRESENT_STATUS_ERROR);
+    CHECK(nb_host_present(host, &frame) == NB_HOST_RESULT_WOULD_BLOCK);
     CHECK(nb_host_headless_presentation_count(host) == 0);
     for (index = 0; index < NB_HOST_HEADLESS_EVENT_CAPACITY; ++index) {
         CHECK(nb_host_poll_event(host, &actual) ==
@@ -226,12 +226,12 @@ static void test_event_fifo_and_capacity(void)
     }
     CHECK(nb_host_poll_event(host, &actual) == NB_HOST_EVENT_STATUS_EMPTY);
     CHECK(nb_host_present(host, &frame) ==
-          NB_HOST_PRESENT_STATUS_ACCEPTED);
+          NB_HOST_RESULT_OK);
     CHECK(nb_host_headless_presentation_count(host) == 1);
     CHECK(nb_host_poll_event(host, &actual) ==
           NB_HOST_EVENT_STATUS_AVAILABLE);
-    CHECK(actual.type == NB_HOST_EVENT_PRESENTED);
-    CHECK(actual.data.presented.frame_serial == 1);
+    CHECK(actual.type == NB_HOST_EVENT_FRAME_COMPLETE);
+    CHECK(actual.data.frame_complete.frame_serial == 1);
     nb_host_destroy(host);
 }
 
@@ -263,7 +263,7 @@ static void test_present_copy_and_completion(void)
     }
     CHECK(nb_host_headless_advance_time(host, 123));
     CHECK(nb_host_present(host, &frame) ==
-          NB_HOST_PRESENT_STATUS_ACCEPTED);
+          NB_HOST_RESULT_OK);
     CHECK(nb_host_headless_presentation_count(host) == 1);
     memset(source, 0xff, sizeof(source));
 
@@ -283,28 +283,28 @@ static void test_present_copy_and_completion(void)
 
     CHECK(nb_host_poll_event(host, &event) ==
           NB_HOST_EVENT_STATUS_AVAILABLE);
-    CHECK(event.type == NB_HOST_EVENT_PRESENTED);
+    CHECK(event.type == NB_HOST_EVENT_FRAME_COMPLETE);
     CHECK(event.milliseconds == 123);
-    CHECK(event.data.presented.frame_serial == 7);
+    CHECK(event.data.frame_complete.frame_serial == 7);
     CHECK(nb_host_poll_event(host, &event) == NB_HOST_EVENT_STATUS_EMPTY);
 
     frame.serial = 7;
-    CHECK(nb_host_present(host, &frame) == NB_HOST_PRESENT_STATUS_ERROR);
+    CHECK(nb_host_present(host, &frame) == NB_HOST_RESULT_INVALID_STATE);
     frame.serial = 6;
-    CHECK(nb_host_present(host, &frame) == NB_HOST_PRESENT_STATUS_ERROR);
+    CHECK(nb_host_present(host, &frame) == NB_HOST_RESULT_INVALID_STATE);
     CHECK(nb_host_headless_presentation_count(host) == 1);
 
     frame.serial = 8;
     frame.width = 3;
-    CHECK(nb_host_present(host, &frame) == NB_HOST_PRESENT_STATUS_ERROR);
+    CHECK(nb_host_present(host, &frame) == NB_HOST_RESULT_INVALID_ARGUMENT);
     frame.width = 4;
     frame.height = 2;
-    CHECK(nb_host_present(host, &frame) == NB_HOST_PRESENT_STATUS_ERROR);
+    CHECK(nb_host_present(host, &frame) == NB_HOST_RESULT_INVALID_ARGUMENT);
     CHECK(nb_host_headless_presentation_count(host) == 1);
     nb_host_destroy(host);
 }
 
-static void test_suspend_resume_and_retry(void)
+static void test_console_release_acquire_and_retry(void)
 {
     struct nb_host *host = nb_host_headless_create(&initial_output);
     uint32_t pixels[12] = {0};
@@ -317,37 +317,134 @@ static void test_suspend_resume_and_retry(void)
         1
     };
     struct nb_host_event event;
+    const struct nb_host_event queued_input = focus_event(false, 50);
 
     CHECK(host != NULL);
     CHECK(nb_host_headless_advance_time(host, 50));
     CHECK(nb_host_set_pointer_capture(host, true));
-    CHECK(nb_host_headless_set_suspended(host, true, 50));
-    CHECK(!nb_host_headless_pointer_is_captured(host));
+    CHECK(nb_host_headless_enqueue_event(host, &queued_input));
+    CHECK(nb_host_headless_request_console_release(host, 50));
+    CHECK(nb_host_get_state(host) == NB_HOST_STATE_RELEASE_PENDING);
+    CHECK(nb_host_headless_pointer_is_captured(host));
     CHECK(nb_host_poll_event(host, &event) ==
           NB_HOST_EVENT_STATUS_AVAILABLE);
-    CHECK(event.type == NB_HOST_EVENT_SUSPENDED);
+    CHECK(event.type == NB_HOST_EVENT_CONSOLE_RELEASE_REQUESTED);
     CHECK(event.milliseconds == 50);
+    CHECK(nb_host_poll_event(host, &event) == NB_HOST_EVENT_STATUS_EMPTY);
 
     CHECK(nb_host_present(host, &frame) ==
-          NB_HOST_PRESENT_STATUS_SUSPENDED);
+          NB_HOST_RESULT_SUSPENDED);
     CHECK(nb_host_headless_presentation_count(host) == 0);
-    CHECK(nb_host_headless_set_suspended(host, true, 50));
+    CHECK(nb_host_complete_console_release(host) == NB_HOST_RESULT_OK);
+    CHECK(nb_host_get_state(host) == NB_HOST_STATE_SUSPENDED);
+    CHECK(!nb_host_headless_pointer_is_captured(host));
+    CHECK(!nb_host_headless_request_console_release(host, 50));
+    CHECK(nb_host_complete_console_release(host) ==
+          NB_HOST_RESULT_INVALID_STATE);
+    CHECK(!nb_host_headless_enqueue_event(host, &queued_input));
     CHECK(nb_host_headless_pending_event_count(host) == 0);
 
     CHECK(nb_host_headless_advance_time(host, 25));
-    CHECK(nb_host_headless_set_suspended(host, false, 75));
+    CHECK(nb_host_headless_request_console_acquire(host, 75));
+    CHECK(nb_host_get_state(host) == NB_HOST_STATE_ACQUIRE_PENDING);
     CHECK(nb_host_poll_event(host, &event) ==
           NB_HOST_EVENT_STATUS_AVAILABLE);
-    CHECK(event.type == NB_HOST_EVENT_RESUMED);
+    CHECK(event.type == NB_HOST_EVENT_CONSOLE_ACQUIRE_REQUESTED);
     CHECK(event.milliseconds == 75);
+    CHECK(nb_host_complete_console_acquire(host) == NB_HOST_RESULT_OK);
+    CHECK(nb_host_get_state(host) == NB_HOST_STATE_ACTIVE);
+    CHECK(nb_host_complete_console_acquire(host) ==
+          NB_HOST_RESULT_INVALID_STATE);
 
     CHECK(nb_host_present(host, &frame) ==
-          NB_HOST_PRESENT_STATUS_ACCEPTED);
+          NB_HOST_RESULT_OK);
     CHECK(nb_host_headless_presentation_count(host) == 1);
     CHECK(nb_host_poll_event(host, &event) ==
           NB_HOST_EVENT_STATUS_AVAILABLE);
-    CHECK(event.type == NB_HOST_EVENT_PRESENTED);
-    CHECK(event.data.presented.frame_serial == frame.serial);
+    CHECK(event.type == NB_HOST_EVENT_FRAME_COMPLETE);
+    CHECK(event.data.frame_complete.frame_serial == frame.serial);
+    nb_host_destroy(host);
+}
+
+static void test_lifecycle_priority_preserves_critical_events(void)
+{
+    struct nb_host *host = nb_host_headless_create(&initial_output);
+    struct nb_host_event input = focus_event(true, 10);
+    struct nb_host_event quit = {0};
+    struct nb_host_event event;
+    uint32_t pixels[12] = {0};
+    const struct nb_host_frame frame = {
+        pixels,
+        4,
+        3,
+        4 * sizeof(uint32_t),
+        NB_HOST_PIXEL_FORMAT_XRGB8888,
+        9
+    };
+    size_t index;
+
+    CHECK(host != NULL);
+    CHECK(nb_host_headless_advance_time(host, 10));
+    for (index = 0; index < NB_HOST_HEADLESS_EVENT_CAPACITY - 2;
+         ++index) {
+        CHECK(nb_host_headless_enqueue_event(host, &input));
+    }
+    quit.type = NB_HOST_EVENT_QUIT;
+    quit.milliseconds = 10;
+    CHECK(nb_host_headless_enqueue_event(host, &quit));
+    CHECK(nb_host_present(host, &frame) == NB_HOST_RESULT_OK);
+    CHECK(nb_host_headless_pending_event_count(host) ==
+          NB_HOST_HEADLESS_EVENT_CAPACITY);
+
+    CHECK(nb_host_headless_request_console_release(host, 10));
+    CHECK(nb_host_headless_pending_event_count(host) == 3);
+    CHECK(nb_host_poll_event(host, &event) ==
+          NB_HOST_EVENT_STATUS_AVAILABLE);
+    CHECK(event.type == NB_HOST_EVENT_CONSOLE_RELEASE_REQUESTED);
+    CHECK(nb_host_poll_event(host, &event) ==
+          NB_HOST_EVENT_STATUS_AVAILABLE);
+    CHECK(event.type == NB_HOST_EVENT_QUIT);
+    CHECK(nb_host_poll_event(host, &event) ==
+          NB_HOST_EVENT_STATUS_AVAILABLE);
+    CHECK(event.type == NB_HOST_EVENT_FRAME_COMPLETE);
+    CHECK(event.data.frame_complete.frame_serial == frame.serial);
+    CHECK(nb_host_complete_console_release(host) == NB_HOST_RESULT_OK);
+    nb_host_destroy(host);
+}
+
+static void test_output_change_during_suspend(void)
+{
+    const struct nb_host_output resized = {5, 4, 5, 4, 60000};
+    struct nb_host *host = nb_host_headless_create(&initial_output);
+    struct nb_host_event event;
+    uint32_t pixels[20] = {0};
+    const struct nb_host_frame frame = {
+        pixels,
+        5,
+        4,
+        5 * sizeof(uint32_t),
+        NB_HOST_PIXEL_FORMAT_XRGB8888,
+        1
+    };
+
+    CHECK(host != NULL);
+    CHECK(nb_host_headless_request_console_release(host, 0));
+    CHECK(nb_host_poll_event(host, &event) ==
+          NB_HOST_EVENT_STATUS_AVAILABLE);
+    CHECK(nb_host_complete_console_release(host) == NB_HOST_RESULT_OK);
+    CHECK(nb_host_headless_set_output(host, &resized, 0));
+    CHECK(nb_host_headless_request_console_acquire(host, 0));
+
+    CHECK(nb_host_poll_event(host, &event) ==
+          NB_HOST_EVENT_STATUS_AVAILABLE);
+    CHECK(event.type == NB_HOST_EVENT_CONSOLE_ACQUIRE_REQUESTED);
+    CHECK(nb_host_complete_console_acquire(host) == NB_HOST_RESULT_OK);
+    CHECK(nb_host_poll_event(host, &event) ==
+          NB_HOST_EVENT_STATUS_AVAILABLE);
+    CHECK(event.type == NB_HOST_EVENT_OUTPUT_CHANGED);
+    CHECK(event.data.output.pixel_width == resized.pixel_width);
+    CHECK(event.data.output.pixel_height == resized.pixel_height);
+    CHECK(nb_host_present(host, &frame) == NB_HOST_RESULT_OK);
     nb_host_destroy(host);
 }
 
@@ -356,15 +453,26 @@ static void test_defensive_api(void)
     struct nb_host_event event = {0};
     struct nb_host_output output = {0};
     struct nb_host_frame frame = {0};
+    int system_error;
+    char message[16];
 
     CHECK(nb_host_headless_create(NULL) == NULL);
     CHECK(!nb_host_get_output(NULL, &output));
     CHECK(!nb_host_get_output(NULL, NULL));
+    CHECK(nb_host_get_state(NULL) == NB_HOST_STATE_FAILED);
     CHECK(nb_host_monotonic_milliseconds(NULL) == 0);
     CHECK(nb_host_poll_event(NULL, &event) == NB_HOST_EVENT_STATUS_ERROR);
     CHECK(nb_host_wait_event(NULL, 0, &event) == NB_HOST_EVENT_STATUS_ERROR);
     CHECK(!nb_host_set_pointer_capture(NULL, true));
-    CHECK(nb_host_present(NULL, &frame) == NB_HOST_PRESENT_STATUS_ERROR);
+    CHECK(nb_host_present(NULL, &frame) == NB_HOST_RESULT_INVALID_ARGUMENT);
+    CHECK(nb_host_complete_console_release(NULL) ==
+          NB_HOST_RESULT_INVALID_ARGUMENT);
+    CHECK(nb_host_complete_console_acquire(NULL) ==
+          NB_HOST_RESULT_INVALID_ARGUMENT);
+    CHECK(!nb_host_get_last_error(NULL,
+                                  &system_error,
+                                  message,
+                                  sizeof(message)));
     CHECK(!nb_host_headless_enqueue_event(NULL, &event));
     CHECK(!nb_host_headless_advance_time(NULL, 1));
     CHECK(nb_host_headless_pending_event_count(NULL) == 0);
@@ -380,7 +488,9 @@ int main(void)
     test_output_clock_and_capture();
     test_event_fifo_and_capacity();
     test_present_copy_and_completion();
-    test_suspend_resume_and_retry();
+    test_console_release_acquire_and_retry();
+    test_lifecycle_priority_preserves_critical_events();
+    test_output_change_during_suspend();
     test_defensive_api();
 
     if (failures != 0) {

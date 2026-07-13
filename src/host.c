@@ -66,9 +66,10 @@ bool nb_host_event_is_valid(const struct nb_host_event *event)
     switch (event->type) {
     case NB_HOST_EVENT_QUIT:
     case NB_HOST_EVENT_FOCUS_CHANGED:
-    case NB_HOST_EVENT_SUSPENDED:
-    case NB_HOST_EVENT_RESUMED:
+    case NB_HOST_EVENT_CONSOLE_RELEASE_REQUESTED:
+    case NB_HOST_EVENT_CONSOLE_ACQUIRE_REQUESTED:
     case NB_HOST_EVENT_POINTER_MOTION:
+    case NB_HOST_EVENT_POINTER_LEAVE:
         return true;
     case NB_HOST_EVENT_OUTPUT_CHANGED:
         return nb_host_output_is_valid(&event->data.output);
@@ -80,8 +81,10 @@ bool nb_host_event_is_valid(const struct nb_host_event *event)
     case NB_HOST_EVENT_KEY:
         return xkb_key_name_is_valid(event->data.key.xkb_key_name) &&
                (!event->data.key.repeat || event->data.key.pressed);
-    case NB_HOST_EVENT_PRESENTED:
-        return event->data.presented.frame_serial != 0;
+    case NB_HOST_EVENT_FRAME_COMPLETE:
+        return event->data.frame_complete.frame_serial != 0;
+    case NB_HOST_EVENT_FAILED:
+        return true;
     case NB_HOST_EVENT_NONE:
     default:
         return false;
@@ -92,11 +95,16 @@ static bool operations_are_valid(
     const struct nb_host_backend_operations *operations)
 {
     return operations != NULL && operations->get_output != NULL &&
+           operations->get_state != NULL &&
            operations->monotonic_milliseconds != NULL &&
            operations->poll_event != NULL &&
            operations->wait_event != NULL &&
            operations->set_pointer_capture != NULL &&
-           operations->present != NULL && operations->destroy != NULL;
+           operations->present != NULL &&
+           operations->complete_console_release != NULL &&
+           operations->complete_console_acquire != NULL &&
+           operations->get_last_error != NULL &&
+           operations->destroy != NULL;
 }
 
 struct nb_host *nb_host_backend_create(
@@ -147,6 +155,22 @@ bool nb_host_get_output(const struct nb_host *host,
     }
     *output = current;
     return true;
+}
+
+static bool host_state_is_valid(enum nb_host_state state)
+{
+    return state >= NB_HOST_STATE_ACTIVE && state <= NB_HOST_STATE_FAILED;
+}
+
+enum nb_host_state nb_host_get_state(const struct nb_host *host)
+{
+    enum nb_host_state state;
+
+    if (host == NULL) {
+        return NB_HOST_STATE_FAILED;
+    }
+    state = host->operations->get_state(host->context);
+    return host_state_is_valid(state) ? state : NB_HOST_STATE_FAILED;
 }
 
 uint64_t nb_host_monotonic_milliseconds(const struct nb_host *host)
@@ -207,25 +231,69 @@ bool nb_host_set_pointer_capture(struct nb_host *host, bool captured)
            host->operations->set_pointer_capture(host->context, captured);
 }
 
-enum nb_host_present_status nb_host_present(
+static bool host_result_is_valid(enum nb_host_result result)
+{
+    return result >= NB_HOST_RESULT_ERROR &&
+           result <= NB_HOST_RESULT_INVALID_STATE;
+}
+
+enum nb_host_result nb_host_present(
     struct nb_host *host,
     const struct nb_host_frame *frame)
 {
-    enum nb_host_present_status status;
+    enum nb_host_result result;
 
-    if (host == NULL || !nb_host_frame_is_valid(frame) ||
-        frame->serial <= host->last_submitted_serial) {
-        return NB_HOST_PRESENT_STATUS_ERROR;
+    if (host == NULL || !nb_host_frame_is_valid(frame)) {
+        return NB_HOST_RESULT_INVALID_ARGUMENT;
     }
-    status = host->operations->present(host->context, frame);
-    if (status == NB_HOST_PRESENT_STATUS_SUSPENDED) {
-        return status;
+    if (frame->serial <= host->last_submitted_serial) {
+        return NB_HOST_RESULT_INVALID_STATE;
     }
-    if (status != NB_HOST_PRESENT_STATUS_ACCEPTED) {
-        return NB_HOST_PRESENT_STATUS_ERROR;
+    result = host->operations->present(host->context, frame);
+    if (result == NB_HOST_RESULT_OK) {
+        host->last_submitted_serial = frame->serial;
     }
-    host->last_submitted_serial = frame->serial;
-    return status;
+    if (!host_result_is_valid(result)) {
+        return NB_HOST_RESULT_ERROR;
+    }
+    return result;
+}
+
+enum nb_host_result nb_host_complete_console_release(struct nb_host *host)
+{
+    enum nb_host_result result;
+
+    if (host == NULL) {
+        return NB_HOST_RESULT_INVALID_ARGUMENT;
+    }
+    result = host->operations->complete_console_release(host->context);
+    return host_result_is_valid(result) ? result : NB_HOST_RESULT_ERROR;
+}
+
+enum nb_host_result nb_host_complete_console_acquire(struct nb_host *host)
+{
+    enum nb_host_result result;
+
+    if (host == NULL) {
+        return NB_HOST_RESULT_INVALID_ARGUMENT;
+    }
+    result = host->operations->complete_console_acquire(host->context);
+    return host_result_is_valid(result) ? result : NB_HOST_RESULT_ERROR;
+}
+
+bool nb_host_get_last_error(const struct nb_host *host,
+                            int *system_error,
+                            char *message,
+                            size_t message_size)
+{
+    if (host == NULL || system_error == NULL || message == NULL ||
+        message_size == 0) {
+        return false;
+    }
+    return host->operations->get_last_error(host->context,
+                                            system_error,
+                                            message,
+                                            message_size);
 }
 
 void nb_host_destroy(struct nb_host *host)

@@ -6,6 +6,7 @@
 /* Internal adapter interface; application code should use host.h only. */
 struct nb_host_backend_operations {
     bool (*get_output)(const void *context, struct nb_host_output *output);
+    enum nb_host_state (*get_state)(const void *context);
     uint64_t (*monotonic_milliseconds)(const void *context);
     enum nb_host_event_status (*poll_event)(void *context,
                                             struct nb_host_event *event);
@@ -14,9 +15,15 @@ struct nb_host_backend_operations {
         uint32_t timeout_milliseconds,
         struct nb_host_event *event);
     bool (*set_pointer_capture)(void *context, bool captured);
-    enum nb_host_present_status (*present)(
+    enum nb_host_result (*present)(
         void *context,
         const struct nb_host_frame *frame);
+    enum nb_host_result (*complete_console_release)(void *context);
+    enum nb_host_result (*complete_console_acquire)(void *context);
+    bool (*get_last_error)(const void *context,
+                           int *system_error,
+                           char *message,
+                           size_t message_size);
     void (*destroy)(void *context);
 };
 

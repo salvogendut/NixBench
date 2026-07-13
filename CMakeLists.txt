@@ -255,6 +255,30 @@ target_include_directories(
 )
 nixbench_configure_c_target(nixbench_host)
 
+add_library(nixbench_host_sdl STATIC src/host_sdl.c)
+target_include_directories(
+  nixbench_host_sdl
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(
+  nixbench_host_sdl
+  PUBLIC nixbench_host
+  PRIVATE SDL3::SDL3
+)
+nixbench_configure_c_target(nixbench_host_sdl)
+
+add_library(nixbench_software_canvas STATIC src/software_canvas.c)
+target_include_directories(
+  nixbench_software_canvas
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(
+  nixbench_software_canvas
+  PUBLIC nixbench_host
+  PRIVATE SDL3::SDL3
+)
+nixbench_configure_c_target(nixbench_software_canvas)
+
 add_library(
   nixbench_framebuffer STATIC
   src/framebuffer_format.c
@@ -383,6 +407,23 @@ if(BUILD_TESTING)
   target_link_libraries(nixbench_host_tests PRIVATE nixbench_host)
   nixbench_configure_c_target(nixbench_host_tests)
 
+  add_executable(nixbench_host_sdl_tests tests/host_sdl_test.c)
+  target_link_libraries(
+    nixbench_host_sdl_tests
+    PRIVATE SDL3::SDL3 nixbench_host_sdl
+  )
+  nixbench_configure_c_target(nixbench_host_sdl_tests)
+
+  add_executable(
+    nixbench_software_canvas_tests
+    tests/software_canvas_test.c
+  )
+  target_link_libraries(
+    nixbench_software_canvas_tests
+    PRIVATE SDL3::SDL3 nixbench_software_canvas
+  )
+  nixbench_configure_c_target(nixbench_software_canvas_tests)
+
   add_executable(
     nixbench_framebuffer_format_tests
     tests/framebuffer_format_test.c
@@ -468,6 +509,15 @@ if(BUILD_TESTING)
 
   add_test(NAME nixbench.desktop.model COMMAND nixbench_desktop_tests)
   add_test(NAME nixbench.host.contract COMMAND nixbench_host_tests)
+  add_test(NAME nixbench.host.sdl COMMAND nixbench_host_sdl_tests)
+  set_tests_properties(
+    nixbench.host.sdl
+    PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_RENDER_DRIVER=software"
+  )
+  add_test(
+    NAME nixbench.software-canvas
+    COMMAND nixbench_software_canvas_tests
+  )
   add_test(
     NAME nixbench.framebuffer.format
     COMMAND nixbench_framebuffer_format_tests
