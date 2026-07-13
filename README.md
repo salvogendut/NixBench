@@ -7,7 +7,8 @@ Workbench and AROS while remaining an original project.
 The goal is a lightweight, coherent desktop that eventually runs directly on
 the NetBSD console without requiring X.org, while supporting both applications
 designed specifically for NixBench and traditional Unix GUI applications. The
-project is at the planning stage: there is no runnable implementation yet.
+project is in its bootstrap stage. The first runnable program opens an empty
+SDL3 desktop screen under a host window system.
 
 ## Goals
 
@@ -71,25 +72,43 @@ choice is stabilized.
 
 ## Project status
 
-NixBench currently consists only of its project definition and initial
-roadmap. The next milestone will introduce the CMake and C source skeleton, open
-the first SDL3 desktop window, and establish boundaries that keep the shell
-independent of its temporary X11 host backend.
+NixBench now has a minimal C11/SDL3 shell that opens a resizable desktop screen,
+clears it to the initial NixBench background color, handles window events, and
+shuts down cleanly. It does not yet manage application windows or operate
+directly on the NetBSD console.
 
 See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
 
-## Expected development dependencies
+## Build and run
 
-The bootstrap milestone is expected to require:
+Required development dependencies:
 
 - A C11 compiler
-- CMake and a supported build tool
-- SDL3 development files
-- XCB development files
-- Xorg for the initial hosted backend and integration testing
+- CMake 3.16 or newer and a supported build tool
+- SDL 3.2.0 or newer, including its development files
+- A video backend supported by SDL3; Xorg is the initial NetBSD host
 
-Exact package names and supported versions will be documented when the first
-build is added.
+SDL3 is available from NetBSD pkgsrc as `devel/SDL3`. Configure, build, and test
+with:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+Open the desktop in a development window:
+
+```sh
+./build/nixbench
+```
+
+Pass `--fullscreen` to occupy the current display. Press Escape or close the
+window to exit. Use `--help` to list all current options.
+
+The CMake configuration deliberately uses the system SDL3 package instead of
+downloading dependencies during the build. XCB will be added when work begins
+on the hosted X11 window-manager backend.
 
 ## Contributing
 
