@@ -6,8 +6,12 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
+#include "application.h"
+#include "nixinfo.h"
+#include "nixinfo_renderer.h"
 #include "shell.h"
 #include "shell_renderer.h"
+#include "window_renderer.h"
 
 #ifndef NIXBENCH_VERSION
 #define NIXBENCH_VERSION "development"
@@ -18,14 +22,10 @@ enum {
     NIXBENCH_WINDOW_HEIGHT = 640,
     NIXBENCH_WINDOW_MIN_WIDTH = 640,
     NIXBENCH_WINDOW_MIN_HEIGHT = 400,
-    NIXBENCH_FIRST_WINDOW_X = 120,
-    NIXBENCH_FIRST_WINDOW_Y = 80,
-    NIXBENCH_FIRST_WINDOW_WIDTH = 500,
-    NIXBENCH_FIRST_WINDOW_HEIGHT = 310,
-    NIXBENCH_SECOND_WINDOW_X = 430,
-    NIXBENCH_SECOND_WINDOW_Y = 230,
-    NIXBENCH_SECOND_WINDOW_WIDTH = 420,
-    NIXBENCH_SECOND_WINDOW_HEIGHT = 250,
+    NIXBENCH_ABOUT_WINDOW_X = 360,
+    NIXBENCH_ABOUT_WINDOW_Y = 190,
+    NIXBENCH_ABOUT_WINDOW_WIDTH = 430,
+    NIXBENCH_ABOUT_WINDOW_HEIGHT = 230,
     NIXBENCH_DESKTOP_RED = 24,
     NIXBENCH_DESKTOP_GREEN = 54,
     NIXBENCH_DESKTOP_BLUE = 76,
@@ -33,23 +33,23 @@ enum {
     NIXBENCH_CLOCK_FALLBACK_WAIT_MS = 1000
 };
 
-enum {
-    NIXBENCH_MENU_SOURCE_DESKTOP = 1,
-    NIXBENCH_MENU_SOURCE_DEMO_APPLICATION = 2
-};
+#define NIXBENCH_MENU_SOURCE_DESKTOP UINT64_C(1)
+#define NIXBENCH_MENU_SOURCE_ABOUT UINT64_MAX
 
 enum {
     NIXBENCH_DESKTOP_COMMAND_ABOUT = 1,
-    NIXBENCH_DESKTOP_COMMAND_QUIT = 2
+    NIXBENCH_DESKTOP_COMMAND_OPEN_NIXINFO,
+    NIXBENCH_DESKTOP_COMMAND_QUIT
 };
 
 enum {
-    NIXBENCH_DEMO_COMMAND_INFO = 1,
-    NIXBENCH_DEMO_COMMAND_CLOSE_ACTIVE = 2
+    NIXBENCH_ABOUT_COMMAND_CLOSE = 1
 };
 
 static const struct nb_menu_item_spec desktop_items[] = {
     {"About NixBench", NIXBENCH_DESKTOP_COMMAND_ABOUT,
+     NB_MENU_ITEM_COMMAND, true},
+    {"Open NixInfo", NIXBENCH_DESKTOP_COMMAND_OPEN_NIXINFO,
      NB_MENU_ITEM_COMMAND, true},
     {NULL, NB_MENU_COMMAND_NONE, NB_MENU_ITEM_SEPARATOR, false},
     {"Quit NixBench", NIXBENCH_DESKTOP_COMMAND_QUIT,
@@ -66,26 +66,29 @@ static const struct nb_menu_model desktop_menu_model = {
     sizeof(desktop_menus) / sizeof(desktop_menus[0])
 };
 
-static const struct nb_menu_item_spec project_items[] = {
-    {"Application Info", NIXBENCH_DEMO_COMMAND_INFO,
+static const struct nb_menu_item_spec about_items[] = {
+    {"Close About", NIXBENCH_ABOUT_COMMAND_CLOSE,
      NB_MENU_ITEM_COMMAND, true}
 };
 
-static const struct nb_menu_item_spec window_items[] = {
-    {"Close Active Window", NIXBENCH_DEMO_COMMAND_CLOSE_ACTIVE,
-     NB_MENU_ITEM_COMMAND, true}
+static const struct nb_menu_spec about_menus[] = {
+    {"NixBench", about_items,
+     sizeof(about_items) / sizeof(about_items[0])}
 };
 
-static const struct nb_menu_spec application_menus[] = {
-    {"Project", project_items,
-     sizeof(project_items) / sizeof(project_items[0])},
-    {"Window", window_items,
-     sizeof(window_items) / sizeof(window_items[0])}
+static const struct nb_menu_model about_menu_model = {
+    about_menus,
+    sizeof(about_menus) / sizeof(about_menus[0])
 };
 
-static const struct nb_menu_model application_menu_model = {
-    application_menus,
-    sizeof(application_menus) / sizeof(application_menus[0])
+struct runtime {
+    struct nb_shell shell;
+    struct nb_application_host applications;
+    struct nb_nixinfo nixinfo;
+    nb_application_id nixinfo_application;
+    nb_window_id about_window;
+    bool capture_active;
+    bool running;
 };
 
 struct options {
@@ -177,7 +180,27 @@ static Sint32 clock_refresh_timeout(void)
     return (Sint32)(seconds_until_next_minute * 1000);
 }
 
-static bool draw_shell(SDL_Renderer *renderer, const struct nb_shell *shell)
+static bool render_window_content(SDL_Renderer *renderer,
+                                  nb_window_id id,
+                                  const struct nb_window *window,
+                                  struct nb_rect content_rect,
+                                  void *context)
+{
+    struct runtime *runtime = context;
+
+    if (nb_application_host_window_owner(&runtime->applications, id) ==
+        runtime->nixinfo_application) {
+        return nb_nixinfo_render_content(renderer,
+                                         id,
+                                         window,
+                                         content_rect,
+                                         &runtime->nixinfo);
+    }
+    return nb_window_render_default_content(renderer, window);
+}
+
+static bool draw_shell(SDL_Renderer *renderer,
+                       struct runtime *runtime)
 {
     struct nb_rect viewport;
     char clock_text[NIXBENCH_CLOCK_CAPACITY];
@@ -193,7 +216,12 @@ static bool draw_shell(SDL_Renderer *renderer, const struct nb_shell *shell)
                                 NIXBENCH_DESKTOP_BLUE,
                                 SDL_ALPHA_OPAQUE) ||
         !SDL_RenderClear(renderer) ||
-        !nb_shell_render(renderer, shell, viewport, clock_text)) {
+        !nb_shell_render_with_content(renderer,
+                                      &runtime->shell,
+                                      viewport,
+                                      clock_text,
+                                      render_window_content,
+                                      runtime)) {
         return false;
     }
 
@@ -231,103 +259,163 @@ static void begin_pointer_capture(bool *capture_active)
     }
 }
 
-static void show_about_window(struct nb_shell *shell,
-                              nb_window_id *about_window)
+static bool sync_application_focus(struct runtime *runtime)
+{
+    if (nb_application_host_sync_focus(&runtime->applications)) {
+        return true;
+    }
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                 "Could not synchronize application focus");
+    return false;
+}
+
+static bool show_about_window(struct runtime *runtime)
 {
     const struct nb_rect frame = {
-        NIXBENCH_SECOND_WINDOW_X,
-        NIXBENCH_SECOND_WINDOW_Y,
-        NIXBENCH_SECOND_WINDOW_WIDTH,
-        NIXBENCH_SECOND_WINDOW_HEIGHT
+        NIXBENCH_ABOUT_WINDOW_X,
+        NIXBENCH_ABOUT_WINDOW_Y,
+        NIXBENCH_ABOUT_WINDOW_WIDTH,
+        NIXBENCH_ABOUT_WINDOW_HEIGHT
     };
 
-    if (*about_window != NB_WINDOW_ID_NONE &&
-        nb_desktop_find_window(&shell->desktop, *about_window) != NULL) {
-        nb_shell_activate_window(shell, *about_window);
-        return;
+    if (runtime->about_window != NB_WINDOW_ID_NONE &&
+        nb_desktop_find_window(&runtime->shell.desktop,
+                               runtime->about_window) != NULL) {
+        return nb_shell_activate_window(&runtime->shell,
+                                        runtime->about_window) &&
+               sync_application_focus(runtime);
     }
 
-    *about_window = nb_shell_open_window(
-        shell,
+    runtime->about_window = nb_shell_open_window(
+        &runtime->shell,
         "About NixBench",
         frame,
-        NIXBENCH_MENU_SOURCE_DEMO_APPLICATION,
-        &application_menu_model);
-    if (*about_window == NB_WINDOW_ID_NONE) {
+        NIXBENCH_MENU_SOURCE_ABOUT,
+        &about_menu_model);
+    if (runtime->about_window == NB_WINDOW_ID_NONE) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "Could not open the About NixBench window");
+        return false;
     }
+    return sync_application_focus(runtime);
 }
 
-static void close_window(struct nb_shell *shell,
-                         nb_window_id window,
-                         nb_window_id *about_window)
+static bool close_about_window(struct runtime *runtime,
+                               nb_window_id window)
 {
-    if (window == NB_WINDOW_ID_NONE) {
-        return;
+    if (window == NB_WINDOW_ID_NONE ||
+        window != runtime->about_window) {
+        return false;
     }
-    if (!nb_shell_destroy_window(shell, window)) {
+    if (!nb_shell_destroy_window(&runtime->shell, window)) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                    "Could not close internal window");
-        return;
+                    "Could not close the About NixBench window");
+        return false;
     }
-    if (window == *about_window) {
-        *about_window = NB_WINDOW_ID_NONE;
+    runtime->about_window = NB_WINDOW_ID_NONE;
+    return sync_application_focus(runtime);
+}
+
+static bool open_nixinfo(struct runtime *runtime)
+{
+    if (!nb_application_host_is_running(&runtime->applications,
+                                        runtime->nixinfo_application)) {
+        return nb_application_host_start(&runtime->applications,
+                                         runtime->nixinfo_application);
+    }
+
+    if (nb_application_host_window_count(&runtime->applications,
+                                         runtime->nixinfo_application) == 0) {
+        return nb_application_host_restart(&runtime->applications,
+                                           runtime->nixinfo_application);
+    }
+
+    {
+        const size_t last =
+            nb_application_host_window_count(&runtime->applications,
+                                              runtime->nixinfo_application) -
+            1;
+        const nb_window_id window =
+            nb_application_host_window_at(&runtime->applications,
+                                          runtime->nixinfo_application,
+                                          last);
+
+        return nb_shell_activate_window(&runtime->shell, window) &&
+               sync_application_focus(runtime);
     }
 }
 
-static void apply_shell_action(struct nb_shell *shell,
-                               struct nb_shell_action action,
-                               nb_window_id *about_window,
-                               bool *running)
+static bool apply_shell_action(struct runtime *runtime,
+                               struct nb_shell_action action)
 {
+    const enum nb_application_dispatch_result dispatch =
+        nb_application_host_dispatch_shell_action(&runtime->applications,
+                                                   action);
+
+    if (dispatch == NB_APPLICATION_DISPATCH_HANDLED) {
+        return true;
+    }
+    if (dispatch == NB_APPLICATION_DISPATCH_ERROR) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Application rejected shell action %d",
+                     (int)action.type);
+        return false;
+    }
+
+    if (action.type == NB_SHELL_ACTION_NONE) {
+        return true;
+    }
     if (action.type == NB_SHELL_ACTION_WINDOW_CLOSE_REQUESTED) {
-        close_window(shell, action.window, about_window);
-        return;
+        if (action.window == runtime->about_window) {
+            return close_about_window(runtime, action.window);
+        }
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Ignored close request for unowned window %llu",
+                    (unsigned long long)action.window);
+        return true;
     }
     if (action.type != NB_SHELL_ACTION_MENU_COMMAND) {
-        return;
+        return false;
     }
 
     if (action.menu_source == NIXBENCH_MENU_SOURCE_DESKTOP) {
         if (action.menu_command == NIXBENCH_DESKTOP_COMMAND_ABOUT) {
-            show_about_window(shell, about_window);
+            return show_about_window(runtime);
+        }
+        if (action.menu_command ==
+            NIXBENCH_DESKTOP_COMMAND_OPEN_NIXINFO) {
+            return open_nixinfo(runtime);
         } else if (action.menu_command == NIXBENCH_DESKTOP_COMMAND_QUIT) {
-            *running = false;
+            runtime->running = false;
         } else {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                         "Ignored unknown desktop menu command %u",
                         (unsigned int)action.menu_command);
         }
-        return;
+        return true;
     }
 
-    if (action.menu_source == NIXBENCH_MENU_SOURCE_DEMO_APPLICATION) {
-        if (action.menu_command == NIXBENCH_DEMO_COMMAND_INFO) {
-            show_about_window(shell, about_window);
-        } else if (action.menu_command ==
-                   NIXBENCH_DEMO_COMMAND_CLOSE_ACTIVE) {
-            close_window(shell, action.window, about_window);
-        } else {
-            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                        "Ignored unknown demo menu command %u",
-                        (unsigned int)action.menu_command);
+    if (action.menu_source == NIXBENCH_MENU_SOURCE_ABOUT) {
+        if (action.menu_command == NIXBENCH_ABOUT_COMMAND_CLOSE &&
+            action.window == runtime->about_window) {
+            return close_about_window(runtime, action.window);
         }
-        return;
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Ignored About menu command %u",
+                    (unsigned int)action.menu_command);
+        return true;
     }
 
     SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                 "Ignored menu command %u from unknown source %llu",
                 (unsigned int)action.menu_command,
                 (unsigned long long)action.menu_source);
+    return true;
 }
 
 static bool process_pointer_event(SDL_Renderer *renderer,
                                   SDL_Event *event,
-                                  struct nb_shell *shell,
-                                  bool *capture_active,
-                                  nb_window_id *about_window,
-                                  bool *running)
+                                  struct runtime *runtime)
 {
     struct nb_rect viewport;
     int x;
@@ -339,12 +427,12 @@ static bool process_pointer_event(SDL_Renderer *renderer,
     }
 
     if (event->type == SDL_EVENT_MOUSE_MOTION) {
-        if (!nb_shell_wants_pointer_motion(shell)) {
+        if (!nb_shell_wants_pointer_motion(&runtime->shell)) {
             return true;
         }
         x = renderer_coordinate(event->motion.x);
         y = renderer_coordinate(event->motion.y);
-        nb_shell_pointer_move(shell, x, y, viewport);
+        nb_shell_pointer_move(&runtime->shell, x, y, viewport);
         return true;
     }
 
@@ -353,19 +441,23 @@ static bool process_pointer_event(SDL_Renderer *renderer,
     if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
         event->button.button == SDL_BUTTON_LEFT) {
         const bool was_interacting =
-            nb_shell_has_pointer_interaction(shell);
+            nb_shell_has_pointer_interaction(&runtime->shell);
 
-        nb_shell_pointer_down(shell, x, y, viewport);
-        if (!was_interacting && nb_shell_has_pointer_interaction(shell)) {
-            begin_pointer_capture(capture_active);
+        nb_shell_pointer_down(&runtime->shell, x, y, viewport);
+        if (!sync_application_focus(runtime)) {
+            return false;
+        }
+        if (!was_interacting &&
+            nb_shell_has_pointer_interaction(&runtime->shell)) {
+            begin_pointer_capture(&runtime->capture_active);
         }
     } else if (event->type == SDL_EVENT_MOUSE_BUTTON_UP &&
                event->button.button == SDL_BUTTON_LEFT) {
         const struct nb_shell_action action =
-            nb_shell_pointer_up(shell, x, y, viewport);
+            nb_shell_pointer_up(&runtime->shell, x, y, viewport);
 
-        release_pointer_capture(capture_active);
-        apply_shell_action(shell, action, about_window, running);
+        release_pointer_capture(&runtime->capture_active);
+        return apply_shell_action(runtime, action);
     }
 
     return true;
@@ -394,13 +486,10 @@ static bool menu_key_for(SDL_Keycode keycode, enum nb_menu_key *menu_key)
 }
 
 static bool process_key_event(const SDL_KeyboardEvent *event,
-                              struct nb_shell *shell,
-                              bool *capture_active,
-                              nb_window_id *about_window,
-                              bool *running)
+                              struct runtime *runtime)
 {
     enum nb_menu_key menu_key;
-    const bool menu_context = nb_menu_is_open(&shell->menu) ||
+    const bool menu_context = nb_menu_is_open(&runtime->shell.menu) ||
                               event->key == SDLK_F10;
 
     if (event->repeat &&
@@ -411,20 +500,19 @@ static bool process_key_event(const SDL_KeyboardEvent *event,
 
     if (menu_context && menu_key_for(event->key, &menu_key)) {
         const struct nb_shell_action action =
-            nb_shell_menu_key_press(shell, menu_key);
+            nb_shell_menu_key_press(&runtime->shell, menu_key);
 
-        if (!nb_shell_has_pointer_interaction(shell)) {
-            release_pointer_capture(capture_active);
+        if (!nb_shell_has_pointer_interaction(&runtime->shell)) {
+            release_pointer_capture(&runtime->capture_active);
         }
-        apply_shell_action(shell, action, about_window, running);
-        return true;
+        return apply_shell_action(runtime, action);
     }
 
     if (event->key == SDLK_ESCAPE) {
-        *running = false;
+        runtime->running = false;
         return true;
     }
-    return false;
+    return true;
 }
 
 int main(int argc, char *argv[])
@@ -435,47 +523,34 @@ int main(int argc, char *argv[])
     SDL_Window *window = NULL;
     SDL_Renderer *renderer = NULL;
     SDL_Event event;
-    struct nb_shell shell;
-    const struct nb_rect first_window_frame = {
-        NIXBENCH_FIRST_WINDOW_X,
-        NIXBENCH_FIRST_WINDOW_Y,
-        NIXBENCH_FIRST_WINDOW_WIDTH,
-        NIXBENCH_FIRST_WINDOW_HEIGHT
-    };
-    const struct nb_rect second_window_frame = {
-        NIXBENCH_SECOND_WINDOW_X,
-        NIXBENCH_SECOND_WINDOW_Y,
-        NIXBENCH_SECOND_WINDOW_WIDTH,
-        NIXBENCH_SECOND_WINDOW_HEIGHT
-    };
-    nb_window_id about_window = NB_WINDOW_ID_NONE;
-    bool capture_active = false;
-    bool running = true;
+    struct runtime runtime;
+    struct nb_application_spec nixinfo_spec;
     int exit_status = 0;
 
     if (!parse_options(argc, argv, &options, &exit_status)) {
         return exit_status;
     }
 
-    nb_shell_init(&shell,
+    (void)memset(&runtime, 0, sizeof(runtime));
+    runtime.about_window = NB_WINDOW_ID_NONE;
+    runtime.running = true;
+    nb_shell_init(&runtime.shell,
                   NIXBENCH_MENU_SOURCE_DESKTOP,
                   &desktop_menu_model);
-    if (nb_shell_open_window(&shell,
-                             "NixBench",
-                             first_window_frame,
-                             NIXBENCH_MENU_SOURCE_DEMO_APPLICATION,
-                             &application_menu_model) == NB_WINDOW_ID_NONE) {
-        fputs("Could not create the initial desktop window.\n", stderr);
+    if (!nb_application_host_init(&runtime.applications,
+                                  &runtime.shell)) {
+        fputs("Could not initialize the application host.\n", stderr);
         return 1;
     }
-    about_window = nb_shell_open_window(
-        &shell,
-        "About NixBench",
-        second_window_frame,
-        NIXBENCH_MENU_SOURCE_DEMO_APPLICATION,
-        &application_menu_model);
-    if (about_window == NB_WINDOW_ID_NONE) {
-        fputs("Could not create the initial About window.\n", stderr);
+    nb_nixinfo_init(&runtime.nixinfo, NULL, NULL);
+    nixinfo_spec = nb_nixinfo_application_spec(&runtime.nixinfo);
+    runtime.nixinfo_application =
+        nb_application_host_register(&runtime.applications,
+                                     &nixinfo_spec);
+    if (runtime.nixinfo_application == NB_APPLICATION_ID_NONE ||
+        !nb_application_host_start(&runtime.applications,
+                                   runtime.nixinfo_application)) {
+        fputs("Could not start the NixInfo application.\n", stderr);
         return 1;
     }
     if (options.fullscreen) {
@@ -520,10 +595,10 @@ int main(int argc, char *argv[])
             exit_status = 1;
             goto cleanup;
         }
-        nb_shell_clamp_windows(&shell, viewport);
+        nb_shell_clamp_windows(&runtime.shell, viewport);
     }
 
-    if (!draw_shell(renderer, &shell)) {
+    if (!draw_shell(renderer, &runtime)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "Could not draw the desktop screen: %s",
                      SDL_GetError());
@@ -534,7 +609,7 @@ int main(int argc, char *argv[])
         goto cleanup;
     }
 
-    while (running) {
+    while (runtime.running) {
         const bool received_event =
             SDL_WaitEventTimeout(&event, clock_refresh_timeout());
 
@@ -542,40 +617,38 @@ int main(int argc, char *argv[])
             do {
                 if (event.type == SDL_EVENT_QUIT ||
                     event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
-                    running = false;
+                    runtime.running = false;
                 } else if (event.type == SDL_EVENT_KEY_DOWN) {
-                    process_key_event(&event.key,
-                                      &shell,
-                                      &capture_active,
-                                      &about_window,
-                                      &running);
+                    if (!process_key_event(&event.key, &runtime)) {
+                        exit_status = 1;
+                        runtime.running = false;
+                    }
                 } else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
-                    release_pointer_capture(&capture_active);
-                    nb_shell_pointer_cancel(&shell);
+                    release_pointer_capture(&runtime.capture_active);
+                    nb_shell_pointer_cancel(&runtime.shell);
                 } else if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE &&
-                           !capture_active &&
-                           nb_shell_has_pointer_interaction(&shell)) {
-                    nb_shell_pointer_cancel(&shell);
+                           !runtime.capture_active &&
+                           nb_shell_has_pointer_interaction(
+                               &runtime.shell)) {
+                    nb_shell_pointer_cancel(&runtime.shell);
                 } else if (event.type == SDL_EVENT_MOUSE_MOTION ||
                            event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
                            event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
                     if (!process_pointer_event(renderer,
                                                &event,
-                                               &shell,
-                                               &capture_active,
-                                               &about_window,
-                                               &running)) {
+                                               &runtime)) {
                         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                                     "Could not process pointer input: %s",
+                                     "Could not process pointer input or "
+                                     "application action: %s",
                                      SDL_GetError());
                         exit_status = 1;
-                        running = false;
+                        runtime.running = false;
                     }
                 }
-            } while (running && SDL_PollEvent(&event));
+            } while (runtime.running && SDL_PollEvent(&event));
         }
 
-        if (running) {
+        if (runtime.running) {
             struct nb_rect viewport;
 
             if (!renderer_bounds(renderer, &viewport)) {
@@ -585,10 +658,10 @@ int main(int argc, char *argv[])
                 exit_status = 1;
                 break;
             }
-            nb_shell_clamp_windows(&shell, viewport);
+            nb_shell_clamp_windows(&runtime.shell, viewport);
         }
 
-        if (running && !draw_shell(renderer, &shell)) {
+        if (runtime.running && !draw_shell(renderer, &runtime)) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                          "Could not redraw the desktop screen: %s",
                          SDL_GetError());
@@ -598,7 +671,14 @@ int main(int argc, char *argv[])
     }
 
 cleanup:
-    release_pointer_capture(&capture_active);
+    release_pointer_capture(&runtime.capture_active);
+    if (nb_application_host_is_running(&runtime.applications,
+                                       runtime.nixinfo_application) &&
+        !nb_application_host_stop(&runtime.applications,
+                                  runtime.nixinfo_application)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Could not stop NixInfo cleanly");
+    }
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();

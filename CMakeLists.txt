@@ -30,8 +30,11 @@ endfunction()
 
 add_library(
   nixbench_model STATIC
+  src/application.c
   src/desktop.c
   src/menu.c
+  src/nixinfo.c
+  src/nixinfo_system.c
   src/shell.c
   src/window.c
 )
@@ -46,6 +49,7 @@ add_executable(
   src/desktop_renderer.c
   src/main.c
   src/menu_renderer.c
+  src/nixinfo_renderer.c
   src/shell_renderer.c
   src/window_renderer.c
 )
@@ -78,10 +82,47 @@ if(BUILD_TESTING)
   target_link_libraries(nixbench_shell_tests PRIVATE nixbench_model)
   nixbench_configure_c_target(nixbench_shell_tests)
 
+  add_executable(nixbench_application_tests tests/application_test.c)
+  target_link_libraries(nixbench_application_tests PRIVATE nixbench_model)
+  nixbench_configure_c_target(nixbench_application_tests)
+
+  add_executable(nixbench_nixinfo_tests tests/nixinfo_test.c)
+  target_link_libraries(nixbench_nixinfo_tests PRIVATE nixbench_model)
+  nixbench_configure_c_target(nixbench_nixinfo_tests)
+
+  add_executable(
+    nixbench_nixinfo_system_tests
+    tests/nixinfo_system_test.c
+  )
+  target_link_libraries(
+    nixbench_nixinfo_system_tests
+    PRIVATE nixbench_model
+  )
+  nixbench_configure_c_target(nixbench_nixinfo_system_tests)
+
+  add_executable(
+    nixbench_renderer_tests
+    tests/renderer_test.c
+    src/desktop_renderer.c
+    src/window_renderer.c
+  )
+  target_link_libraries(
+    nixbench_renderer_tests
+    PRIVATE SDL3::SDL3 nixbench_model
+  )
+  nixbench_configure_c_target(nixbench_renderer_tests)
+
   add_test(NAME nixbench.desktop.model COMMAND nixbench_desktop_tests)
   add_test(NAME nixbench.window.model COMMAND nixbench_window_tests)
   add_test(NAME nixbench.menu.model COMMAND nixbench_menu_tests)
   add_test(NAME nixbench.shell.model COMMAND nixbench_shell_tests)
+  add_test(NAME nixbench.application.model COMMAND nixbench_application_tests)
+  add_test(NAME nixbench.nixinfo.model COMMAND nixbench_nixinfo_tests)
+  add_test(
+    NAME nixbench.nixinfo.system
+    COMMAND nixbench_nixinfo_system_tests
+  )
+  add_test(NAME nixbench.renderer.callback COMMAND nixbench_renderer_tests)
   add_test(NAME nixbench.cli.version COMMAND nixbench --version)
   add_test(NAME nixbench.cli.help COMMAND nixbench --help)
   add_test(NAME nixbench.cli.unknown-option COMMAND nixbench --unknown-option)

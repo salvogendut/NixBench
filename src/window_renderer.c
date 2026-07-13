@@ -139,8 +139,16 @@ static bool render_title(SDL_Renderer *renderer,
            SDL_RenderDebugText(renderer, text_x, text_y, clipped_text);
 }
 
-static bool render_content(SDL_Renderer *renderer,
-                           const struct nb_window *window)
+static bool render_content_background(SDL_Renderer *renderer,
+                                      const struct nb_window *window)
+{
+    return fill_rect(renderer,
+                     nb_window_content_rect(window),
+                     content_color);
+}
+
+bool nb_window_render_default_content(SDL_Renderer *renderer,
+                                      const struct nb_window *window)
 {
     const struct nb_rect content = nb_window_content_rect(window);
     static const char first_line[] = "This window is managed by NixBench.";
@@ -150,8 +158,7 @@ static bool render_content(SDL_Renderer *renderer,
     const int line_y[] = {content.y + 24, content.y + 44};
     size_t line_index;
 
-    if (!fill_rect(renderer, content, content_color) ||
-        !set_color(renderer, text_color)) {
+    if (!set_color(renderer, text_color)) {
         return false;
     }
 
@@ -238,7 +245,8 @@ static bool render_footer(SDL_Renderer *renderer,
            render_bevel(renderer, footer, false);
 }
 
-bool nb_window_render(SDL_Renderer *renderer, const struct nb_window *window)
+bool nb_window_render_base(SDL_Renderer *renderer,
+                           const struct nb_window *window)
 {
     if (!window->visible) {
         return true;
@@ -247,7 +255,17 @@ bool nb_window_render(SDL_Renderer *renderer, const struct nb_window *window)
     return fill_rect(renderer, window->frame, frame_color) &&
            render_bevel(renderer, window->frame, false) &&
            render_title(renderer, window) &&
-           render_content(renderer, window) &&
+           render_content_background(renderer, window) &&
            render_footer(renderer, window) &&
            render_resize_gadget(renderer, window);
+}
+
+bool nb_window_render(SDL_Renderer *renderer, const struct nb_window *window)
+{
+    if (!window->visible) {
+        return true;
+    }
+
+    return nb_window_render_base(renderer, window) &&
+           nb_window_render_default_content(renderer, window);
 }
