@@ -214,9 +214,10 @@ capability inventory before any console takeover code is introduced. It lists
 the video drivers compiled into SDL and, on NetBSD, queries `wsdisplay`
 framebuffer metadata plus wscons and DRM device accessibility. It never changes
 the display mode, maps device memory, consumes input events, or claims DRM
-master status. The next checkpoint is a narrow host-output abstraction and a
-software `wsdisplay` presentation experiment on a machine whose console driver
-exposes a supported RGB framebuffer.
+master status. It is the mandatory preflight for the narrow host-output
+abstraction and software `wsdisplay` experiment described below; actual
+presentation still requires a console driver that exposes a supported RGB
+framebuffer.
 
 The SDL-free host contract now describes logical and pixel output geometry,
 normalized input, pointer capture, monotonic timing, software frame submission,
@@ -230,7 +231,21 @@ The hosted SDL adapter now implements the same host contract with normalized
 events, a persistent presentation texture, and explicit completion events. A
 separate SDL software canvas produces the canonical CPU frame that will let the
 runtime feed hosted SDL and future `wsdisplay` output without changing shell
-renderers. The next slice routes the existing main loop through these pieces.
+renderers. The existing desktop main loop now runs through this host contract,
+including output changes, focus/input normalization, frame completion, and
+console suspend/resume events.
+
+An experimental NetBSD `wsdisplay` adapter implements the first output-only
+standalone slice. It validates and maps RGB DUMBFB memory, converts canonical
+frames, uses process-controlled VT release/acquire with a self-pipe signal
+handoff, and attempts full state restoration on every normal and partial
+startup path. Its unsupported-platform stub is covered by normal tests, and
+the NetBSD branch compiles against the official NetBSD 10.1 amd64 headers under
+strict warnings. It is intentionally not a selectable desktop runtime yet:
+hardware validation, wscons input, failure-injection tests, and a separate
+privileged watchdog that can recover after a compositor crash are the next
+safety gates. The detailed design and source references are in
+[`docs/standalone-backend.md`](docs/standalone-backend.md).
 
 ## Milestone 8: Add standalone X11 compatibility
 

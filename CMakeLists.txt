@@ -289,6 +289,18 @@ target_include_directories(
 )
 nixbench_configure_c_target(nixbench_framebuffer)
 
+add_library(nixbench_host_wsdisplay STATIC src/host_wsdisplay.c)
+target_include_directories(
+  nixbench_host_wsdisplay
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(
+  nixbench_host_wsdisplay
+  PUBLIC nixbench_host
+  PRIVATE nixbench_framebuffer
+)
+nixbench_configure_c_target(nixbench_host_wsdisplay)
+
 if(NIXBENCH_WAYLAND_ENABLED)
   target_link_libraries(nixbench_wayland PUBLIC nixbench_model)
 endif()
@@ -440,6 +452,16 @@ if(BUILD_TESTING)
   )
   nixbench_configure_c_target(nixbench_framebuffer_format_tests)
 
+  add_executable(
+    nixbench_host_wsdisplay_tests
+    tests/host_wsdisplay_test.c
+  )
+  target_link_libraries(
+    nixbench_host_wsdisplay_tests
+    PRIVATE nixbench_host_wsdisplay
+  )
+  nixbench_configure_c_target(nixbench_host_wsdisplay_tests)
+
   add_executable(nixbench_window_tests tests/window_test.c)
   target_link_libraries(nixbench_window_tests PRIVATE nixbench_model)
   nixbench_configure_c_target(nixbench_window_tests)
@@ -527,6 +549,10 @@ if(BUILD_TESTING)
   add_test(
     NAME nixbench.framebuffer.format
     COMMAND nixbench_framebuffer_format_tests
+  )
+  add_test(
+    NAME nixbench.host.wsdisplay
+    COMMAND nixbench_host_wsdisplay_tests
   )
   add_test(
     NAME nixbench.backend-probe.unit

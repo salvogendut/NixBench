@@ -30,9 +30,11 @@ desktop:
 
 - **C11** is the implementation language.
 - **CMake** drives configuration and builds.
-- **SDL3** creates the host window and provides rendering and input.
+- **SDL3** supplies the software drawing API; an SDL host adapter creates the
+  development window and normalizes presentation and input events.
 - **NixBench** draws its entire desktop and internal window model inside that
-  one SDL window.
+  one SDL window. Shell drawing first lands in a canonical CPU framebuffer,
+  which is then handed to the selected physical-output adapter.
 - **Xorg** is reached through SDL3's existing X11 video backend; NixBench does
   not initially depend on Xlib, XCB, or X11 window-manager ownership.
 
@@ -104,10 +106,16 @@ but it is only compiled when libdrm, GBM, and EGL support are all available,
 and [SDL currently describes NetBSD KMSDRM as unsupported][sdl-kmsbsd].
 Its presence in an SDL package and its behavior on supported NetBSD DRM
 hardware must therefore be detected rather than assumed. A software
-`wsdisplay` framebuffer path is also being evaluated as a bring-up and fallback
-backend. The initial work follows the interfaces described by
-[wsdisplay(4)](https://man.netbsd.org/NetBSD-10.1/wsdisplay.4) without taking
-control of the console yet.
+`wsdisplay` framebuffer adapter now exists as an output-only, experimental
+bring-up path. It validates the reported RGB layout, maps only the required
+framebuffer range, converts the canonical CPU frame, participates in
+process-controlled virtual-terminal release/acquire, and restores the saved
+console state on normal teardown. It has not been exercised on supported
+framebuffer hardware yet and is not a crash-safe login session: wscons input
+and a privileged recovery watchdog are still required before it can be exposed
+as a standalone runtime mode. See
+[the standalone backend architecture](docs/standalone-backend.md) for the
+staged safety and implementation boundaries.
 
 [sdl-kmsbsd]: https://wiki.libsdl.org/SDL3/README-kmsbsd
 
@@ -139,6 +147,14 @@ protocol consumer. It creates an `xdg_toplevel`, manages release-aware
 shared-memory buffers and frame callbacks, and reacts to compositor-delivered
 pointer and keyboard events.
 
+The desktop runtime now talks to a backend-neutral host contract rather than
+driving its SDL window directly. The shell renders through an SDL software
+canvas into XRGB8888 CPU memory; the hosted SDL adapter uploads that frame to
+its window, while a deterministic headless adapter and framebuffer conversion
+tests exercise the same lifecycle and pixel contract without a display server.
+This keeps the shell, focus, and Wayland policy independent of the eventual
+`wsdisplay` and DRM/KMS output implementations.
+
 Neither the in-process event/request contract nor the Wayland integration is a
 stable public API yet. The Wayland slice currently has one scale-1 logical
 output and no touch capability, pointer-axis scrolling, client cursor
@@ -146,7 +162,7 @@ rendering, buffer scale/transform or input-region handling, popups,
 subsurfaces, clipboard, accelerated buffers, resize negotiation, process
 supervision, or application-supplied global menus. General GTK/SDL
 applications are therefore not expected to be usable yet. NixBench also does
-not yet operate directly on the NetBSD console.
+not yet offer a supported direct-console runtime.
 
 The initial chrome uses an original palette and geometry while exploring a
 classic beveled Workbench/AROS-inspired vocabulary. AROS was studied as a design
