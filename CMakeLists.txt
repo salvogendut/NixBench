@@ -335,8 +335,14 @@ target_compile_definitions(
   PRIVATE NIXBENCH_VERSION="${PROJECT_VERSION}"
 )
 
-target_link_libraries(nixbench PRIVATE SDL3::SDL3)
-target_link_libraries(nixbench PRIVATE nixbench_model)
+target_link_libraries(
+  nixbench
+  PRIVATE
+    SDL3::SDL3
+    nixbench_host_sdl
+    nixbench_model
+    nixbench_software_canvas
+)
 
 install(
   TARGETS nixbench nixbench-backend-probe
