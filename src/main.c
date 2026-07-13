@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -12,6 +13,15 @@
 #include "shell.h"
 #include "shell_renderer.h"
 #include "window_renderer.h"
+
+#ifndef NIXBENCH_HAS_WAYLAND
+#define NIXBENCH_HAS_WAYLAND 0
+#endif
+
+#if NIXBENCH_HAS_WAYLAND
+#include "wayland_renderer.h"
+#include "wayland_server.h"
+#endif
 
 #ifndef NIXBENCH_VERSION
 #define NIXBENCH_VERSION "development"
@@ -30,11 +40,13 @@ enum {
     NIXBENCH_DESKTOP_GREEN = 54,
     NIXBENCH_DESKTOP_BLUE = 76,
     NIXBENCH_CLOCK_CAPACITY = 6,
-    NIXBENCH_CLOCK_FALLBACK_WAIT_MS = 1000
+    NIXBENCH_CLOCK_FALLBACK_WAIT_MS = 1000,
+    NIXBENCH_WAYLAND_WAIT_MS = 16
 };
 
 #define NIXBENCH_MENU_SOURCE_DESKTOP UINT64_C(1)
 #define NIXBENCH_MENU_SOURCE_ABOUT UINT64_MAX
+#define NIXBENCH_MENU_SOURCE_WAYLAND (UINT64_MAX - UINT64_C(1))
 
 enum {
     NIXBENCH_DESKTOP_COMMAND_ABOUT = 1,
@@ -44,6 +56,10 @@ enum {
 
 enum {
     NIXBENCH_ABOUT_COMMAND_CLOSE = 1
+};
+
+enum {
+    NIXBENCH_WAYLAND_COMMAND_CLOSE = 1
 };
 
 static const struct nb_menu_item_spec desktop_items[] = {
@@ -81,12 +97,32 @@ static const struct nb_menu_model about_menu_model = {
     sizeof(about_menus) / sizeof(about_menus[0])
 };
 
+#if NIXBENCH_HAS_WAYLAND
+static const struct nb_menu_item_spec wayland_items[] = {
+    {"Close Application", NIXBENCH_WAYLAND_COMMAND_CLOSE,
+     NB_MENU_ITEM_COMMAND, true}
+};
+
+static const struct nb_menu_spec wayland_menus[] = {
+    {"Application", wayland_items,
+     sizeof(wayland_items) / sizeof(wayland_items[0])}
+};
+
+static const struct nb_menu_model wayland_menu_model = {
+    wayland_menus,
+    sizeof(wayland_menus) / sizeof(wayland_menus[0])
+};
+#endif
+
 struct runtime {
     struct nb_shell shell;
     struct nb_application_host applications;
     struct nb_nixinfo nixinfo;
     nb_application_id nixinfo_application;
     nb_window_id about_window;
+#if NIXBENCH_HAS_WAYLAND
+    struct nb_wayland_server *wayland;
+#endif
     bool capture_active;
     bool running;
 };
@@ -180,6 +216,22 @@ static Sint32 clock_refresh_timeout(void)
     return (Sint32)(seconds_until_next_minute * 1000);
 }
 
+static Sint32 event_wait_timeout(const struct runtime *runtime)
+{
+    Sint32 timeout = clock_refresh_timeout();
+
+#if NIXBENCH_HAS_WAYLAND
+    if (runtime->wayland != NULL &&
+        nb_wayland_server_display_name(runtime->wayland) != NULL &&
+        timeout > NIXBENCH_WAYLAND_WAIT_MS) {
+        timeout = NIXBENCH_WAYLAND_WAIT_MS;
+    }
+#else
+    (void)runtime;
+#endif
+    return timeout;
+}
+
 static bool render_window_content(SDL_Renderer *renderer,
                                   nb_window_id id,
                                   const struct nb_window *window,
@@ -188,6 +240,16 @@ static bool render_window_content(SDL_Renderer *renderer,
 {
     struct runtime *runtime = context;
 
+#if NIXBENCH_HAS_WAYLAND
+    if (runtime->wayland != NULL &&
+        nb_wayland_server_owns_window(runtime->wayland, id)) {
+        return nb_wayland_render_content(renderer,
+                                         id,
+                                         window,
+                                         content_rect,
+                                         runtime->wayland);
+    }
+#endif
     if (nb_application_host_window_owner(&runtime->applications, id) ==
         runtime->nixinfo_application) {
         return nb_nixinfo_render_content(renderer,
@@ -225,7 +287,16 @@ static bool draw_shell(SDL_Renderer *renderer,
         return false;
     }
 
-    return SDL_RenderPresent(renderer);
+    if (!SDL_RenderPresent(renderer)) {
+        return false;
+    }
+#if NIXBENCH_HAS_WAYLAND
+    if (runtime->wayland != NULL) {
+        nb_wayland_server_frame_presented(runtime->wayland,
+                                          (uint32_t)SDL_GetTicks());
+    }
+#endif
+    return true;
 }
 
 static void release_pointer_capture(bool *capture_active)
@@ -268,6 +339,48 @@ static bool sync_application_focus(struct runtime *runtime)
                  "Could not synchronize application focus");
     return false;
 }
+
+#if NIXBENCH_HAS_WAYLAND
+static bool dispatch_wayland(struct runtime *runtime)
+{
+    if (runtime->wayland == NULL) {
+        return true;
+    }
+    if (!nb_wayland_server_dispatch(runtime->wayland)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Could not dispatch the nested Wayland display");
+        return false;
+    }
+    return sync_application_focus(runtime);
+}
+
+static void start_wayland(struct runtime *runtime)
+{
+    const char *display_name;
+
+    runtime->wayland = nb_wayland_server_create(
+        &runtime->shell,
+        NIXBENCH_MENU_SOURCE_WAYLAND,
+        &wayland_menu_model);
+    if (runtime->wayland == NULL) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Could not initialize the nested Wayland display; "
+                    "continuing without Wayland clients");
+        return;
+    }
+
+    display_name = nb_wayland_server_add_socket_auto(runtime->wayland);
+    if (display_name == NULL) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Could not publish a Wayland socket. Set "
+                    "XDG_RUNTIME_DIR to a private directory with mode 0700 "
+                    "to accept Wayland clients");
+        return;
+    }
+    SDL_Log("Nested Wayland display is ready: WAYLAND_DISPLAY=%s",
+            display_name);
+}
+#endif
 
 static bool show_about_window(struct runtime *runtime)
 {
@@ -369,6 +482,20 @@ static bool apply_shell_action(struct runtime *runtime,
         if (action.window == runtime->about_window) {
             return close_about_window(runtime, action.window);
         }
+#if NIXBENCH_HAS_WAYLAND
+        if (runtime->wayland != NULL &&
+            nb_wayland_server_owns_window(runtime->wayland,
+                                          action.window)) {
+            if (nb_wayland_server_request_close(runtime->wayland,
+                                                action.window)) {
+                return true;
+            }
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Could not ask Wayland client window %llu to close",
+                        (unsigned long long)action.window);
+            return false;
+        }
+#endif
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "Ignored close request for unowned window %llu",
                     (unsigned long long)action.window);
@@ -405,6 +532,28 @@ static bool apply_shell_action(struct runtime *runtime,
                     (unsigned int)action.menu_command);
         return true;
     }
+
+#if NIXBENCH_HAS_WAYLAND
+    if (action.menu_source == NIXBENCH_MENU_SOURCE_WAYLAND) {
+        if (action.menu_command == NIXBENCH_WAYLAND_COMMAND_CLOSE &&
+            runtime->wayland != NULL &&
+            nb_wayland_server_owns_window(runtime->wayland,
+                                          action.window)) {
+            if (nb_wayland_server_request_close(runtime->wayland,
+                                                action.window)) {
+                return true;
+            }
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Could not ask Wayland client window %llu to close",
+                        (unsigned long long)action.window);
+            return false;
+        }
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Ignored Wayland application menu command %u",
+                    (unsigned int)action.menu_command);
+        return true;
+    }
+#endif
 
     SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                 "Ignored menu command %u from unknown source %llu",
@@ -598,6 +747,10 @@ int main(int argc, char *argv[])
         nb_shell_clamp_windows(&runtime.shell, viewport);
     }
 
+#if NIXBENCH_HAS_WAYLAND
+    start_wayland(&runtime);
+#endif
+
     if (!draw_shell(renderer, &runtime)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "Could not draw the desktop screen: %s",
@@ -611,7 +764,14 @@ int main(int argc, char *argv[])
 
     while (runtime.running) {
         const bool received_event =
-            SDL_WaitEventTimeout(&event, clock_refresh_timeout());
+            SDL_WaitEventTimeout(&event, event_wait_timeout(&runtime));
+
+#if NIXBENCH_HAS_WAYLAND
+        if (!dispatch_wayland(&runtime)) {
+            exit_status = 1;
+            break;
+        }
+#endif
 
         if (received_event) {
             do {
@@ -672,6 +832,10 @@ int main(int argc, char *argv[])
 
 cleanup:
     release_pointer_capture(&runtime.capture_active);
+#if NIXBENCH_HAS_WAYLAND
+    nb_wayland_server_destroy(runtime.wayland);
+    runtime.wayland = NULL;
+#endif
     if (nb_application_host_is_running(&runtime.applications,
                                        runtime.nixinfo_application) &&
         !nb_application_host_stop(&runtime.applications,

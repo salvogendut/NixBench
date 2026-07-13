@@ -11,6 +11,9 @@ are met.
 - Use C11, CMake, and SDL3 for the hosted-window prototype.
 - Develop and validate on NetBSD first.
 - Keep native applications in separate processes.
+- Use established Wayland client protocols as the native surface compatibility
+  baseline, adding narrowly scoped NixBench protocols only for shell features
+  such as global application menus.
 - Make direct DRM/KMS or framebuffer operation without X.org the final runtime.
 - Keep the shell, desktop model, compositor policy, and application lifecycle
   independent of the display backend.
@@ -125,9 +128,15 @@ Deliverables:
   one.
 - A prototype local surface and input protocol that lets an application submit
   content to the compositor without owning the physical display.
-- A documented evaluation of using established Wayland client/compositor
-  protocols versus a NixBench-specific Unix-domain-socket protocol; select one
-  before declaring the application interface public.
+- An embedded Wayland server with protocol tests, beginning with `wl_shm` and
+  stable `xdg-shell`, then adding output, seat/input, popup, subsurface, data
+  transfer, and resize behavior as concrete clients require them.
+- A documented boundary between standard Wayland protocols and any
+  NixBench-specific shell protocol. Global application menus are expected to
+  use a small opt-in extension or toolkit bridge rather than a new widget
+  toolkit.
+- Compatibility trials with existing GTK and SDL Wayland clients before any
+  application integration interface is declared public.
 - Shared-memory software surfaces first, with accelerated buffer sharing
   deferred until measurements justify it.
 - Lifecycle, timeout, validation, and compatibility rules for every introduced

@@ -43,6 +43,29 @@ This keeps their behavior independent of X11 and allows the same compositor to
 be retained when the physical output moves to KMS. Traditional X11 applications
 remain outside NixBench during this phase.
 
+### Unix application compatibility direction
+
+NixBench is growing an embedded Wayland compositor rather than embedding a
+general-purpose widget toolkit. This lets applications keep using mature
+toolkits while NixBench owns window management and composition:
+
+- GTK and SDL applications can eventually use their existing Wayland backends
+  and appear as NixBench-managed windows.
+- A small NixBench shell extension can carry desktop-specific integration such
+  as an application's global menu model without replacing its widget toolkit.
+- Xaw and other X11-only applications remain candidates for a later, optional
+  Xwayland compatibility service.
+- Moving the outer display from SDL/Xorg to NetBSD KMS changes the physical
+  output backend, not the client protocol or application toolkit.
+
+The current implementation is only the first protocol slice. It advertises
+`wl_compositor`, `wl_shm`, and stable `xdg_wm_base`; accepts ARGB/XRGB shared
+memory buffers; and maps an `xdg_toplevel` into an internal NixBench window.
+The compositor copies committed buffers before releasing them, so clients and
+the shell do not share mutable rendering state. A socket-pair protocol test
+exercises configure/acknowledge, mapping, pixels, frame completion, close, and
+unmap without requiring a running display server.
+
 X.org is a transitional development platform, not the final runtime
 architecture. It lets the project validate the shell, interaction model, and
 internal compositor before taking responsibility for the entire display stack.
@@ -57,9 +80,9 @@ The final target starts from a NetBSD console without an X server beneath it:
   NetBSD/SDL3 backend, including wscons where applicable.
 - A NixBench compositor combines the shell and independent application surfaces
   into the physical display output.
-- Native applications remain separate processes and submit surfaces through a
-  versioned local client protocol rather than opening the console device
-  themselves.
+- Native applications remain separate processes and submit surfaces through
+  standard Wayland protocols plus narrowly scoped, versioned NixBench shell
+  extensions rather than opening the console device themselves.
 - X11 support becomes an optional compatibility service layered on NixBench; it
   is not required to run the desktop or native applications.
 
@@ -69,7 +92,7 @@ therefore includes enabling that backend on NetBSD or providing the necessary
 NetBSD platform integration, preferably in a form that can be maintained
 upstream.
 
-The native surface protocol and the eventual X11 compatibility mechanism are
+The Wayland integration boundary and eventual X11 compatibility mechanism are
 not public contracts yet. The roadmap requires focused prototypes before either
 choice is stabilized.
 
@@ -90,13 +113,14 @@ deep-copies and validates double-buffered menu snapshots, delivers lifecycle
 and command events, and applies deferred application requests. Menu commands
 retain the exact focused-window context, and Quit NixInfo closes only NixInfo.
 Application-specific drawing uses a clipped content-rendering seam that can
-later be replaced by composed client surfaces.
+now be supplied by the experimental Wayland shared-memory surface path.
 
-This event/request contract is a prototype for the future process boundary,
-not a stable public API or wire format. Cross-process transport, shared-memory
-surfaces, process supervision, input delivery to client content, and protocol
-versioning are not implemented yet. NixBench also does not yet operate directly
-on the NetBSD console.
+Neither the in-process event/request contract nor the Wayland integration is a
+stable public API yet. The Wayland slice does not currently advertise seats or
+outputs and has no client input, popups, subsurfaces, clipboard, accelerated
+buffers, resize negotiation, process supervision, or application-supplied
+global menus. General GTK/SDL applications are therefore not expected to be
+usable yet. NixBench also does not yet operate directly on the NetBSD console.
 
 The initial chrome uses an original palette and geometry while exploring a
 classic beveled Workbench/AROS-inspired vocabulary. AROS was studied as a design
@@ -107,8 +131,10 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
 
 ## Tested configurations
 
-- **NetBSD 10.1 (GENERIC), amd64** with SDL3 3.4.2 from pkgsrc: the CMake
-  build and hosted desktop window were confirmed working on July 13, 2026.
+- **NetBSD 10.1 (GENERIC), amd64** with SDL3 3.4.2, Wayland, and
+  wayland-protocols from pkgsrc: default dependency discovery, generated
+  xdg-shell bindings, all 13 tests, and an X11-hosted startup with a published
+  nested Wayland socket were confirmed working on July 13, 2026.
 
 This is a manual target-system validation; automated NetBSD testing remains
 future work.
@@ -121,6 +147,14 @@ Required development dependencies:
 - CMake 3.16 or newer and a supported build tool
 - SDL 3.2.0 or newer, including its development files
 - A video backend supported by SDL3; Xorg is the initial NetBSD host
+
+The experimental client-surface path additionally uses the Wayland server
+library and scanner plus the stable `xdg-shell.xml` from `wayland-protocols`.
+Configuration defaults to `-DNIXBENCH_WAYLAND=AUTO`: it enables the feature
+when all components are found and otherwise builds the SDL-only desktop. Use
+`-DNIXBENCH_WAYLAND=ON` to require it, or `OFF` to omit it explicitly. NetBSD's
+pkgsrc `wayland` and `wayland-protocols` packages provide these components; no
+`pkg-config` executable is required by this build.
 
 SDL3 is available from NetBSD pkgsrc as `devel/SDL3`. Configure, build, and test
 with:
@@ -158,6 +192,19 @@ NixBench. Use `--help` to list all current options.
 The CMake configuration deliberately uses the system SDL3 package instead of
 downloading dependencies during the build. Direct X11 dependencies are not
 needed for the hosted-window phase.
+
+When Wayland support is enabled, NixBench publishes a nested display beneath
+`XDG_RUNTIME_DIR` and logs its `WAYLAND_DISPLAY` name. A development shell that
+does not set a runtime directory can prepare one before starting NixBench:
+
+```sh
+install -d -m 700 "$HOME/.nixbench-runtime"
+XDG_RUNTIME_DIR="$HOME/.nixbench-runtime" ./build/nixbench
+```
+
+This socket is currently intended for the protocol test and small experimental
+clients. Toolkit compatibility requires the additional protocol layers listed
+above.
 
 ## Contributing
 

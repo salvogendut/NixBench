@@ -12,6 +12,86 @@ include(GNUInstallDirs)
 
 find_package(SDL3 3.2.0 CONFIG REQUIRED COMPONENTS SDL3)
 
+set(
+  NIXBENCH_WAYLAND "AUTO"
+  CACHE STRING "Build the experimental Wayland server (AUTO, ON, or OFF)"
+)
+set_property(CACHE NIXBENCH_WAYLAND PROPERTY STRINGS AUTO ON OFF)
+string(TOUPPER "${NIXBENCH_WAYLAND}" NIXBENCH_WAYLAND)
+set(
+  NIXBENCH_WAYLAND "${NIXBENCH_WAYLAND}"
+  CACHE STRING "Build the experimental Wayland server (AUTO, ON, or OFF)"
+  FORCE
+)
+
+if(
+  NOT NIXBENCH_WAYLAND STREQUAL "AUTO"
+  AND NOT NIXBENCH_WAYLAND STREQUAL "ON"
+  AND NOT NIXBENCH_WAYLAND STREQUAL "OFF"
+)
+  message(
+    FATAL_ERROR
+    "NIXBENCH_WAYLAND must be one of AUTO, ON, or OFF "
+    "(received '${NIXBENCH_WAYLAND}')"
+  )
+endif()
+
+set(NIXBENCH_WAYLAND_ENABLED FALSE)
+
+if(NOT NIXBENCH_WAYLAND STREQUAL "OFF")
+  find_path(
+    NIXBENCH_WAYLAND_SERVER_INCLUDE_DIR
+    NAMES wayland-server-core.h
+    PATH_SUFFIXES include
+  )
+  find_library(
+    NIXBENCH_WAYLAND_SERVER_LIBRARY
+    NAMES wayland-server
+    PATH_SUFFIXES lib
+  )
+  find_program(NIXBENCH_WAYLAND_SCANNER NAMES wayland-scanner)
+  find_file(
+    NIXBENCH_XDG_SHELL_XML
+    NAMES xdg-shell.xml
+    PATH_SUFFIXES
+      share/wayland-protocols/stable/xdg-shell
+      wayland-protocols/stable/xdg-shell
+  )
+
+  set(_nixbench_wayland_missing)
+  if(NOT NIXBENCH_WAYLAND_SERVER_INCLUDE_DIR)
+    list(APPEND _nixbench_wayland_missing "wayland-server-core.h")
+  endif()
+  if(NOT NIXBENCH_WAYLAND_SERVER_LIBRARY)
+    list(APPEND _nixbench_wayland_missing "libwayland-server")
+  endif()
+  if(NOT NIXBENCH_WAYLAND_SCANNER)
+    list(APPEND _nixbench_wayland_missing "wayland-scanner")
+  endif()
+  if(NOT NIXBENCH_XDG_SHELL_XML)
+    list(APPEND _nixbench_wayland_missing "stable xdg-shell.xml")
+  endif()
+
+  if(_nixbench_wayland_missing)
+    string(JOIN ", " _nixbench_wayland_missing_text ${_nixbench_wayland_missing})
+    if(NIXBENCH_WAYLAND STREQUAL "ON")
+      message(
+        FATAL_ERROR
+        "Wayland support was requested, but these components were not found: "
+        "${_nixbench_wayland_missing_text}"
+      )
+    else()
+      message(
+        STATUS
+        "Wayland support is unavailable: ${_nixbench_wayland_missing_text}"
+      )
+    endif()
+  else()
+    set(NIXBENCH_WAYLAND_ENABLED TRUE)
+    message(STATUS "Wayland support enabled (${NIXBENCH_XDG_SHELL_XML})")
+  endif()
+endif()
+
 function(nixbench_configure_c_target target)
   set_target_properties(
     "${target}"
@@ -27,6 +107,77 @@ function(nixbench_configure_c_target target)
     target_compile_options("${target}" PRIVATE /W4)
   endif()
 endfunction()
+
+if(NIXBENCH_WAYLAND_ENABLED)
+  set(
+    NIXBENCH_WAYLAND_GENERATED_DIR
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  )
+  set(
+    NIXBENCH_XDG_SHELL_SERVER_HEADER
+    "${NIXBENCH_WAYLAND_GENERATED_DIR}/xdg-shell-server-protocol.h"
+  )
+  set(
+    NIXBENCH_XDG_SHELL_CLIENT_HEADER
+    "${NIXBENCH_WAYLAND_GENERATED_DIR}/xdg-shell-client-protocol.h"
+  )
+  set(
+    NIXBENCH_XDG_SHELL_PRIVATE_CODE
+    "${NIXBENCH_WAYLAND_GENERATED_DIR}/xdg-shell-protocol.c"
+  )
+
+  add_custom_command(
+    OUTPUT
+      "${NIXBENCH_XDG_SHELL_SERVER_HEADER}"
+      "${NIXBENCH_XDG_SHELL_CLIENT_HEADER}"
+      "${NIXBENCH_XDG_SHELL_PRIVATE_CODE}"
+    COMMAND
+      "${CMAKE_COMMAND}" -E make_directory
+      "${NIXBENCH_WAYLAND_GENERATED_DIR}"
+    COMMAND
+      "${NIXBENCH_WAYLAND_SCANNER}" --strict server-header
+      "${NIXBENCH_XDG_SHELL_XML}"
+      "${NIXBENCH_XDG_SHELL_SERVER_HEADER}"
+    COMMAND
+      "${NIXBENCH_WAYLAND_SCANNER}" --strict client-header
+      "${NIXBENCH_XDG_SHELL_XML}"
+      "${NIXBENCH_XDG_SHELL_CLIENT_HEADER}"
+    COMMAND
+      "${NIXBENCH_WAYLAND_SCANNER}" --strict private-code
+      "${NIXBENCH_XDG_SHELL_XML}"
+      "${NIXBENCH_XDG_SHELL_PRIVATE_CODE}"
+    DEPENDS "${NIXBENCH_XDG_SHELL_XML}"
+    COMMENT "Generating the xdg-shell protocol bindings"
+    VERBATIM
+  )
+
+  add_custom_target(
+    nixbench_wayland_protocol
+    DEPENDS
+      "${NIXBENCH_XDG_SHELL_SERVER_HEADER}"
+      "${NIXBENCH_XDG_SHELL_CLIENT_HEADER}"
+      "${NIXBENCH_XDG_SHELL_PRIVATE_CODE}"
+  )
+
+  add_library(
+    nixbench_wayland STATIC
+    src/wayland_server.c
+    "${NIXBENCH_XDG_SHELL_PRIVATE_CODE}"
+  )
+  add_dependencies(nixbench_wayland nixbench_wayland_protocol)
+  target_include_directories(
+    nixbench_wayland
+    PUBLIC
+      "${CMAKE_CURRENT_SOURCE_DIR}/src"
+      "${NIXBENCH_WAYLAND_GENERATED_DIR}"
+      "${NIXBENCH_WAYLAND_SERVER_INCLUDE_DIR}"
+  )
+  target_link_libraries(
+    nixbench_wayland
+    PUBLIC "${NIXBENCH_WAYLAND_SERVER_LIBRARY}" m
+  )
+  nixbench_configure_c_target(nixbench_wayland)
+endif()
 
 add_library(
   nixbench_model STATIC
@@ -44,6 +195,10 @@ target_include_directories(
 )
 nixbench_configure_c_target(nixbench_model)
 
+if(NIXBENCH_WAYLAND_ENABLED)
+  target_link_libraries(nixbench_wayland PUBLIC nixbench_model)
+endif()
+
 add_executable(
   nixbench
   src/desktop_renderer.c
@@ -54,6 +209,14 @@ add_executable(
   src/window_renderer.c
 )
 nixbench_configure_c_target(nixbench)
+
+if(NIXBENCH_WAYLAND_ENABLED)
+  target_sources(nixbench PRIVATE src/wayland_renderer.c)
+  target_link_libraries(nixbench PRIVATE nixbench_wayland)
+  target_compile_definitions(nixbench PRIVATE NIXBENCH_HAS_WAYLAND=1)
+else()
+  target_compile_definitions(nixbench PRIVATE NIXBENCH_HAS_WAYLAND=0)
+endif()
 
 target_compile_definitions(
   nixbench
@@ -111,6 +274,46 @@ if(BUILD_TESTING)
     PRIVATE SDL3::SDL3 nixbench_model
   )
   nixbench_configure_c_target(nixbench_renderer_tests)
+
+  if(NIXBENCH_WAYLAND_ENABLED)
+    find_path(
+      NIXBENCH_WAYLAND_CLIENT_INCLUDE_DIR
+      NAMES wayland-client.h
+      PATH_SUFFIXES include
+    )
+    find_library(
+      NIXBENCH_WAYLAND_CLIENT_LIBRARY
+      NAMES wayland-client
+      PATH_SUFFIXES lib
+    )
+
+    if(
+      NIXBENCH_WAYLAND_CLIENT_INCLUDE_DIR
+      AND NIXBENCH_WAYLAND_CLIENT_LIBRARY
+    )
+      add_executable(nixbench_wayland_tests tests/wayland_test.c)
+      add_dependencies(nixbench_wayland_tests nixbench_wayland_protocol)
+      target_include_directories(
+        nixbench_wayland_tests
+        PRIVATE
+          "${NIXBENCH_WAYLAND_CLIENT_INCLUDE_DIR}"
+          "${NIXBENCH_WAYLAND_GENERATED_DIR}"
+      )
+      target_link_libraries(
+        nixbench_wayland_tests
+        PRIVATE
+          nixbench_wayland
+          "${NIXBENCH_WAYLAND_CLIENT_LIBRARY}"
+      )
+      nixbench_configure_c_target(nixbench_wayland_tests)
+      add_test(NAME nixbench.wayland.protocol COMMAND nixbench_wayland_tests)
+    else()
+      message(
+        STATUS
+        "Wayland client development files not found; protocol test disabled"
+      )
+    endif()
+  endif()
 
   add_test(NAME nixbench.desktop.model COMMAND nixbench_desktop_tests)
   add_test(NAME nixbench.window.model COMMAND nixbench_window_tests)
