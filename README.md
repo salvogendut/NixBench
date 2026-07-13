@@ -8,7 +8,7 @@ The goal is a lightweight, coherent desktop that eventually runs directly on
 the NetBSD console without requiring X.org, while supporting both applications
 designed specifically for NixBench and traditional Unix GUI applications. The
 project is in its bootstrap stage. The runnable prototype opens an SDL3 desktop
-screen under a host window system and draws its first NixBench-managed window.
+screen under a host window system and draws NixBench-managed windows inside it.
 
 ## Goals
 
@@ -75,12 +75,14 @@ choice is stabilized.
 
 ## Project status
 
-NixBench now has a minimal C11/SDL3 shell and its first internal window. The
-window is drawn entirely by NixBench, can be moved by its title bar, stays inside
-the desktop, and has a working close gadget. The window model and hit testing do
-not depend on SDL or X11; SDL is confined to input adaptation and rendering.
-This is a shell-owned test window rather than an application surface, and
-NixBench does not yet operate directly on the NetBSD console.
+NixBench now has a minimal C11/SDL3 shell and a small internal window manager.
+Two overlapping demonstration windows are drawn entirely by NixBench. They can
+be independently focused, raised, moved, and closed, and remain inside the
+desktop. The manager uses stable window identifiers and keeps geometry,
+stacking, focus, hit testing, and pointer routing independent of SDL and X11;
+SDL is confined to input adaptation and rendering. These are shell-owned test
+windows rather than application surfaces, and NixBench does not yet operate
+directly on the NetBSD console.
 
 The initial chrome uses an original palette and geometry while exploring a
 classic beveled Workbench/AROS-inspired vocabulary. AROS was studied as a design
@@ -121,10 +123,12 @@ Open the desktop in a development window:
 ./build/nixbench
 ```
 
-Windowed operation is the development default. Drag the internal window by its
-title bar and use its top-left gadget to close it. Pass `--fullscreen` only for
-a hosted full-display preview. Press Escape or close the outer host window to
-exit NixBench. Use `--help` to list all current options.
+Windowed operation is the development default. Click an internal window to
+focus it and bring it to the front, drag it by its title bar, and use its
+top-left gadget to close it. Clicking the desktop clears the active window.
+Pass `--fullscreen` only for a hosted full-display preview. Press Escape or
+close the outer host window to exit NixBench. Use `--help` to list all current
+options.
 
 The CMake configuration deliberately uses the system SDL3 package instead of
 downloading dependencies during the build. Direct X11 dependencies are not

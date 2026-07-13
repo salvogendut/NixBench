@@ -28,14 +28,19 @@ function(nixbench_configure_c_target target)
   endif()
 endfunction()
 
-add_library(nixbench_window_model STATIC src/window.c)
+add_library(nixbench_model STATIC src/desktop.c src/window.c)
 target_include_directories(
-  nixbench_window_model
+  nixbench_model
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
-nixbench_configure_c_target(nixbench_window_model)
+nixbench_configure_c_target(nixbench_model)
 
-add_executable(nixbench src/main.c src/window_renderer.c)
+add_executable(
+  nixbench
+  src/desktop_renderer.c
+  src/main.c
+  src/window_renderer.c
+)
 nixbench_configure_c_target(nixbench)
 
 target_compile_definitions(
@@ -44,15 +49,20 @@ target_compile_definitions(
 )
 
 target_link_libraries(nixbench PRIVATE SDL3::SDL3)
-target_link_libraries(nixbench PRIVATE nixbench_window_model)
+target_link_libraries(nixbench PRIVATE nixbench_model)
 
 install(TARGETS nixbench RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
 if(BUILD_TESTING)
+  add_executable(nixbench_desktop_tests tests/desktop_test.c)
+  target_link_libraries(nixbench_desktop_tests PRIVATE nixbench_model)
+  nixbench_configure_c_target(nixbench_desktop_tests)
+
   add_executable(nixbench_window_tests tests/window_test.c)
-  target_link_libraries(nixbench_window_tests PRIVATE nixbench_window_model)
+  target_link_libraries(nixbench_window_tests PRIVATE nixbench_model)
   nixbench_configure_c_target(nixbench_window_tests)
 
+  add_test(NAME nixbench.desktop.model COMMAND nixbench_desktop_tests)
   add_test(NAME nixbench.window.model COMMAND nixbench_window_tests)
   add_test(NAME nixbench.cli.version COMMAND nixbench --version)
   add_test(NAME nixbench.cli.help COMMAND nixbench --help)

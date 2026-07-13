@@ -1,5 +1,6 @@
 #include "window.h"
 
+#include <stddef.h>
 #include <stdint.h>
 
 static int maximum(int left, int right)
@@ -24,10 +25,19 @@ void nb_window_init(struct nb_window *window,
                     const char *title,
                     struct nb_rect frame)
 {
+    size_t title_index = 0;
+
     window->frame = frame;
-    window->title = title;
+    if (title != NULL) {
+        while (title_index + 1 < NB_WINDOW_TITLE_CAPACITY &&
+               title[title_index] != '\0') {
+            window->title[title_index] = title[title_index];
+            ++title_index;
+        }
+    }
+    window->title[title_index] = '\0';
     window->visible = true;
-    window->active = true;
+    window->active = false;
     window->pointer_mode = NB_WINDOW_POINTER_IDLE;
     window->close_pressed = false;
     window->grab_x = 0;

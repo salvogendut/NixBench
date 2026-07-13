@@ -104,7 +104,7 @@ static bool render_title(SDL_Renderer *renderer,
 {
     const struct nb_rect title = nb_window_title_rect(window);
     const struct nb_rect close = nb_window_close_rect(window);
-    const char *text = window->title != NULL ? window->title : "";
+    const char *text = window->title;
     const float text_x = (float)(close.x + close.width + 8);
     const float text_y = (float)(title.y + ((title.height - 8) / 2));
     char clipped_text[64];
@@ -152,11 +152,11 @@ static bool render_content(SDL_Renderer *renderer,
     return SDL_RenderDebugText(renderer,
                                (float)(content.x + 18),
                                (float)(content.y + 24),
-                               "Welcome to NixBench") &&
+                               "This window is managed by NixBench.") &&
            SDL_RenderDebugText(renderer,
                                (float)(content.x + 18),
                                (float)(content.y + 44),
-                               "Drag this window by its title bar.");
+                               "Click to focus; drag the title bar.");
 }
 
 bool nb_window_render(SDL_Renderer *renderer, const struct nb_window *window)

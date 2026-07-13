@@ -7,7 +7,8 @@ enum {
     NB_WINDOW_BORDER_WIDTH = 3,
     NB_WINDOW_TITLE_HEIGHT = 24,
     NB_WINDOW_GADGET_MARGIN = 4,
-    NB_WINDOW_CLOSE_SIZE = 16
+    NB_WINDOW_CLOSE_SIZE = 16,
+    NB_WINDOW_TITLE_CAPACITY = 64
 };
 
 struct nb_rect {
@@ -38,7 +39,7 @@ enum nb_window_action {
 
 struct nb_window {
     struct nb_rect frame;
-    const char *title;
+    char title[NB_WINDOW_TITLE_CAPACITY];
     bool visible;
     bool active;
     enum nb_window_pointer_mode pointer_mode;

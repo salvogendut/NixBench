@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "window.h"
 
@@ -20,6 +21,7 @@ static struct nb_window make_window(void)
     const struct nb_rect frame = {100, 80, 320, 220};
 
     nb_window_init(&window, "Test window", frame);
+    CHECK(!window.active);
     return window;
 }
 
@@ -56,6 +58,20 @@ static void test_geometry_and_hit_testing(void)
 
     window.visible = false;
     CHECK(nb_window_hit_test(&window, 150, 90) == NB_WINDOW_HIT_NONE);
+}
+
+static void test_title_ownership(void)
+{
+    struct nb_window window;
+    struct nb_rect frame = {0, 0, 200, 120};
+    char title[] = "Mutable title";
+
+    nb_window_init(&window, title, frame);
+    title[0] = 'X';
+    CHECK(strcmp(window.title, "Mutable title") == 0);
+
+    nb_window_init(&window, NULL, frame);
+    CHECK(window.title[0] == '\0');
 }
 
 static void test_dragging(void)
@@ -151,6 +167,7 @@ static void test_cancel_and_repeated_down(void)
 int main(void)
 {
     test_geometry_and_hit_testing();
+    test_title_ownership();
     test_dragging();
     test_clamping();
     test_close_tracking();
