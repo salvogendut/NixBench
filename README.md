@@ -4,23 +4,27 @@ NixBench is an experimental desktop environment for NetBSD, built in C with
 SDL3. Its interaction model and visual direction take inspiration from Amiga
 Workbench and AROS while remaining an original project.
 
-The goal is a lightweight, coherent desktop that can support both applications
+The goal is a lightweight, coherent desktop that eventually runs directly on
+the NetBSD console without requiring X.org, while supporting both applications
 designed specifically for NixBench and traditional Unix GUI applications. The
 project is at the planning stage: there is no runnable implementation yet.
 
 ## Goals
 
 - Make NetBSD a first-class development and runtime platform.
+- Run standalone by owning the display and input devices directly.
 - Provide a responsive desktop shell with a Workbench-inspired workflow.
 - Treat volumes, files, applications, and launchers as clear desktop objects.
 - Run native NixBench applications as independent processes and windows.
-- Manage conventional X11 applications without requiring them to be modified.
+- Preserve a compatibility path for conventional X11 applications.
 - Keep the core small, understandable, and built from portable components where
   doing so does not compromise the NetBSD experience.
 
-## Initial architecture
+## Architecture
 
-The first usable version will run on NetBSD with Xorg:
+### Initial development architecture
+
+The first usable prototype will run on NetBSD with Xorg:
 
 - **C11** is the implementation language.
 - **CMake** drives configuration and builds.
@@ -34,15 +38,43 @@ while XCB communicates with Xorg to discover, place, decorate, and control
 application windows. SDL applications and traditional Unix applications remain
 normal, isolated processes rather than plugins loaded into the desktop.
 
-A native integration API and local IPC may be introduced once concrete
-shell/application interactions require them. They are intentionally not public
-contracts yet.
+X.org is a transitional development platform, not the final runtime
+architecture. It lets the project validate the shell, interaction model, and
+application management before taking responsibility for the entire display
+stack.
+
+### Standalone target architecture
+
+The final target starts from a NetBSD console without an X server beneath it:
+
+- NixBench owns display output through DRM/KMS where supported, with a practical
+  framebuffer path considered for hardware without KMS.
+- Console keyboard and pointer input are obtained through the appropriate
+  NetBSD/SDL3 backend, including wscons where applicable.
+- A NixBench compositor combines the shell and independent application surfaces
+  into the physical display output.
+- Native applications remain separate processes and submit surfaces through a
+  versioned local client protocol rather than opening the console device
+  themselves.
+- X11 support becomes an optional compatibility service layered on NixBench; it
+  is not required to run the desktop or native applications.
+
+SDL3's [KMSDRM backend](https://wiki.libsdl.org/SDL3/README-kmsbsd) does not
+currently support NetBSD console output. Reaching the standalone target
+therefore includes enabling that backend on NetBSD or providing the necessary
+NetBSD platform integration, preferably in a form that can be maintained
+upstream.
+
+The native surface protocol and the eventual X11 compatibility mechanism are
+not public contracts yet. The roadmap requires focused prototypes before either
+choice is stabilized.
 
 ## Project status
 
 NixBench currently consists only of its project definition and initial
-roadmap. The next milestone will introduce the CMake and C source skeleton and
-open the first SDL3 desktop window.
+roadmap. The next milestone will introduce the CMake and C source skeleton, open
+the first SDL3 desktop window, and establish boundaries that keep the shell
+independent of its temporary X11 host backend.
 
 See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
 
@@ -54,7 +86,7 @@ The bootstrap milestone is expected to require:
 - CMake and a supported build tool
 - SDL3 development files
 - XCB development files
-- Xorg for integration testing
+- Xorg for the initial hosted backend and integration testing
 
 Exact package names and supported versions will be documented when the first
 build is added.
