@@ -28,7 +28,13 @@ function(nixbench_configure_c_target target)
   endif()
 endfunction()
 
-add_library(nixbench_model STATIC src/desktop.c src/window.c)
+add_library(
+  nixbench_model STATIC
+  src/desktop.c
+  src/menu.c
+  src/shell.c
+  src/window.c
+)
 target_include_directories(
   nixbench_model
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -39,6 +45,8 @@ add_executable(
   nixbench
   src/desktop_renderer.c
   src/main.c
+  src/menu_renderer.c
+  src/shell_renderer.c
   src/window_renderer.c
 )
 nixbench_configure_c_target(nixbench)
@@ -62,8 +70,18 @@ if(BUILD_TESTING)
   target_link_libraries(nixbench_window_tests PRIVATE nixbench_model)
   nixbench_configure_c_target(nixbench_window_tests)
 
+  add_executable(nixbench_menu_tests tests/menu_test.c)
+  target_link_libraries(nixbench_menu_tests PRIVATE nixbench_model)
+  nixbench_configure_c_target(nixbench_menu_tests)
+
+  add_executable(nixbench_shell_tests tests/shell_test.c)
+  target_link_libraries(nixbench_shell_tests PRIVATE nixbench_model)
+  nixbench_configure_c_target(nixbench_shell_tests)
+
   add_test(NAME nixbench.desktop.model COMMAND nixbench_desktop_tests)
   add_test(NAME nixbench.window.model COMMAND nixbench_window_tests)
+  add_test(NAME nixbench.menu.model COMMAND nixbench_menu_tests)
+  add_test(NAME nixbench.shell.model COMMAND nixbench_shell_tests)
   add_test(NAME nixbench.cli.version COMMAND nixbench --version)
   add_test(NAME nixbench.cli.help COMMAND nixbench --help)
   add_test(NAME nixbench.cli.unknown-option COMMAND nixbench --unknown-option)

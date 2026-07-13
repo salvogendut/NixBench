@@ -318,6 +318,21 @@ static void test_active_fallback(void)
     check_invariants(&fixture.desktop);
 }
 
+static void test_explicit_activation(void)
+{
+    struct fixture fixture = make_fixture();
+
+    CHECK(nb_desktop_active_window_id(&fixture.desktop) == fixture.b);
+    CHECK(nb_desktop_activate_window(&fixture.desktop, fixture.a));
+    CHECK(nb_desktop_active_window_id(&fixture.desktop) == fixture.a);
+    CHECK(nb_desktop_window_id_at(&fixture.desktop, 1) == fixture.a);
+    CHECK(!nb_desktop_activate_window(&fixture.desktop, NB_WINDOW_ID_NONE));
+    CHECK(!nb_desktop_activate_window(&fixture.desktop, UINT64_MAX));
+    CHECK(nb_desktop_active_window_id(&fixture.desktop) == fixture.a);
+    CHECK(nb_desktop_window_id_at(&fixture.desktop, 1) == fixture.a);
+    check_invariants(&fixture.desktop);
+}
+
 static void test_clamp_all(void)
 {
     struct nb_desktop desktop;
@@ -470,6 +485,7 @@ int main(void)
     test_close_request_and_lifecycle();
     test_resize_capture_routing();
     test_active_fallback();
+    test_explicit_activation();
     test_clamp_all();
     test_capacity_and_stale_ids();
     test_cancel();

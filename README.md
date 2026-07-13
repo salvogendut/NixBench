@@ -78,11 +78,18 @@ choice is stabilized.
 NixBench now has a minimal C11/SDL3 shell and a small internal window manager.
 Two overlapping demonstration windows are drawn entirely by NixBench. They can
 be independently focused, raised, moved, resized, and closed, and remain inside
-the desktop. The manager uses stable window identifiers and keeps geometry,
-stacking, focus, hit testing, and pointer routing independent of SDL and X11.
-SDL is confined to input adaptation and rendering. These are shell-owned test
-windows rather than application surfaces, and NixBench does not yet operate
-directly on the NetBSD console.
+the desktop. A global top bar displays the focused application's registered
+menus and a live local-time clock; clicking the desktop restores the shell's
+own menu set. The manager uses stable window identifiers and keeps geometry,
+stacking, focus, menus, hit testing, and pointer routing independent of SDL and
+X11. SDL is confined to input adaptation and rendering.
+
+The current shell-owned test windows prototype active menu-source selection and
+source-tagged command routing. Cross-process publication, descriptor copying
+and validation, process ownership, and transport are not implemented yet; that
+boundary will be defined with the native application protocol. These are still
+shell-owned test windows rather than application surfaces, and NixBench does
+not yet operate directly on the NetBSD console.
 
 The initial chrome uses an original palette and geometry while exploring a
 classic beveled Workbench/AROS-inspired vocabulary. AROS was studied as a design
@@ -126,9 +133,14 @@ Open the desktop in a development window:
 Windowed operation is the development default. Click an internal window to
 focus it and bring it to the front, drag it by its title bar, and use its
 top-left gadget to close it. Resize it using the gadget at the right end of its
-bottom decorator rail. Clicking the desktop clears the active window. Pass
-`--fullscreen` only for a hosted full-display preview. Press Escape or close
-the outer host window to exit NixBench. Use `--help` to list all current options.
+bottom decorator rail. The global top bar switches between the focused
+application's menus and the NixBench desktop menu. Click a menu and then an
+item, or press and drag directly to an item. F10 opens the keyboard menu path;
+use the arrow keys, Enter, and Escape to navigate or dismiss it. Escape exits
+NixBench when no menu is open. The right end of the bar shows local time.
+Clicking the desktop clears the active window. Pass `--fullscreen` only for a
+hosted full-display preview. Close the outer host window to exit NixBench. Use
+`--help` to list all current options.
 
 The CMake configuration deliberately uses the system SDL3 package instead of
 downloading dependencies during the build. Direct X11 dependencies are not

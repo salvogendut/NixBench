@@ -211,6 +211,16 @@ bool nb_desktop_raise_window(struct nb_desktop *desktop, nb_window_id id)
     return true;
 }
 
+bool nb_desktop_activate_window(struct nb_desktop *desktop, nb_window_id id)
+{
+    if (!nb_desktop_raise_window(desktop, id)) {
+        return false;
+    }
+
+    set_active_window(desktop, id);
+    return true;
+}
+
 size_t nb_desktop_window_count(const struct nb_desktop *desktop)
 {
     return desktop->window_count;
@@ -276,8 +286,7 @@ enum nb_window_hit nb_desktop_pointer_down(struct nb_desktop *desktop,
     }
 
     slot = &desktop->slots[slot_index];
-    nb_desktop_raise_window(desktop, slot->id);
-    set_active_window(desktop, slot->id);
+    nb_desktop_activate_window(desktop, slot->id);
     hit = nb_window_pointer_down(&slot->window, x, y);
     if (slot->window.pointer_mode != NB_WINDOW_POINTER_IDLE) {
         desktop->pointer_window = slot->id;
