@@ -25,24 +25,27 @@ SDL3 desktop screen under a host window system.
 
 ### Initial development architecture
 
-The first usable prototype will run on NetBSD with Xorg:
+The first usable prototype runs as a normal window inside a NetBSD/Xorg
+desktop:
 
 - **C11** is the implementation language.
 - **CMake** drives configuration and builds.
-- **SDL3** provides rendering, input, and the foundation of the desktop shell.
-- **XCB** provides the X11 window-manager operations that SDL3 does not expose.
-- **NixBench** owns window-management policy and manages ordinary X11 clients.
+- **SDL3** creates the host window and provides rendering and input.
+- **NixBench** draws its entire desktop and internal window model inside that
+  one SDL window.
+- **Xorg** is reached through SDL3's existing X11 video backend; NixBench does
+  not initially depend on Xlib, XCB, or X11 window-manager ownership.
 
-SDL3 is not itself a display server or a general-purpose window manager. In the
-initial architecture, SDL3 renders the shell and NixBench-owned interfaces,
-while XCB communicates with Xorg to discover, place, decorate, and control
-application windows. SDL applications and traditional Unix applications remain
-normal, isolated processes rather than plugins loaded into the desktop.
+The hosted window is a development container for the future standalone
+desktop, not a set of host-system windows. Desktop objects, menus, NixBench
+windows, focus, stacking, and client surfaces are all implemented internally.
+This keeps their behavior independent of X11 and allows the same compositor to
+be retained when the physical output moves to KMS. Traditional X11 applications
+remain outside NixBench during this phase.
 
 X.org is a transitional development platform, not the final runtime
 architecture. It lets the project validate the shell, interaction model, and
-application management before taking responsibility for the entire display
-stack.
+internal compositor before taking responsibility for the entire display stack.
 
 ### Standalone target architecture
 
@@ -103,12 +106,13 @@ Open the desktop in a development window:
 ./build/nixbench
 ```
 
-Pass `--fullscreen` to occupy the current display. Press Escape or close the
-window to exit. Use `--help` to list all current options.
+Windowed operation is the development default. Pass `--fullscreen` only for a
+hosted full-display preview. Press Escape or close the window to exit. Use
+`--help` to list all current options.
 
 The CMake configuration deliberately uses the system SDL3 package instead of
-downloading dependencies during the build. XCB will be added when work begins
-on the hosted X11 window-manager backend.
+downloading dependencies during the build. Direct X11 dependencies are not
+needed for the hosted-window phase.
 
 ## Contributing
 

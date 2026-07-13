@@ -8,7 +8,7 @@ are met.
 
 ## Guiding constraints
 
-- Use C11, CMake, and SDL3; use XCB only in the hosted X11 backend.
+- Use C11, CMake, and SDL3 for the hosted-window prototype.
 - Develop and validate on NetBSD first.
 - Keep native applications in separate processes.
 - Make direct DRM/KMS or framebuffer operation without X.org the final runtime.
@@ -27,7 +27,7 @@ Establish a small buildable program and a repeatable development workflow.
 
 Deliverables:
 
-- A CMake project with explicit SDL3 and XCB dependency discovery.
+- A CMake project with explicit SDL3 dependency discovery.
 - A documented source layout and build/run instructions for NetBSD.
 - A minimal executable that initializes SDL3, opens a desktop window, processes
   input and lifecycle events, and shuts down cleanly.
@@ -63,30 +63,33 @@ Exit criteria:
 - Shell state remains consistent across resize, redraw, and display changes.
 - Invalid or absent configuration falls back to documented defaults.
 
-## Milestone 3: Build the hosted X11 backend
+## Milestone 3: Build the internal window compositor
 
-Turn the development prototype into an X11 window manager while retaining SDL3
-for shell rendering and input. This backend is a bootstrap, debugging, and
-fallback environment rather than the final architecture.
+Build NixBench's own window model and compositor inside the single SDL host
+window. Xorg remains responsible only for the outer development window; all
+desktop behavior must remain independent of X11.
 
 Deliverables:
 
-- XCB connection setup and acquisition of window-manager ownership.
-- Discovery and management of existing and newly created X11 client windows.
+- An internal representation for windows, surfaces, stacking order, focus, and
+  lifecycle state.
+- Composition of multiple shell-owned test surfaces into the SDL output.
 - Window placement, focus, raise/lower, move, resize, minimize, restore, and
-  close-request behavior.
-- Original window decorations and consistent keyboard shortcuts.
-- Handling for common ICCCM and EWMH expectations needed by target applications.
-- Safe detection of another active window manager and recovery from disappearing
-  or unresponsive clients.
+  close behavior with original decorations.
+- Logical desktop coordinates and damage tracking that do not depend on the host
+  window's size, pixel density, or video backend.
+- Consistent mouse and keyboard routing, including grabs used during menus and
+  move/resize operations.
+- Tests for geometry, stacking, focus transitions, clipping, and invalid client
+  state.
 
 Exit criteria:
 
-- A representative set of SDL3 and conventional X11 applications can be
-  launched, focused, moved, resized, minimized, restored, and closed.
-- Starting NixBench under an existing window manager fails safely with a clear
-  diagnostic.
-- Client crashes do not terminate or wedge the desktop.
+- At least two test windows can be focused, stacked, moved, resized, minimized,
+  restored, and closed within the NixBench host window.
+- Resizing or scaling the outer SDL window preserves internal geometry and
+  produces a correct redraw.
+- No compositor or shell module includes X11-specific types or headers.
 
 ## Milestone 4: Add desktop objects and preferences
 
@@ -143,18 +146,18 @@ Make the desktop reproducible and practical to evaluate on NetBSD.
 
 Deliverables:
 
-- NetBSD installation and X session startup instructions.
+- NetBSD installation and hosted-window startup instructions.
 - Packaging metadata appropriate for evaluation and eventual pkgsrc work.
-- End-to-end tests for session startup, application management, preference
-  persistence, clean logout, and recovery after component failure.
+- End-to-end tests for program startup, application management, preference
+  persistence, clean exit, and recovery after component failure.
 - Performance and resource measurements on representative hardware or virtual
   machines.
 - A documented troubleshooting and debug-log collection workflow.
 
 Exit criteria:
 
-- A new user can install, start, exercise, and cleanly leave a NixBench session
-  using the documentation.
+- A new user can install, start, exercise, and cleanly leave NixBench from a
+  normal Xorg desktop using the documentation.
 - The release checklist passes on the declared NetBSD and Xorg versions.
 - Known limitations and compatibility results are published with the prototype.
 
@@ -173,8 +176,8 @@ Deliverables:
   recovery from device or mode changes.
 - Keyboard and pointer input through NetBSD console facilities, with correct
   keymaps and virtual-terminal transition behavior.
-- A compositor that combines shell and independent client surfaces, performs
-  damage tracking, and enforces focus and stacking policy.
+- Connection of the existing compositor to the physical output without changing
+  its client-surface, focus, stacking, or damage semantics.
 - Session startup, device-permission, shutdown, and crash-recovery behavior that
   restores a usable console.
 - A standalone build/run mode with no X11 libraries or running X server required.
@@ -187,7 +190,7 @@ Exit criteria:
   moved and resized, and terminate without destabilizing the compositor.
 - Console switching, clean logout, and abnormal termination return display and
   input devices to a usable state.
-- The same shell behavior tests pass under the X11-hosted and standalone
+- The same shell behavior tests pass under the hosted-window and standalone
   backends.
 
 ## Milestone 8: Add standalone X11 compatibility
