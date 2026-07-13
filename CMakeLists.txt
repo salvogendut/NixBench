@@ -244,6 +244,17 @@ target_include_directories(
 )
 nixbench_configure_c_target(nixbench_model)
 
+add_library(
+  nixbench_host STATIC
+  src/host.c
+  src/host_headless.c
+)
+target_include_directories(
+  nixbench_host
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+nixbench_configure_c_target(nixbench_host)
+
 if(NIXBENCH_WAYLAND_ENABLED)
   target_link_libraries(nixbench_wayland PUBLIC nixbench_model)
 endif()
@@ -358,6 +369,10 @@ if(BUILD_TESTING)
   target_link_libraries(nixbench_desktop_tests PRIVATE nixbench_model)
   nixbench_configure_c_target(nixbench_desktop_tests)
 
+  add_executable(nixbench_host_tests tests/host_test.c)
+  target_link_libraries(nixbench_host_tests PRIVATE nixbench_host)
+  nixbench_configure_c_target(nixbench_host_tests)
+
   add_executable(nixbench_window_tests tests/window_test.c)
   target_link_libraries(nixbench_window_tests PRIVATE nixbench_model)
   nixbench_configure_c_target(nixbench_window_tests)
@@ -432,6 +447,7 @@ if(BUILD_TESTING)
   endif()
 
   add_test(NAME nixbench.desktop.model COMMAND nixbench_desktop_tests)
+  add_test(NAME nixbench.host.contract COMMAND nixbench_host_tests)
   add_test(
     NAME nixbench.backend-probe.unit
     COMMAND nixbench_backend_probe_tests

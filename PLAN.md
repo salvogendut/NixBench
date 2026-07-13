@@ -218,6 +218,12 @@ master status. The next checkpoint is a narrow host-output abstraction and a
 software `wsdisplay` presentation experiment on a machine whose console driver
 exposes a supported RGB framebuffer.
 
+The SDL-free host contract now describes logical and pixel output geometry,
+normalized input, pointer capture, monotonic timing, software frame submission,
+asynchronous presentation completion, and suspend/resume transitions. Its
+deterministic headless implementation exercises the contract without a display
+server and provides the test seam for the upcoming SDL and NetBSD adapters.
+
 ## Milestone 8: Add standalone X11 compatibility
 
 Allow legacy X11 applications to participate in a standalone NixBench session
