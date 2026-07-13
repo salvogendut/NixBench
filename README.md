@@ -82,6 +82,14 @@ directly on the NetBSD console.
 
 See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
 
+## Tested configurations
+
+- **NetBSD 10.1 (GENERIC), amd64** with SDL3 3.4.2 from pkgsrc: the CMake
+  build and hosted desktop window were confirmed working on July 13, 2026.
+
+This is a manual target-system validation; automated NetBSD testing remains
+future work.
+
 ## Build and run
 
 Required development dependencies:
