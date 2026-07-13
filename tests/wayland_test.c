@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include <wayland-client.h>
+#include <xkbcommon/xkbcommon.h>
 
 #include "wayland_server.h"
 #include "xdg-shell-client-protocol.h"
@@ -41,6 +42,8 @@ static int failures;
 enum {
     DESKTOP_MENU_SOURCE = 1,
     WAYLAND_MENU_SOURCE = 2,
+    OUTPUT_WIDTH = 1024,
+    OUTPUT_HEIGHT = 640,
     INITIAL_WIDTH = 560,
     INITIAL_HEIGHT = 300,
     BYTES_PER_PIXEL = 4,
@@ -48,7 +51,9 @@ enum {
     WAYLAND_POINTER_BUTTON_RIGHT = 0x111,
     PUMP_ATTEMPTS = 80,
     PUMP_TIMEOUT_MILLISECONDS = 25,
-    SEAT_NAME_CAPACITY = 64
+    SEAT_NAME_CAPACITY = 64,
+    OUTPUT_TEXT_CAPACITY = 64,
+    KEYBOARD_KEY_CAPACITY = 256
 };
 
 static const struct nb_menu_model empty_menu_model = {NULL, 0};
@@ -57,11 +62,35 @@ struct barrier_state {
     bool done;
 };
 
+struct output_state {
+    struct wl_output *proxy;
+    int32_t geometry_x;
+    int32_t geometry_y;
+    int32_t physical_width;
+    int32_t physical_height;
+    int32_t subpixel;
+    int32_t transform;
+    int32_t mode_width;
+    int32_t mode_height;
+    int32_t refresh;
+    int32_t scale;
+    uint32_t mode_flags;
+    char make[OUTPUT_TEXT_CAPACITY];
+    char model[OUTPUT_TEXT_CAPACITY];
+    unsigned int geometry_count;
+    unsigned int mode_count;
+    unsigned int done_count;
+    unsigned int scale_count;
+};
+
 struct client_state {
     struct wl_compositor *compositor;
     struct wl_shm *shm;
     struct wl_seat *seat;
     struct wl_pointer *pointer;
+    struct wl_keyboard *keyboard;
+    struct output_state output;
+    struct output_state late_output;
     struct xdg_wm_base *wm_base;
     struct xdg_surface *xdg_surface;
     struct xdg_toplevel *toplevel;
@@ -78,7 +107,18 @@ struct client_state {
     unsigned int surface_configure_count;
     uint32_t seat_capabilities;
     uint32_t seat_version;
+    uint32_t seat_global_name;
+    uint32_t output_global_name;
+    uint32_t output_global_version;
     char seat_name[SEAT_NAME_CAPACITY];
+    struct wl_output *surface_enter_output;
+    struct wl_output *surface_leave_output;
+    unsigned int surface_enter_count;
+    unsigned int surface_leave_count;
+    unsigned int initial_output_enter_count;
+    unsigned int initial_output_leave_count;
+    unsigned int late_output_enter_count;
+    unsigned int late_output_leave_count;
     struct wl_surface *pointer_enter_surface;
     struct wl_surface *pointer_leave_surface;
     wl_fixed_t pointer_enter_x;
@@ -91,11 +131,45 @@ struct client_state {
     uint32_t pointer_button_state;
     unsigned int seat_capability_count;
     unsigned int seat_name_count;
+    unsigned int seat_event_sequence;
+    unsigned int seat_capability_sequence;
+    unsigned int seat_name_sequence;
     unsigned int pointer_enter_count;
     unsigned int pointer_leave_count;
     unsigned int pointer_motion_count;
     unsigned int pointer_button_count;
     unsigned int pointer_frame_count;
+    uint32_t keyboard_keymap_format;
+    uint32_t keyboard_keymap_size;
+    bool keyboard_keymap_mapped;
+    bool keyboard_keymap_terminated;
+    bool keyboard_keymap_has_header;
+    bool keyboard_keycodes_valid;
+    uint32_t keyboard_key_a;
+    uint32_t keyboard_key_left_shift;
+    uint32_t keyboard_key_space;
+    int32_t keyboard_repeat_rate;
+    int32_t keyboard_repeat_delay;
+    struct wl_surface *keyboard_enter_surface;
+    struct wl_surface *keyboard_leave_surface;
+    uint32_t keyboard_serial;
+    uint32_t keyboard_time;
+    uint32_t keyboard_key;
+    uint32_t keyboard_key_state;
+    uint32_t keyboard_mods_depressed;
+    uint32_t keyboard_mods_latched;
+    uint32_t keyboard_mods_locked;
+    uint32_t keyboard_group;
+    uint32_t keyboard_enter_keys[KEYBOARD_KEY_CAPACITY];
+    size_t keyboard_enter_key_count;
+    unsigned int keyboard_keymap_count;
+    unsigned int keyboard_repeat_count;
+    unsigned int keyboard_enter_count;
+    unsigned int keyboard_leave_count;
+    unsigned int keyboard_key_count;
+    unsigned int keyboard_modifiers_count;
+    unsigned int keyboard_press_counts[KEYBOARD_KEY_CAPACITY];
+    unsigned int keyboard_release_counts[KEYBOARD_KEY_CAPACITY];
 };
 
 static void barrier_done(void *data,
@@ -194,6 +268,113 @@ static bool pump_barrier(struct nb_wayland_server *server,
 
     return false;
 }
+
+static void output_geometry(void *data,
+                            struct wl_output *output,
+                            int32_t x,
+                            int32_t y,
+                            int32_t physical_width,
+                            int32_t physical_height,
+                            int32_t subpixel,
+                            const char *make,
+                            const char *model,
+                            int32_t transform)
+{
+    struct output_state *state = data;
+
+    (void)output;
+    state->geometry_x = x;
+    state->geometry_y = y;
+    state->physical_width = physical_width;
+    state->physical_height = physical_height;
+    state->subpixel = subpixel;
+    state->transform = transform;
+    (void)snprintf(state->make, sizeof(state->make), "%s", make);
+    (void)snprintf(state->model, sizeof(state->model), "%s", model);
+    ++state->geometry_count;
+}
+
+static void output_mode(void *data,
+                        struct wl_output *output,
+                        uint32_t flags,
+                        int32_t width,
+                        int32_t height,
+                        int32_t refresh)
+{
+    struct output_state *state = data;
+
+    (void)output;
+    state->mode_flags = flags;
+    state->mode_width = width;
+    state->mode_height = height;
+    state->refresh = refresh;
+    ++state->mode_count;
+}
+
+static void output_done(void *data, struct wl_output *output)
+{
+    struct output_state *state = data;
+
+    (void)output;
+    ++state->done_count;
+}
+
+static void output_scale(void *data,
+                         struct wl_output *output,
+                         int32_t factor)
+{
+    struct output_state *state = data;
+
+    (void)output;
+    state->scale = factor;
+    ++state->scale_count;
+}
+
+static const struct wl_output_listener output_listener = {
+    .geometry = output_geometry,
+    .mode = output_mode,
+    .done = output_done,
+    .scale = output_scale
+};
+
+static void surface_enter(void *data,
+                          struct wl_surface *surface,
+                          struct wl_output *output)
+{
+    struct client_state *state = data;
+
+    (void)surface;
+    state->surface_enter_output = output;
+    ++state->surface_enter_count;
+    if (output == state->output.proxy) {
+        ++state->initial_output_enter_count;
+    }
+    if (output == state->late_output.proxy) {
+        ++state->late_output_enter_count;
+    }
+}
+
+static void surface_leave(void *data,
+                          struct wl_surface *surface,
+                          struct wl_output *output)
+{
+    struct client_state *state = data;
+
+    (void)surface;
+    state->surface_leave_output = output;
+    ++state->surface_leave_count;
+    if (output == state->output.proxy) {
+        ++state->initial_output_leave_count;
+    }
+    if (output == state->late_output.proxy) {
+        ++state->late_output_leave_count;
+    }
+}
+
+static const struct wl_surface_listener surface_listener = {
+    .enter = surface_enter,
+    .leave = surface_leave
+};
 
 static void pointer_enter(void *data,
                           struct wl_pointer *pointer,
@@ -321,6 +502,185 @@ static const struct wl_pointer_listener pointer_listener = {
     .axis_discrete = pointer_axis_discrete
 };
 
+static void keyboard_keymap(void *data,
+                            struct wl_keyboard *keyboard,
+                            uint32_t format,
+                            int fd,
+                            uint32_t size)
+{
+    struct client_state *state = data;
+    const char *mapping = MAP_FAILED;
+
+    (void)keyboard;
+    state->keyboard_keymap_format = format;
+    state->keyboard_keymap_size = size;
+    if (size > 0) {
+        mapping = mmap(NULL,
+                       (size_t)size,
+                       PROT_READ,
+                       MAP_PRIVATE,
+                       fd,
+                       0);
+    }
+    if (mapping != MAP_FAILED) {
+        struct xkb_context *context = NULL;
+        struct xkb_keymap *keymap = NULL;
+
+        state->keyboard_keymap_mapped = true;
+        state->keyboard_keymap_terminated = mapping[size - 1] == '\0';
+        if (state->keyboard_keymap_terminated) {
+            xkb_keycode_t key_a;
+            xkb_keycode_t key_left_shift;
+            xkb_keycode_t key_space;
+
+            state->keyboard_keymap_has_header =
+                strstr(mapping, "xkb_keymap") != NULL;
+            context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+            if (context != NULL) {
+                keymap = xkb_keymap_new_from_string(
+                    context,
+                    mapping,
+                    XKB_KEYMAP_FORMAT_TEXT_V1,
+                    XKB_KEYMAP_COMPILE_NO_FLAGS);
+            }
+            if (keymap != NULL) {
+                key_a = xkb_keymap_key_by_name(keymap, "AC01");
+                key_left_shift =
+                    xkb_keymap_key_by_name(keymap, "LFSH");
+                key_space = xkb_keymap_key_by_name(keymap, "SPCE");
+                if (key_a >= UINT32_C(8) &&
+                    key_left_shift >= UINT32_C(8) &&
+                    key_space >= UINT32_C(8) &&
+                    key_a - UINT32_C(8) <
+                        (xkb_keycode_t)KEYBOARD_KEY_CAPACITY &&
+                    key_left_shift - UINT32_C(8) <
+                        (xkb_keycode_t)KEYBOARD_KEY_CAPACITY &&
+                    key_space - UINT32_C(8) <
+                        (xkb_keycode_t)KEYBOARD_KEY_CAPACITY) {
+                    state->keyboard_key_a =
+                        (uint32_t)(key_a - UINT32_C(8));
+                    state->keyboard_key_left_shift =
+                        (uint32_t)(key_left_shift - UINT32_C(8));
+                    state->keyboard_key_space =
+                        (uint32_t)(key_space - UINT32_C(8));
+                    state->keyboard_keycodes_valid = true;
+                }
+            }
+        }
+        if (keymap != NULL) {
+            xkb_keymap_unref(keymap);
+        }
+        if (context != NULL) {
+            xkb_context_unref(context);
+        }
+        (void)munmap((void *)mapping, (size_t)size);
+    }
+    (void)close(fd);
+    ++state->keyboard_keymap_count;
+}
+
+static void keyboard_enter(void *data,
+                           struct wl_keyboard *keyboard,
+                           uint32_t serial,
+                           struct wl_surface *surface,
+                           struct wl_array *keys)
+{
+    struct client_state *state = data;
+    size_t key_count = keys->size / sizeof(uint32_t);
+
+    (void)keyboard;
+    if (key_count > KEYBOARD_KEY_CAPACITY) {
+        key_count = KEYBOARD_KEY_CAPACITY;
+    }
+    state->keyboard_serial = serial;
+    state->keyboard_enter_surface = surface;
+    state->keyboard_enter_key_count = key_count;
+    if (key_count > 0) {
+        memcpy(state->keyboard_enter_keys,
+               keys->data,
+               key_count * sizeof(uint32_t));
+    }
+    ++state->keyboard_enter_count;
+}
+
+static void keyboard_leave(void *data,
+                           struct wl_keyboard *keyboard,
+                           uint32_t serial,
+                           struct wl_surface *surface)
+{
+    struct client_state *state = data;
+
+    (void)keyboard;
+    state->keyboard_serial = serial;
+    state->keyboard_leave_surface = surface;
+    ++state->keyboard_leave_count;
+}
+
+static void keyboard_key(void *data,
+                         struct wl_keyboard *keyboard,
+                         uint32_t serial,
+                         uint32_t milliseconds,
+                         uint32_t key,
+                         uint32_t key_state)
+{
+    struct client_state *state = data;
+
+    (void)keyboard;
+    state->keyboard_serial = serial;
+    state->keyboard_time = milliseconds;
+    state->keyboard_key = key;
+    state->keyboard_key_state = key_state;
+    if (key < KEYBOARD_KEY_CAPACITY) {
+        if (key_state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+            ++state->keyboard_press_counts[key];
+        } else if (key_state == WL_KEYBOARD_KEY_STATE_RELEASED) {
+            ++state->keyboard_release_counts[key];
+        }
+    }
+    ++state->keyboard_key_count;
+}
+
+static void keyboard_modifiers(void *data,
+                               struct wl_keyboard *keyboard,
+                               uint32_t serial,
+                               uint32_t depressed,
+                               uint32_t latched,
+                               uint32_t locked,
+                               uint32_t group)
+{
+    struct client_state *state = data;
+
+    (void)keyboard;
+    state->keyboard_serial = serial;
+    state->keyboard_mods_depressed = depressed;
+    state->keyboard_mods_latched = latched;
+    state->keyboard_mods_locked = locked;
+    state->keyboard_group = group;
+    ++state->keyboard_modifiers_count;
+}
+
+static void keyboard_repeat_info(void *data,
+                                 struct wl_keyboard *keyboard,
+                                 int32_t rate,
+                                 int32_t delay)
+{
+    struct client_state *state = data;
+
+    (void)keyboard;
+    state->keyboard_repeat_rate = rate;
+    state->keyboard_repeat_delay = delay;
+    ++state->keyboard_repeat_count;
+}
+
+static const struct wl_keyboard_listener keyboard_listener = {
+    .keymap = keyboard_keymap,
+    .enter = keyboard_enter,
+    .leave = keyboard_leave,
+    .key = keyboard_key,
+    .modifiers = keyboard_modifiers,
+    .repeat_info = keyboard_repeat_info
+};
+
 static void seat_capabilities(void *data,
                               struct wl_seat *seat,
                               uint32_t capabilities)
@@ -329,6 +689,7 @@ static void seat_capabilities(void *data,
 
     state->seat_capabilities = capabilities;
     ++state->seat_capability_count;
+    state->seat_capability_sequence = ++state->seat_event_sequence;
     if ((capabilities & WL_SEAT_CAPABILITY_POINTER) != 0 &&
         state->pointer == NULL) {
         state->pointer = wl_seat_get_pointer(seat);
@@ -338,6 +699,17 @@ static void seat_capabilities(void *data,
                                     state) < 0) {
             wl_pointer_release(state->pointer);
             state->pointer = NULL;
+        }
+    }
+    if ((capabilities & WL_SEAT_CAPABILITY_KEYBOARD) != 0 &&
+        state->keyboard == NULL) {
+        state->keyboard = wl_seat_get_keyboard(seat);
+        if (state->keyboard != NULL &&
+            wl_keyboard_add_listener(state->keyboard,
+                                     &keyboard_listener,
+                                     state) < 0) {
+            wl_keyboard_release(state->keyboard);
+            state->keyboard = NULL;
         }
     }
 }
@@ -354,6 +726,7 @@ static void seat_name(void *data,
                    "%s",
                    name);
     ++state->seat_name_count;
+    state->seat_name_sequence = ++state->seat_event_sequence;
 }
 
 static const struct wl_seat_listener seat_listener = {
@@ -377,10 +750,25 @@ static void registry_global(void *data,
     } else if (strcmp(interface, wl_shm_interface.name) == 0) {
         state->shm = wl_registry_bind(
             registry, name, &wl_shm_interface, 1);
+    } else if (strcmp(interface, wl_output_interface.name) == 0) {
+        const uint32_t bind_version = version < 2 ? version : 2;
+
+        state->output_global_name = name;
+        state->output_global_version = version;
+        state->output.proxy = wl_registry_bind(
+            registry, name, &wl_output_interface, bind_version);
+        if (state->output.proxy != NULL &&
+            wl_output_add_listener(state->output.proxy,
+                                   &output_listener,
+                                   &state->output) < 0) {
+            wl_output_destroy(state->output.proxy);
+            state->output.proxy = NULL;
+        }
     } else if (strcmp(interface, wl_seat_interface.name) == 0) {
         const uint32_t bind_version = version < 5 ? version : 5;
 
         state->seat_version = version;
+        state->seat_global_name = name;
         state->seat = wl_registry_bind(
             registry, name, &wl_seat_interface, bind_version);
     } else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
@@ -402,6 +790,36 @@ static const struct wl_registry_listener registry_listener = {
     .global = registry_global,
     .global_remove = registry_global_remove
 };
+
+static bool bind_late_output(struct client_state *state,
+                             struct wl_registry *registry)
+{
+    const uint32_t bind_version =
+        state->output_global_version < 1
+            ? state->output_global_version
+            : 1;
+
+    if (state->output_global_name == 0 || bind_version == 0 ||
+        state->late_output.proxy != NULL) {
+        return false;
+    }
+    state->late_output.proxy = wl_registry_bind(
+        registry,
+        state->output_global_name,
+        &wl_output_interface,
+        bind_version);
+    if (state->late_output.proxy == NULL) {
+        return false;
+    }
+    if (wl_output_add_listener(state->late_output.proxy,
+                               &output_listener,
+                               &state->late_output) < 0) {
+        wl_output_destroy(state->late_output.proxy);
+        state->late_output.proxy = NULL;
+        return false;
+    }
+    return true;
+}
 
 static void shm_format(void *data,
                        struct wl_shm *shm,
@@ -527,6 +945,7 @@ static void test_wayland_surface_lifecycle(void)
     struct wl_shm_pool *pool = NULL;
     struct wl_buffer *buffer = NULL;
     struct client_state client = {0};
+    struct client_state legacy_input = {0};
     struct nb_wayland_surface_snapshot snapshot;
     const struct nb_window *host_window;
     struct nb_window *resized_host_window;
@@ -543,7 +962,9 @@ static void test_wayland_surface_lifecycle(void)
     nb_shell_init(&shell, DESKTOP_MENU_SOURCE, &empty_menu_model);
     server = nb_wayland_server_create(&shell,
                                       WAYLAND_MENU_SOURCE,
-                                      &empty_menu_model);
+                                      &empty_menu_model,
+                                      OUTPUT_WIDTH,
+                                      OUTPUT_HEIGHT);
     REQUIRE(server != NULL);
     REQUIRE(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
     REQUIRE(add_server_client(server, sockets[0]));
@@ -562,8 +983,11 @@ static void test_wayland_surface_lifecycle(void)
     REQUIRE(pump_barrier(server, display));
     REQUIRE(client.compositor != NULL);
     REQUIRE(client.shm != NULL);
+    REQUIRE(client.output.proxy != NULL);
     REQUIRE(client.seat != NULL);
     REQUIRE(client.wm_base != NULL);
+    CHECK(client.output_global_version == 2);
+    CHECK(wl_output_get_version(client.output.proxy) == 2);
     CHECK(client.seat_version >= 5);
     CHECK(wl_seat_get_version(client.seat) == 5);
     REQUIRE(wl_shm_add_listener(client.shm, &shm_listener, &client) == 0);
@@ -575,16 +999,51 @@ static void test_wayland_surface_lifecycle(void)
                                      &client) == 0);
     REQUIRE(pump_barrier(server, display));
     CHECK(client.saw_argb8888);
+    CHECK(client.output.geometry_count == 1);
+    CHECK(client.output.geometry_x == 0);
+    CHECK(client.output.geometry_y == 0);
+    CHECK(client.output.physical_width == 0);
+    CHECK(client.output.physical_height == 0);
+    CHECK(client.output.subpixel == WL_OUTPUT_SUBPIXEL_UNKNOWN);
+    CHECK(strcmp(client.output.make, "NixBench") == 0);
+    CHECK(strcmp(client.output.model, "Hosted output") == 0);
+    CHECK(client.output.transform == WL_OUTPUT_TRANSFORM_NORMAL);
+    CHECK(client.output.mode_count == 1);
+    CHECK((client.output.mode_flags & WL_OUTPUT_MODE_CURRENT) != 0);
+    CHECK((client.output.mode_flags & WL_OUTPUT_MODE_PREFERRED) != 0);
+    CHECK(client.output.mode_width == OUTPUT_WIDTH);
+    CHECK(client.output.mode_height == OUTPUT_HEIGHT);
+    CHECK(client.output.refresh == 60000);
+    CHECK(client.output.scale_count == 1);
+    CHECK(client.output.scale == 1);
+    CHECK(client.output.done_count == 1);
     CHECK(client.seat_capability_count == 1);
     CHECK((client.seat_capabilities & WL_SEAT_CAPABILITY_POINTER) != 0);
+    CHECK((client.seat_capabilities & WL_SEAT_CAPABILITY_KEYBOARD) != 0);
     CHECK(client.seat_name_count == 1);
     CHECK(strcmp(client.seat_name, "nixbench-seat0") == 0);
+    CHECK(client.seat_name_sequence < client.seat_capability_sequence);
     REQUIRE(client.pointer != NULL);
-    /* Process get_pointer, which was queued by the capability callback. */
+    REQUIRE(client.keyboard != NULL);
+    /* Process the input resources queued by the capability callback. */
     REQUIRE(pump_barrier(server, display));
+    CHECK(client.keyboard_keymap_count == 1);
+    CHECK(client.keyboard_keymap_format ==
+          WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1);
+    CHECK(client.keyboard_keymap_size > 1);
+    CHECK(client.keyboard_keymap_mapped);
+    CHECK(client.keyboard_keymap_terminated);
+    CHECK(client.keyboard_keymap_has_header);
+    CHECK(client.keyboard_keycodes_valid);
+    CHECK(client.keyboard_repeat_count == 1);
+    CHECK(client.keyboard_repeat_rate == 25);
+    CHECK(client.keyboard_repeat_delay == 600);
 
     surface = wl_compositor_create_surface(client.compositor);
     REQUIRE(surface != NULL);
+    REQUIRE(wl_surface_add_listener(surface,
+                                    &surface_listener,
+                                    &client) == 0);
     client.xdg_surface = xdg_wm_base_get_xdg_surface(client.wm_base,
                                                      surface);
     REQUIRE(client.xdg_surface != NULL);
@@ -657,6 +1116,10 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(client.buffer_released);
     CHECK(!client.frame_done);
     CHECK(nb_wayland_server_window_count(server) == 1);
+    CHECK(client.surface_enter_count == 1);
+    CHECK(client.initial_output_enter_count == 1);
+    CHECK(client.surface_enter_output == client.output.proxy);
+    CHECK(client.surface_leave_count == 0);
     window = nb_wayland_server_window_at(server, 0);
     REQUIRE(window != NB_WINDOW_ID_NONE);
     CHECK(nb_wayland_server_owns_window(server, window));
@@ -670,6 +1133,60 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(memcmp(snapshot.pixels, pixels, buffer_size) == 0);
     pixels[0] = 0;
     CHECK(snapshot.pixels[0] != pixels[0]);
+
+    CHECK(!nb_wayland_server_set_output_size(NULL,
+                                              OUTPUT_WIDTH,
+                                              OUTPUT_HEIGHT));
+    CHECK(!nb_wayland_server_set_output_size(server,
+                                              0,
+                                              OUTPUT_HEIGHT));
+    CHECK(!nb_wayland_server_set_output_size(server,
+                                              OUTPUT_WIDTH,
+                                              -1));
+    {
+        const unsigned int previous_mode_count =
+            client.output.mode_count;
+        const unsigned int previous_done_count =
+            client.output.done_count;
+
+        CHECK(nb_wayland_server_set_output_size(server,
+                                                 OUTPUT_WIDTH,
+                                                 OUTPUT_HEIGHT));
+        REQUIRE(pump_barrier(server, display));
+        CHECK(client.output.mode_count == previous_mode_count);
+        CHECK(client.output.done_count == previous_done_count);
+
+        CHECK(nb_wayland_server_set_output_size(server, 1280, 720));
+        REQUIRE(pump_barrier(server, display));
+        CHECK(client.output.mode_count == previous_mode_count + 1);
+        CHECK(client.output.done_count == previous_done_count + 1);
+    }
+    CHECK(client.output.geometry_count == 1);
+    CHECK(client.output.scale_count == 1);
+    CHECK(client.output.mode_width == 1280);
+    CHECK(client.output.mode_height == 720);
+    CHECK(client.output.refresh == 60000);
+    CHECK((client.output.mode_flags & WL_OUTPUT_MODE_CURRENT) != 0);
+    CHECK((client.output.mode_flags & WL_OUTPUT_MODE_PREFERRED) != 0);
+
+    REQUIRE(bind_late_output(&client, registry));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(wl_output_get_version(client.late_output.proxy) == 1);
+    CHECK(client.late_output.geometry_count == 1);
+    CHECK(strcmp(client.late_output.make, "NixBench") == 0);
+    CHECK(strcmp(client.late_output.model, "Hosted output") == 0);
+    CHECK(client.late_output.mode_count == 1);
+    CHECK(client.late_output.mode_width == 1280);
+    CHECK(client.late_output.mode_height == 720);
+    CHECK(client.late_output.refresh == 60000);
+    CHECK((client.late_output.mode_flags & WL_OUTPUT_MODE_CURRENT) != 0);
+    CHECK((client.late_output.mode_flags & WL_OUTPUT_MODE_PREFERRED) != 0);
+    CHECK(client.late_output.scale_count == 0);
+    CHECK(client.late_output.done_count == 0);
+    CHECK(client.surface_enter_count == 2);
+    CHECK(client.initial_output_enter_count == 1);
+    CHECK(client.late_output_enter_count == 1);
+    CHECK(client.surface_enter_output == client.late_output.proxy);
 
     host_window = nb_desktop_find_window(&shell.desktop, window);
     REQUIRE(host_window != NULL);
@@ -818,6 +1335,157 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(nb_wayland_server_pointer_grab_window(server) ==
           NB_WINDOW_ID_NONE);
 
+    /* Keyboard focus carries the current pressed-key and modifier state. */
+    CHECK(!nb_wayland_server_keyboard_key(server,
+                                           NULL,
+                                           UINT32_C(1100),
+                                           true));
+    CHECK(nb_wayland_server_keyboard_focus(server, window));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.keyboard_enter_count == 1);
+    CHECK(client.keyboard_enter_surface == surface);
+    CHECK(client.keyboard_serial != 0);
+    CHECK(client.keyboard_enter_key_count == 0);
+    CHECK(client.keyboard_modifiers_count == 1);
+    CHECK(client.keyboard_mods_depressed == 0);
+    CHECK(client.keyboard_mods_latched == 0);
+    CHECK(client.keyboard_mods_locked == 0);
+    CHECK(client.keyboard_group == 0);
+
+    /* A late version-3 keyboard gets focus but no version-4 repeat event. */
+    REQUIRE(client.seat_global_name != 0);
+    legacy_input.seat = wl_registry_bind(registry,
+                                         client.seat_global_name,
+                                         &wl_seat_interface,
+                                         3);
+    REQUIRE(legacy_input.seat != NULL);
+    REQUIRE(wl_seat_add_listener(legacy_input.seat,
+                                 &seat_listener,
+                                 &legacy_input) == 0);
+    REQUIRE(pump_barrier(server, display));
+    REQUIRE(legacy_input.pointer != NULL);
+    REQUIRE(legacy_input.keyboard != NULL);
+    REQUIRE(pump_barrier(server, display));
+    CHECK(wl_keyboard_get_version(legacy_input.keyboard) == 3);
+    CHECK(legacy_input.keyboard_keymap_count == 1);
+    CHECK(legacy_input.keyboard_keymap_mapped);
+    CHECK(legacy_input.keyboard_repeat_count == 0);
+    CHECK(legacy_input.keyboard_enter_count == 1);
+    CHECK(legacy_input.keyboard_enter_surface == surface);
+    CHECK(legacy_input.keyboard_enter_key_count == 0);
+    CHECK(legacy_input.keyboard_modifiers_count == 1);
+
+    CHECK(nb_wayland_server_keyboard_key(server,
+                                          "SPCE",
+                                          UINT32_C(1110),
+                                          true));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.keyboard_key_count == 1);
+    CHECK(client.keyboard_key == client.keyboard_key_space);
+    CHECK(client.keyboard_key_state == WL_KEYBOARD_KEY_STATE_PRESSED);
+    CHECK(client.keyboard_time == UINT32_C(1110));
+    CHECK(client.keyboard_press_counts[client.keyboard_key_space] == 1);
+
+    /* Host key repeat must not duplicate protocol key-down transitions. */
+    CHECK(nb_wayland_server_keyboard_key(server,
+                                          "SPCE",
+                                          UINT32_C(1111),
+                                          true));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.keyboard_key_count == 1);
+    CHECK(nb_wayland_server_keyboard_key(server,
+                                          "SPCE",
+                                          UINT32_C(1120),
+                                          false));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.keyboard_key_count == 2);
+    CHECK(client.keyboard_key == client.keyboard_key_space);
+    CHECK(client.keyboard_key_state == WL_KEYBOARD_KEY_STATE_RELEASED);
+    CHECK(client.keyboard_time == UINT32_C(1120));
+    CHECK(client.keyboard_release_counts[client.keyboard_key_space] == 1);
+
+    CHECK(nb_wayland_server_keyboard_key(server,
+                                          "AC01",
+                                          UINT32_C(1130),
+                                          true));
+    CHECK(nb_wayland_server_keyboard_key(server,
+                                          "LFSH",
+                                          UINT32_C(1131),
+                                          true));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.keyboard_key_count == 4);
+    CHECK(client.keyboard_press_counts[client.keyboard_key_a] == 1);
+    CHECK(client.keyboard_press_counts[client.keyboard_key_left_shift] == 1);
+    CHECK(client.keyboard_key == client.keyboard_key_left_shift);
+    CHECK(client.keyboard_key_state == WL_KEYBOARD_KEY_STATE_PRESSED);
+    CHECK(client.keyboard_modifiers_count == 2);
+    CHECK(client.keyboard_mods_depressed != 0);
+
+    CHECK(nb_wayland_server_keyboard_focus(server, NB_WINDOW_ID_NONE));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.keyboard_leave_count == 1);
+    CHECK(client.keyboard_leave_surface == surface);
+    CHECK(nb_wayland_server_keyboard_focus(server, window));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.keyboard_enter_count == 2);
+    CHECK(client.keyboard_enter_surface == surface);
+    CHECK(client.keyboard_enter_key_count == 2);
+    CHECK((client.keyboard_enter_keys[0] == client.keyboard_key_a &&
+           client.keyboard_enter_keys[1] ==
+               client.keyboard_key_left_shift) ||
+          (client.keyboard_enter_keys[0] ==
+               client.keyboard_key_left_shift &&
+           client.keyboard_enter_keys[1] == client.keyboard_key_a));
+    CHECK(client.keyboard_modifiers_count == 3);
+    CHECK(client.keyboard_mods_depressed != 0);
+
+    CHECK(nb_wayland_server_keyboard_key(server,
+                                          "LFSH",
+                                          UINT32_C(1140),
+                                          false));
+    CHECK(nb_wayland_server_keyboard_key(server,
+                                          "AC01",
+                                          UINT32_C(1141),
+                                          false));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.keyboard_key_count == 6);
+    CHECK(client.keyboard_release_counts[client.keyboard_key_a] == 1);
+    CHECK(client.keyboard_release_counts[client.keyboard_key_left_shift] ==
+          1);
+    CHECK(client.keyboard_key == client.keyboard_key_a);
+    CHECK(client.keyboard_key_state == WL_KEYBOARD_KEY_STATE_RELEASED);
+    CHECK(client.keyboard_time == UINT32_C(1141));
+    CHECK(client.keyboard_modifiers_count == 4);
+    CHECK(client.keyboard_mods_depressed == 0);
+
+    CHECK(nb_wayland_server_keyboard_key(server,
+                                          "AC01",
+                                          UINT32_C(1150),
+                                          true));
+    CHECK(nb_wayland_server_keyboard_key(server,
+                                          "LFSH",
+                                          UINT32_C(1151),
+                                          true));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.keyboard_key_count == 8);
+    CHECK(client.keyboard_mods_depressed != 0);
+    nb_wayland_server_keyboard_cancel(server, UINT32_C(1160));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.keyboard_key_count == 10);
+    CHECK(client.keyboard_release_counts[client.keyboard_key_a] == 2);
+    CHECK(client.keyboard_release_counts[client.keyboard_key_left_shift] ==
+          2);
+    CHECK(client.keyboard_key_state == WL_KEYBOARD_KEY_STATE_RELEASED);
+    CHECK(client.keyboard_time == UINT32_C(1160));
+    CHECK(client.keyboard_mods_depressed == 0);
+    CHECK(client.keyboard_leave_count == 2);
+
+    /* Keep focus on the surface so unmapping can prove focus cleanup. */
+    CHECK(nb_wayland_server_keyboard_focus(server, window));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.keyboard_enter_count == 3);
+    CHECK(client.keyboard_enter_key_count == 0);
+
     nb_wayland_server_frame_presented(server, UINT32_C(4242));
     REQUIRE(pump_barrier(server, display));
     CHECK(client.frame_done);
@@ -843,6 +1511,13 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(nb_wayland_server_window_count(server) == 0);
     CHECK(client.pointer_leave_count == 3);
     CHECK(client.pointer_leave_surface == surface);
+    CHECK(client.keyboard_leave_count == 3);
+    CHECK(client.keyboard_leave_surface == surface);
+    CHECK(client.surface_leave_count == 2);
+    CHECK(client.initial_output_leave_count == 1);
+    CHECK(client.late_output_leave_count == 1);
+    CHECK(client.surface_leave_output == client.output.proxy ||
+          client.surface_leave_output == client.late_output.proxy);
     CHECK(nb_wayland_server_pointer_grab_window(server) ==
           NB_WINDOW_ID_NONE);
     CHECK(!nb_wayland_server_owns_window(server, window));
@@ -860,10 +1535,22 @@ static void test_wayland_surface_lifecycle(void)
     client.xdg_surface = NULL;
     wl_surface_destroy(surface);
     surface = NULL;
+    wl_pointer_release(legacy_input.pointer);
+    legacy_input.pointer = NULL;
+    wl_keyboard_release(legacy_input.keyboard);
+    legacy_input.keyboard = NULL;
+    wl_seat_destroy(legacy_input.seat);
+    legacy_input.seat = NULL;
     wl_pointer_release(client.pointer);
     client.pointer = NULL;
+    wl_keyboard_release(client.keyboard);
+    client.keyboard = NULL;
     wl_seat_release(client.seat);
     client.seat = NULL;
+    wl_output_destroy(client.late_output.proxy);
+    client.late_output.proxy = NULL;
+    wl_output_destroy(client.output.proxy);
+    client.output.proxy = NULL;
     REQUIRE(pump_barrier(server, display));
     CHECK(nb_wayland_server_window_count(server) == 0);
 

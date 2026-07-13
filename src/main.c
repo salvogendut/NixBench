@@ -122,6 +122,8 @@ struct runtime {
     nb_window_id about_window;
 #if NIXBENCH_HAS_WAYLAND
     struct nb_wayland_server *wayland;
+    bool host_keyboard_focused;
+    bool shell_key_capture[SDL_SCANCODE_COUNT];
 #endif
     bool capture_active;
     bool running;
@@ -349,15 +351,193 @@ static void reconcile_pointer_capture(struct runtime *runtime)
 
 static bool sync_application_focus(struct runtime *runtime)
 {
-    if (nb_application_host_sync_focus(&runtime->applications)) {
-        return true;
+    if (!nb_application_host_sync_focus(&runtime->applications)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Could not synchronize application focus");
+        return false;
     }
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                 "Could not synchronize application focus");
-    return false;
+#if NIXBENCH_HAS_WAYLAND
+    if (runtime->wayland != NULL) {
+        nb_window_id focus = runtime->host_keyboard_focused
+                                 ? nb_desktop_active_window_id(
+                                       &runtime->shell.desktop)
+                                 : NB_WINDOW_ID_NONE;
+
+        if (!nb_wayland_server_owns_window(runtime->wayland, focus)) {
+            focus = NB_WINDOW_ID_NONE;
+        }
+        if (!nb_wayland_server_keyboard_focus(runtime->wayland, focus)) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "Could not synchronize Wayland keyboard focus");
+            return false;
+        }
+    }
+#endif
+    return true;
 }
 
 #if NIXBENCH_HAS_WAYLAND
+static const char *wayland_key_name_for_sdl(SDL_Scancode scancode)
+{
+    static const char *const key_names[SDL_SCANCODE_COUNT] = {
+        [SDL_SCANCODE_A] = "AC01",
+        [SDL_SCANCODE_B] = "AB05",
+        [SDL_SCANCODE_C] = "AB03",
+        [SDL_SCANCODE_D] = "AC03",
+        [SDL_SCANCODE_E] = "AD03",
+        [SDL_SCANCODE_F] = "AC04",
+        [SDL_SCANCODE_G] = "AC05",
+        [SDL_SCANCODE_H] = "AC06",
+        [SDL_SCANCODE_I] = "AD08",
+        [SDL_SCANCODE_J] = "AC07",
+        [SDL_SCANCODE_K] = "AC08",
+        [SDL_SCANCODE_L] = "AC09",
+        [SDL_SCANCODE_M] = "AB07",
+        [SDL_SCANCODE_N] = "AB06",
+        [SDL_SCANCODE_O] = "AD09",
+        [SDL_SCANCODE_P] = "AD10",
+        [SDL_SCANCODE_Q] = "AD01",
+        [SDL_SCANCODE_R] = "AD04",
+        [SDL_SCANCODE_S] = "AC02",
+        [SDL_SCANCODE_T] = "AD05",
+        [SDL_SCANCODE_U] = "AD07",
+        [SDL_SCANCODE_V] = "AB04",
+        [SDL_SCANCODE_W] = "AD02",
+        [SDL_SCANCODE_X] = "AB02",
+        [SDL_SCANCODE_Y] = "AD06",
+        [SDL_SCANCODE_Z] = "AB01",
+        [SDL_SCANCODE_1] = "AE01",
+        [SDL_SCANCODE_2] = "AE02",
+        [SDL_SCANCODE_3] = "AE03",
+        [SDL_SCANCODE_4] = "AE04",
+        [SDL_SCANCODE_5] = "AE05",
+        [SDL_SCANCODE_6] = "AE06",
+        [SDL_SCANCODE_7] = "AE07",
+        [SDL_SCANCODE_8] = "AE08",
+        [SDL_SCANCODE_9] = "AE09",
+        [SDL_SCANCODE_0] = "AE10",
+        [SDL_SCANCODE_RETURN] = "RTRN",
+        [SDL_SCANCODE_ESCAPE] = "ESC",
+        [SDL_SCANCODE_BACKSPACE] = "BKSP",
+        [SDL_SCANCODE_TAB] = "TAB",
+        [SDL_SCANCODE_SPACE] = "SPCE",
+        [SDL_SCANCODE_MINUS] = "AE11",
+        [SDL_SCANCODE_EQUALS] = "AE12",
+        [SDL_SCANCODE_LEFTBRACKET] = "AD11",
+        [SDL_SCANCODE_RIGHTBRACKET] = "AD12",
+        [SDL_SCANCODE_BACKSLASH] = "BKSL",
+        [SDL_SCANCODE_NONUSHASH] = "BKSL",
+        [SDL_SCANCODE_SEMICOLON] = "AC10",
+        [SDL_SCANCODE_APOSTROPHE] = "AC11",
+        [SDL_SCANCODE_GRAVE] = "TLDE",
+        [SDL_SCANCODE_COMMA] = "AB08",
+        [SDL_SCANCODE_PERIOD] = "AB09",
+        [SDL_SCANCODE_SLASH] = "AB10",
+        [SDL_SCANCODE_CAPSLOCK] = "CAPS",
+        [SDL_SCANCODE_F1] = "FK01",
+        [SDL_SCANCODE_F2] = "FK02",
+        [SDL_SCANCODE_F3] = "FK03",
+        [SDL_SCANCODE_F4] = "FK04",
+        [SDL_SCANCODE_F5] = "FK05",
+        [SDL_SCANCODE_F6] = "FK06",
+        [SDL_SCANCODE_F7] = "FK07",
+        [SDL_SCANCODE_F8] = "FK08",
+        [SDL_SCANCODE_F9] = "FK09",
+        [SDL_SCANCODE_F10] = "FK10",
+        [SDL_SCANCODE_F11] = "FK11",
+        [SDL_SCANCODE_F12] = "FK12",
+        [SDL_SCANCODE_PRINTSCREEN] = "PRSC",
+        [SDL_SCANCODE_SCROLLLOCK] = "SCLK",
+        [SDL_SCANCODE_PAUSE] = "PAUS",
+        [SDL_SCANCODE_INSERT] = "INS",
+        [SDL_SCANCODE_HOME] = "HOME",
+        [SDL_SCANCODE_PAGEUP] = "PGUP",
+        [SDL_SCANCODE_DELETE] = "DELE",
+        [SDL_SCANCODE_END] = "END",
+        [SDL_SCANCODE_PAGEDOWN] = "PGDN",
+        [SDL_SCANCODE_RIGHT] = "RGHT",
+        [SDL_SCANCODE_LEFT] = "LEFT",
+        [SDL_SCANCODE_DOWN] = "DOWN",
+        [SDL_SCANCODE_UP] = "UP",
+        [SDL_SCANCODE_NUMLOCKCLEAR] = "NMLK",
+        [SDL_SCANCODE_KP_DIVIDE] = "KPDV",
+        [SDL_SCANCODE_KP_MULTIPLY] = "KPMU",
+        [SDL_SCANCODE_KP_MINUS] = "KPSU",
+        [SDL_SCANCODE_KP_PLUS] = "KPAD",
+        [SDL_SCANCODE_KP_ENTER] = "KPEN",
+        [SDL_SCANCODE_KP_1] = "KP1",
+        [SDL_SCANCODE_KP_2] = "KP2",
+        [SDL_SCANCODE_KP_3] = "KP3",
+        [SDL_SCANCODE_KP_4] = "KP4",
+        [SDL_SCANCODE_KP_5] = "KP5",
+        [SDL_SCANCODE_KP_6] = "KP6",
+        [SDL_SCANCODE_KP_7] = "KP7",
+        [SDL_SCANCODE_KP_8] = "KP8",
+        [SDL_SCANCODE_KP_9] = "KP9",
+        [SDL_SCANCODE_KP_0] = "KP0",
+        [SDL_SCANCODE_KP_PERIOD] = "KPDL",
+        [SDL_SCANCODE_NONUSBACKSLASH] = "LSGT",
+        [SDL_SCANCODE_APPLICATION] = "MENU",
+        [SDL_SCANCODE_POWER] = "POWR",
+        [SDL_SCANCODE_KP_EQUALS] = "KPEQ",
+        [SDL_SCANCODE_F13] = "FK13",
+        [SDL_SCANCODE_F14] = "FK14",
+        [SDL_SCANCODE_F15] = "FK15",
+        [SDL_SCANCODE_F16] = "FK16",
+        [SDL_SCANCODE_F17] = "FK17",
+        [SDL_SCANCODE_F18] = "FK18",
+        [SDL_SCANCODE_F19] = "FK19",
+        [SDL_SCANCODE_F20] = "FK20",
+        [SDL_SCANCODE_F21] = "FK21",
+        [SDL_SCANCODE_F22] = "FK22",
+        [SDL_SCANCODE_F23] = "FK23",
+        [SDL_SCANCODE_F24] = "FK24",
+        [SDL_SCANCODE_LCTRL] = "LCTL",
+        [SDL_SCANCODE_LSHIFT] = "LFSH",
+        [SDL_SCANCODE_LALT] = "LALT",
+        [SDL_SCANCODE_LGUI] = "LWIN",
+        [SDL_SCANCODE_RCTRL] = "RCTL",
+        [SDL_SCANCODE_RSHIFT] = "RTSH",
+        [SDL_SCANCODE_RALT] = "RALT",
+        [SDL_SCANCODE_RGUI] = "RWIN",
+        [SDL_SCANCODE_MODE] = "RALT"
+    };
+
+    if (scancode <= SDL_SCANCODE_UNKNOWN ||
+        scancode >= SDL_SCANCODE_COUNT) {
+        return NULL;
+    }
+    return key_names[scancode];
+}
+
+static bool wayland_has_keyboard_target(const struct runtime *runtime)
+{
+    const nb_window_id active =
+        nb_desktop_active_window_id(&runtime->shell.desktop);
+
+    return runtime->wayland != NULL && runtime->host_keyboard_focused &&
+           nb_wayland_server_owns_window(runtime->wayland, active);
+}
+
+static bool forward_wayland_key(struct runtime *runtime,
+                                const SDL_KeyboardEvent *event)
+{
+    const char *key_name;
+
+    if (runtime->wayland == NULL) {
+        return true;
+    }
+    key_name = wayland_key_name_for_sdl(event->scancode);
+    if (key_name == NULL) {
+        return true;
+    }
+    return nb_wayland_server_keyboard_key(
+        runtime->wayland,
+        key_name,
+        (uint32_t)SDL_NS_TO_MS(event->timestamp),
+        event->down);
+}
+
 static bool dispatch_wayland(struct runtime *runtime)
 {
     if (runtime->wayland == NULL) {
@@ -372,14 +552,18 @@ static bool dispatch_wayland(struct runtime *runtime)
     return sync_application_focus(runtime);
 }
 
-static void start_wayland(struct runtime *runtime)
+static void start_wayland(struct runtime *runtime,
+                           int output_width,
+                           int output_height)
 {
     const char *display_name;
 
     runtime->wayland = nb_wayland_server_create(
         &runtime->shell,
         NIXBENCH_MENU_SOURCE_WAYLAND,
-        &wayland_menu_model);
+        &wayland_menu_model,
+        output_width,
+        output_height);
     if (runtime->wayland == NULL) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "Could not initialize the nested Wayland display; "
@@ -821,32 +1005,90 @@ static bool menu_key_for(SDL_Keycode keycode, enum nb_menu_key *menu_key)
     return true;
 }
 
+static bool menu_key_repeats(SDL_Keycode keycode)
+{
+    return keycode == SDLK_DOWN || keycode == SDLK_UP ||
+           keycode == SDLK_RIGHT || keycode == SDLK_LEFT;
+}
+
 static bool process_key_event(const SDL_KeyboardEvent *event,
                               struct runtime *runtime)
 {
     enum nb_menu_key menu_key;
-    const bool menu_context = nb_menu_is_open(&runtime->shell.menu) ||
-                              event->key == SDLK_F10;
+    bool menu_open;
+    bool menu_context;
 
-    if (event->repeat &&
-        (event->key == SDLK_ESCAPE || event->key == SDLK_F10 ||
-         event->key == SDLK_RETURN || event->key == SDLK_KP_ENTER)) {
+#if NIXBENCH_HAS_WAYLAND
+    if (event->scancode > SDL_SCANCODE_UNKNOWN &&
+        event->scancode < SDL_SCANCODE_COUNT &&
+        !event->down && runtime->shell_key_capture[event->scancode]) {
+        runtime->shell_key_capture[event->scancode] = false;
         return true;
     }
+#endif
+    if (!event->down) {
+#if NIXBENCH_HAS_WAYLAND
+        return forward_wayland_key(runtime, event);
+#else
+        return true;
+#endif
+    }
 
+    menu_open = nb_menu_is_open(&runtime->shell.menu);
+    if (event->repeat) {
+        if (!menu_open || !menu_key_repeats(event->key)) {
+            return true;
+        }
+#if NIXBENCH_HAS_WAYLAND
+        if (event->scancode <= SDL_SCANCODE_UNKNOWN ||
+            event->scancode >= SDL_SCANCODE_COUNT ||
+            !runtime->shell_key_capture[event->scancode]) {
+            return true;
+        }
+#endif
+    }
+
+    menu_context = menu_open || event->key == SDLK_F10;
     if (menu_context && menu_key_for(event->key, &menu_key)) {
         const struct nb_shell_action action =
             nb_shell_menu_key_press(&runtime->shell, menu_key);
 
+#if NIXBENCH_HAS_WAYLAND
+        if (!event->repeat &&
+            event->scancode > SDL_SCANCODE_UNKNOWN &&
+            event->scancode < SDL_SCANCODE_COUNT) {
+            runtime->shell_key_capture[event->scancode] = true;
+        }
+#endif
         reconcile_pointer_capture(runtime);
         return apply_shell_action(runtime, action);
     }
 
+    if (menu_open) {
+#if NIXBENCH_HAS_WAYLAND
+        if (!event->repeat &&
+            event->scancode > SDL_SCANCODE_UNKNOWN &&
+            event->scancode < SDL_SCANCODE_COUNT) {
+            runtime->shell_key_capture[event->scancode] = true;
+        }
+#endif
+        return true;
+    }
+
     if (event->key == SDLK_ESCAPE) {
+#if NIXBENCH_HAS_WAYLAND
+        if (wayland_has_keyboard_target(runtime)) {
+            return forward_wayland_key(runtime, event);
+        }
+#endif
         runtime->running = false;
         return true;
     }
+#if NIXBENCH_HAS_WAYLAND
+    return forward_wayland_key(runtime, event);
+#else
     return true;
+#endif
 }
 
 static void cancel_pointer_input(struct runtime *runtime)
@@ -857,6 +1099,20 @@ static void cancel_pointer_input(struct runtime *runtime)
                                      (uint32_t)SDL_GetTicks());
 #endif
     reconcile_pointer_capture(runtime);
+}
+
+static void cancel_keyboard_input(struct runtime *runtime)
+{
+#if NIXBENCH_HAS_WAYLAND
+    runtime->host_keyboard_focused = false;
+    (void)memset(runtime->shell_key_capture,
+                 0,
+                 sizeof(runtime->shell_key_capture));
+    nb_wayland_server_keyboard_cancel(runtime->wayland,
+                                      (uint32_t)SDL_GetTicks());
+#else
+    (void)runtime;
+#endif
 }
 
 int main(int argc, char *argv[])
@@ -920,6 +1176,10 @@ int main(int argc, char *argv[])
         exit_status = 1;
         goto cleanup;
     }
+#if NIXBENCH_HAS_WAYLAND
+    runtime.host_keyboard_focused =
+        (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+#endif
 
     if (!SDL_SetWindowMinimumSize(window,
                                   NIXBENCH_WINDOW_MIN_WIDTH,
@@ -940,11 +1200,10 @@ int main(int argc, char *argv[])
             goto cleanup;
         }
         nb_shell_clamp_windows(&runtime.shell, viewport);
-    }
-
 #if NIXBENCH_HAS_WAYLAND
-    start_wayland(&runtime);
+        start_wayland(&runtime, viewport.width, viewport.height);
 #endif
+    }
 
     if (!draw_shell(renderer, &runtime)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -973,13 +1232,23 @@ int main(int argc, char *argv[])
                 if (event.type == SDL_EVENT_QUIT ||
                     event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
                     runtime.running = false;
-                } else if (event.type == SDL_EVENT_KEY_DOWN) {
+                } else if (event.type == SDL_EVENT_KEY_DOWN ||
+                           event.type == SDL_EVENT_KEY_UP) {
                     if (!process_key_event(&event.key, &runtime)) {
                         exit_status = 1;
                         runtime.running = false;
                     }
                 } else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
                     cancel_pointer_input(&runtime);
+                    cancel_keyboard_input(&runtime);
+#if NIXBENCH_HAS_WAYLAND
+                } else if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
+                    runtime.host_keyboard_focused = true;
+                    if (!sync_application_focus(&runtime)) {
+                        exit_status = 1;
+                        runtime.running = false;
+                    }
+#endif
                 } else if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE &&
                            !runtime.capture_active) {
                     cancel_pointer_input(&runtime);
@@ -1011,6 +1280,17 @@ int main(int argc, char *argv[])
                 break;
             }
             nb_shell_clamp_windows(&runtime.shell, viewport);
+#if NIXBENCH_HAS_WAYLAND
+            if (runtime.wayland != NULL &&
+                !nb_wayland_server_set_output_size(runtime.wayland,
+                                                    viewport.width,
+                                                    viewport.height)) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                             "Could not update the Wayland output size");
+                exit_status = 1;
+                break;
+            }
+#endif
         }
 
         if (runtime.running && !draw_shell(renderer, &runtime)) {

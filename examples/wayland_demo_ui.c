@@ -72,6 +72,9 @@ void nb_wayland_demo_ui_init(struct nb_wayland_demo_ui *ui,
     ui->pointer_present = false;
     ui->hovered = false;
     ui->pressed = false;
+    ui->keyboard_focused = false;
+    ui->keyboard_pressed = false;
+    ui->keyboard_active_key = 0;
     ui->toggled = false;
     ui->click_count = 0;
 }
@@ -143,6 +146,69 @@ bool nb_wayland_demo_ui_pointer_button(struct nb_wayland_demo_ui *ui,
     }
     ui->pressed = false;
     return changed;
+}
+
+static bool is_activation_key(uint32_t key)
+{
+    return key == NB_WAYLAND_DEMO_KEY_ENTER ||
+           key == NB_WAYLAND_DEMO_KEY_SPACE ||
+           key == NB_WAYLAND_DEMO_KEY_KEYPAD_ENTER;
+}
+
+bool nb_wayland_demo_ui_keyboard_enter(struct nb_wayland_demo_ui *ui)
+{
+    if (ui == NULL || ui->keyboard_focused) {
+        return false;
+    }
+    ui->keyboard_focused = true;
+    return true;
+}
+
+bool nb_wayland_demo_ui_keyboard_leave(struct nb_wayland_demo_ui *ui)
+{
+    bool changed;
+
+    if (ui == NULL) {
+        return false;
+    }
+    changed = ui->keyboard_focused || ui->keyboard_pressed;
+    ui->keyboard_focused = false;
+    ui->keyboard_pressed = false;
+    ui->keyboard_active_key = 0;
+    return changed;
+}
+
+enum nb_wayland_demo_key_result nb_wayland_demo_ui_keyboard_key(
+    struct nb_wayland_demo_ui *ui,
+    uint32_t key,
+    bool down)
+{
+    if (ui == NULL || !ui->keyboard_focused) {
+        return NB_WAYLAND_DEMO_KEY_IGNORED;
+    }
+    if (key == NB_WAYLAND_DEMO_KEY_ESCAPE) {
+        return down ? NB_WAYLAND_DEMO_KEY_CLOSE
+                    : NB_WAYLAND_DEMO_KEY_IGNORED;
+    }
+    if (!is_activation_key(key)) {
+        return NB_WAYLAND_DEMO_KEY_IGNORED;
+    }
+    if (down) {
+        if (ui->keyboard_pressed) {
+            return NB_WAYLAND_DEMO_KEY_IGNORED;
+        }
+        ui->keyboard_pressed = true;
+        ui->keyboard_active_key = key;
+        return NB_WAYLAND_DEMO_KEY_REDRAW;
+    }
+    if (!ui->keyboard_pressed || ui->keyboard_active_key != key) {
+        return NB_WAYLAND_DEMO_KEY_IGNORED;
+    }
+    ui->keyboard_pressed = false;
+    ui->keyboard_active_key = 0;
+    ui->toggled = !ui->toggled;
+    ++ui->click_count;
+    return NB_WAYLAND_DEMO_KEY_REDRAW;
 }
 
 static void fill_rect(uint32_t *pixels,
@@ -256,15 +322,17 @@ bool nb_wayland_demo_ui_render(const struct nb_wayland_demo_ui *ui,
     if (button.width <= 0 || button.height <= 0) {
         return true;
     }
-    button_color = ui->pressed
+    button_color = ui->pressed || ui->keyboard_pressed
                        ? button_pressed
                        : (ui->toggled ? button_on : button_off);
     fill_rect(pixels, ui->width, ui->height, stride_pixels,
               button, button_color);
     draw_bevel(pixels, ui->width, ui->height, stride_pixels,
                button,
-               ui->pressed ? dark : (ui->hovered ? hover : light),
-               ui->pressed ? light : dark);
+               ui->pressed || ui->keyboard_pressed
+                   ? dark
+                   : (ui->hovered || ui->keyboard_focused ? hover : light),
+               ui->pressed || ui->keyboard_pressed ? light : dark);
 
     indicator.width = minimum(18, maximum(0, button.width - 12));
     indicator.height = minimum(18, maximum(0, button.height - 12));

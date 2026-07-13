@@ -133,10 +133,102 @@ static void test_pixel_rendering(void)
     CHECK(!nb_wayland_demo_ui_render(&ui, NULL, STRIDE));
 }
 
+static void test_keyboard_state(void)
+{
+    struct nb_wayland_demo_ui ui;
+    const unsigned int starting_clicks = 0;
+    uint32_t unfocused[PIXEL_COUNT];
+    uint32_t focused[PIXEL_COUNT];
+    uint32_t key_pressed[PIXEL_COUNT];
+
+    nb_wayland_demo_ui_init(&ui, WIDTH, HEIGHT);
+    memset(unfocused, 0, sizeof(unfocused));
+    memset(focused, 0, sizeof(focused));
+    memset(key_pressed, 0, sizeof(key_pressed));
+    CHECK(nb_wayland_demo_ui_render(&ui, unfocused, STRIDE));
+    CHECK(!ui.keyboard_focused);
+    CHECK(!ui.keyboard_pressed);
+    CHECK(nb_wayland_demo_ui_keyboard_key(
+              &ui, NB_WAYLAND_DEMO_KEY_SPACE, true) ==
+          NB_WAYLAND_DEMO_KEY_IGNORED);
+
+    CHECK(nb_wayland_demo_ui_keyboard_enter(&ui));
+    CHECK(nb_wayland_demo_ui_render(&ui, focused, STRIDE));
+    CHECK(memcmp(unfocused, focused, sizeof(unfocused)) != 0);
+    CHECK(ui.keyboard_focused);
+    CHECK(!nb_wayland_demo_ui_keyboard_enter(&ui));
+    CHECK(nb_wayland_demo_ui_keyboard_key(
+              &ui, NB_WAYLAND_DEMO_KEY_SPACE, true) ==
+          NB_WAYLAND_DEMO_KEY_REDRAW);
+    CHECK(nb_wayland_demo_ui_render(&ui, key_pressed, STRIDE));
+    CHECK(memcmp(focused, key_pressed, sizeof(focused)) != 0);
+    CHECK(ui.keyboard_pressed);
+    CHECK(ui.keyboard_active_key == NB_WAYLAND_DEMO_KEY_SPACE);
+    CHECK(nb_wayland_demo_ui_keyboard_key(
+              &ui, NB_WAYLAND_DEMO_KEY_SPACE, true) ==
+          NB_WAYLAND_DEMO_KEY_IGNORED);
+    CHECK(nb_wayland_demo_ui_keyboard_key(
+              &ui, NB_WAYLAND_DEMO_KEY_ENTER, false) ==
+          NB_WAYLAND_DEMO_KEY_IGNORED);
+    CHECK(nb_wayland_demo_ui_keyboard_key(
+              &ui, NB_WAYLAND_DEMO_KEY_SPACE, false) ==
+          NB_WAYLAND_DEMO_KEY_REDRAW);
+    CHECK(!ui.keyboard_pressed);
+    CHECK(ui.toggled);
+    CHECK(ui.click_count == starting_clicks + 1);
+
+    CHECK(nb_wayland_demo_ui_keyboard_key(
+              &ui, NB_WAYLAND_DEMO_KEY_ENTER, true) ==
+          NB_WAYLAND_DEMO_KEY_REDRAW);
+    CHECK(nb_wayland_demo_ui_keyboard_key(
+              &ui, NB_WAYLAND_DEMO_KEY_ENTER, false) ==
+          NB_WAYLAND_DEMO_KEY_REDRAW);
+    CHECK(!ui.toggled);
+    CHECK(ui.click_count == starting_clicks + 2);
+
+    CHECK(nb_wayland_demo_ui_keyboard_key(
+              &ui, NB_WAYLAND_DEMO_KEY_KEYPAD_ENTER, true) ==
+          NB_WAYLAND_DEMO_KEY_REDRAW);
+    CHECK(nb_wayland_demo_ui_keyboard_key(
+              &ui, NB_WAYLAND_DEMO_KEY_KEYPAD_ENTER, false) ==
+          NB_WAYLAND_DEMO_KEY_REDRAW);
+    CHECK(ui.toggled);
+    CHECK(ui.click_count == starting_clicks + 3);
+
+    CHECK(nb_wayland_demo_ui_keyboard_key(
+              &ui, NB_WAYLAND_DEMO_KEY_ESCAPE, false) ==
+          NB_WAYLAND_DEMO_KEY_IGNORED);
+    CHECK(nb_wayland_demo_ui_keyboard_key(
+              &ui, NB_WAYLAND_DEMO_KEY_ESCAPE, true) ==
+          NB_WAYLAND_DEMO_KEY_CLOSE);
+    CHECK(nb_wayland_demo_ui_keyboard_key(&ui, 30, true) ==
+          NB_WAYLAND_DEMO_KEY_IGNORED);
+
+    CHECK(nb_wayland_demo_ui_keyboard_key(
+              &ui, NB_WAYLAND_DEMO_KEY_SPACE, true) ==
+          NB_WAYLAND_DEMO_KEY_REDRAW);
+    CHECK(nb_wayland_demo_ui_keyboard_leave(&ui));
+    CHECK(!ui.keyboard_focused);
+    CHECK(!ui.keyboard_pressed);
+    CHECK(ui.keyboard_active_key == 0);
+    CHECK(!nb_wayland_demo_ui_keyboard_leave(&ui));
+    CHECK(nb_wayland_demo_ui_keyboard_key(
+              &ui, NB_WAYLAND_DEMO_KEY_SPACE, false) ==
+          NB_WAYLAND_DEMO_KEY_IGNORED);
+    CHECK(ui.click_count == starting_clicks + 3);
+
+    CHECK(!nb_wayland_demo_ui_keyboard_enter(NULL));
+    CHECK(!nb_wayland_demo_ui_keyboard_leave(NULL));
+    CHECK(nb_wayland_demo_ui_keyboard_key(
+              NULL, NB_WAYLAND_DEMO_KEY_SPACE, true) ==
+          NB_WAYLAND_DEMO_KEY_IGNORED);
+}
+
 int main(void)
 {
     test_geometry_and_click_state();
     test_pixel_rendering();
+    test_keyboard_state();
 
     if (failures != 0) {
         fprintf(stderr, "Wayland demo UI tests: %d failure(s)\n", failures);

@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include <wayland-client.h>
+#include <xkbcommon/xkbcommon.h>
 
 #include "wayland_demo_ui.h"
 #include "xdg-shell-client-protocol.h"
@@ -22,6 +23,7 @@ enum {
     DEMO_MAX_DIMENSION = 4096,
     DEMO_MAX_BUFFERS = 4,
     DEMO_COMPOSITOR_VERSION = 4,
+    DEMO_OUTPUT_VERSION = 2,
     DEMO_SEAT_VERSION = 5,
     DEMO_BYTES_PER_PIXEL = 4,
     DEMO_POINTER_BUTTON_LEFT = 0x110
@@ -50,9 +52,14 @@ struct demo_app {
     struct wl_display *display;
     struct wl_registry *registry;
     struct wl_compositor *compositor;
+    struct wl_output *output;
     struct wl_shm *shm;
     struct wl_seat *seat;
     struct wl_pointer *pointer;
+    struct wl_keyboard *keyboard;
+    struct xkb_context *xkb_context;
+    struct xkb_keymap *xkb_keymap;
+    struct xkb_state *xkb_state;
     struct wl_surface *surface;
     struct xdg_wm_base *wm_base;
     struct xdg_surface *xdg_surface;
@@ -62,6 +69,7 @@ struct demo_app {
     size_t buffer_count;
     struct nb_wayland_demo_ui ui;
     uint32_t seat_global_name;
+    uint32_t output_global_name;
     uint32_t shm_format;
     int width;
     int height;
@@ -551,6 +559,203 @@ static void release_pointer(struct demo_app *app)
     redraw_if_changed(app, nb_wayland_demo_ui_pointer_leave(&app->ui));
 }
 
+static enum nb_wayland_demo_key keyboard_semantic_key(
+    const struct demo_app *app,
+    uint32_t wire_key)
+{
+    xkb_keysym_t keysym;
+
+    if (app->xkb_state == NULL || wire_key > UINT32_MAX - 8) {
+        return NB_WAYLAND_DEMO_KEY_UNKNOWN;
+    }
+    keysym = xkb_state_key_get_one_sym(
+        app->xkb_state, (xkb_keycode_t)(wire_key + 8));
+    if (keysym == XKB_KEY_Escape) {
+        return NB_WAYLAND_DEMO_KEY_ESCAPE;
+    }
+    if (keysym == XKB_KEY_Return) {
+        return NB_WAYLAND_DEMO_KEY_ENTER;
+    }
+    if (keysym == XKB_KEY_space) {
+        return NB_WAYLAND_DEMO_KEY_SPACE;
+    }
+    if (keysym == XKB_KEY_KP_Enter) {
+        return NB_WAYLAND_DEMO_KEY_KEYPAD_ENTER;
+    }
+    return NB_WAYLAND_DEMO_KEY_UNKNOWN;
+}
+
+static void keyboard_keymap(void *data,
+                            struct wl_keyboard *keyboard,
+                            uint32_t format,
+                            int32_t fd,
+                            uint32_t size)
+{
+    struct demo_app *app = data;
+    const char *mapping = MAP_FAILED;
+    struct xkb_keymap *keymap = NULL;
+    struct xkb_state *state = NULL;
+
+    (void)keyboard;
+    if (format == WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1 && fd >= 0 &&
+        size > 0) {
+        mapping = mmap(NULL,
+                       (size_t)size,
+                       PROT_READ,
+                       MAP_PRIVATE,
+                       fd,
+                       0);
+        if (mapping != MAP_FAILED && mapping[size - 1] == '\0') {
+            keymap = xkb_keymap_new_from_string(
+                app->xkb_context,
+                mapping,
+                XKB_KEYMAP_FORMAT_TEXT_V1,
+                XKB_KEYMAP_COMPILE_NO_FLAGS);
+            if (keymap != NULL) {
+                state = xkb_state_new(keymap);
+            }
+        }
+    }
+    if (mapping != MAP_FAILED) {
+        (void)munmap((void *)mapping, (size_t)size);
+    }
+    if (fd >= 0) {
+        (void)close(fd);
+    }
+    if (state == NULL) {
+        if (keymap != NULL) {
+            xkb_keymap_unref(keymap);
+        }
+        fail_app(app, "Could not load the Wayland keyboard keymap");
+        return;
+    }
+    if (app->xkb_state != NULL) {
+        xkb_state_unref(app->xkb_state);
+    }
+    if (app->xkb_keymap != NULL) {
+        xkb_keymap_unref(app->xkb_keymap);
+    }
+    app->xkb_keymap = keymap;
+    app->xkb_state = state;
+}
+
+static void keyboard_enter(void *data,
+                           struct wl_keyboard *keyboard,
+                           uint32_t serial,
+                           struct wl_surface *surface,
+                           struct wl_array *keys)
+{
+    struct demo_app *app = data;
+
+    (void)keyboard;
+    (void)serial;
+    (void)keys;
+    if (surface != app->surface) {
+        return;
+    }
+    redraw_if_changed(app, nb_wayland_demo_ui_keyboard_enter(&app->ui));
+}
+
+static void keyboard_leave(void *data,
+                           struct wl_keyboard *keyboard,
+                           uint32_t serial,
+                           struct wl_surface *surface)
+{
+    struct demo_app *app = data;
+
+    (void)keyboard;
+    (void)serial;
+    if (surface == app->surface) {
+        redraw_if_changed(app, nb_wayland_demo_ui_keyboard_leave(&app->ui));
+    }
+}
+
+static void keyboard_key(void *data,
+                         struct wl_keyboard *keyboard,
+                         uint32_t serial,
+                         uint32_t time,
+                         uint32_t key,
+                         uint32_t state)
+{
+    struct demo_app *app = data;
+    enum nb_wayland_demo_key_result result;
+
+    (void)keyboard;
+    (void)serial;
+    (void)time;
+    if (state != WL_KEYBOARD_KEY_STATE_PRESSED &&
+        state != WL_KEYBOARD_KEY_STATE_RELEASED) {
+        return;
+    }
+    result = nb_wayland_demo_ui_keyboard_key(
+        &app->ui,
+        keyboard_semantic_key(app, key),
+        state == WL_KEYBOARD_KEY_STATE_PRESSED);
+    if (result == NB_WAYLAND_DEMO_KEY_CLOSE) {
+        app->running = false;
+    } else if (result == NB_WAYLAND_DEMO_KEY_REDRAW) {
+        redraw_if_changed(app, true);
+    }
+}
+
+static void keyboard_modifiers(void *data,
+                               struct wl_keyboard *keyboard,
+                               uint32_t serial,
+                               uint32_t mods_depressed,
+                               uint32_t mods_latched,
+                               uint32_t mods_locked,
+                               uint32_t group)
+{
+    struct demo_app *app = data;
+
+    (void)keyboard;
+    (void)serial;
+    if (app->xkb_state != NULL) {
+        (void)xkb_state_update_mask(app->xkb_state,
+                                    mods_depressed,
+                                    mods_latched,
+                                    mods_locked,
+                                    0,
+                                    0,
+                                    group);
+    }
+}
+
+static void keyboard_repeat_info(void *data,
+                                 struct wl_keyboard *keyboard,
+                                 int32_t rate,
+                                 int32_t delay)
+{
+    (void)data;
+    (void)keyboard;
+    (void)rate;
+    (void)delay;
+}
+
+static const struct wl_keyboard_listener keyboard_listener = {
+    .keymap = keyboard_keymap,
+    .enter = keyboard_enter,
+    .leave = keyboard_leave,
+    .key = keyboard_key,
+    .modifiers = keyboard_modifiers,
+    .repeat_info = keyboard_repeat_info
+};
+
+static void release_keyboard(struct demo_app *app)
+{
+    if (app->keyboard == NULL) {
+        return;
+    }
+    if (wl_proxy_get_version((struct wl_proxy *)app->keyboard) >=
+        WL_KEYBOARD_RELEASE_SINCE_VERSION) {
+        wl_keyboard_release(app->keyboard);
+    } else {
+        wl_keyboard_destroy(app->keyboard);
+    }
+    app->keyboard = NULL;
+    redraw_if_changed(app, nb_wayland_demo_ui_keyboard_leave(&app->ui));
+}
+
 static void seat_capabilities(void *data,
                               struct wl_seat *seat,
                               uint32_t capabilities)
@@ -570,6 +775,19 @@ static void seat_capabilities(void *data,
     } else if ((capabilities & WL_SEAT_CAPABILITY_POINTER) == 0) {
         release_pointer(app);
     }
+    if ((capabilities & WL_SEAT_CAPABILITY_KEYBOARD) != 0 &&
+        app->keyboard == NULL) {
+        app->keyboard = wl_seat_get_keyboard(seat);
+        if (app->keyboard == NULL ||
+            wl_keyboard_add_listener(app->keyboard,
+                                     &keyboard_listener,
+                                     app) < 0) {
+            release_keyboard(app);
+            fail_app(app, "Could not bind the Wayland keyboard");
+        }
+    } else if ((capabilities & WL_SEAT_CAPABILITY_KEYBOARD) == 0) {
+        release_keyboard(app);
+    }
 }
 
 static void seat_name(void *data, struct wl_seat *seat, const char *name)
@@ -587,6 +805,7 @@ static const struct wl_seat_listener seat_listener = {
 static void release_seat(struct demo_app *app)
 {
     release_pointer(app);
+    release_keyboard(app);
     if (app->seat == NULL) {
         return;
     }
@@ -689,6 +908,104 @@ static const struct xdg_toplevel_listener toplevel_listener = {
     .close = toplevel_close
 };
 
+static void output_geometry(void *data,
+                            struct wl_output *output,
+                            int32_t x,
+                            int32_t y,
+                            int32_t physical_width,
+                            int32_t physical_height,
+                            int32_t subpixel,
+                            const char *make,
+                            const char *model,
+                            int32_t transform)
+{
+    (void)data;
+    (void)output;
+    (void)x;
+    (void)y;
+    (void)physical_width;
+    (void)physical_height;
+    (void)subpixel;
+    (void)make;
+    (void)model;
+    (void)transform;
+}
+
+static void output_mode(void *data,
+                        struct wl_output *output,
+                        uint32_t flags,
+                        int32_t width,
+                        int32_t height,
+                        int32_t refresh)
+{
+    (void)data;
+    (void)output;
+    (void)flags;
+    (void)width;
+    (void)height;
+    (void)refresh;
+}
+
+static void output_done(void *data, struct wl_output *output)
+{
+    (void)data;
+    (void)output;
+}
+
+static void output_scale(void *data,
+                         struct wl_output *output,
+                         int32_t factor)
+{
+    (void)data;
+    (void)output;
+    (void)factor;
+}
+
+static const struct wl_output_listener output_listener = {
+    .geometry = output_geometry,
+    .mode = output_mode,
+    .done = output_done,
+    .scale = output_scale
+};
+
+static void surface_enter(void *data,
+                          struct wl_surface *surface,
+                          struct wl_output *output)
+{
+    (void)data;
+    (void)surface;
+    (void)output;
+}
+
+static void surface_leave(void *data,
+                          struct wl_surface *surface,
+                          struct wl_output *output)
+{
+    (void)data;
+    (void)surface;
+    (void)output;
+}
+
+static const struct wl_surface_listener surface_listener = {
+    .enter = surface_enter,
+    .leave = surface_leave
+};
+
+static void release_output(struct demo_app *app)
+{
+    if (app->output == NULL) {
+        return;
+    }
+    if (wl_proxy_get_version((struct wl_proxy *)app->output) >=
+        WL_OUTPUT_RELEASE_SINCE_VERSION) {
+        wl_output_release(app->output);
+    } else {
+        wl_output_destroy(app->output);
+    }
+    app->output = NULL;
+    app->output_global_name = 0;
+}
+
 static void registry_global(void *data,
                             struct wl_registry *registry,
                             uint32_t name,
@@ -706,6 +1023,24 @@ static void registry_global(void *data,
 
         app->compositor = wl_registry_bind(
             registry, name, &wl_compositor_interface, bind_version);
+    } else if (strcmp(interface, wl_output_interface.name) == 0 &&
+               app->output == NULL) {
+        const uint32_t bind_version = version < DEMO_OUTPUT_VERSION
+                                          ? version
+                                          : DEMO_OUTPUT_VERSION;
+
+        app->output = wl_registry_bind(registry,
+                                       name,
+                                       &wl_output_interface,
+                                       bind_version);
+        app->output_global_name = name;
+        if (app->output == NULL ||
+            wl_output_add_listener(app->output,
+                                   &output_listener,
+                                   app) < 0) {
+            release_output(app);
+            fail_app(app, "Could not bind the Wayland output");
+        }
     } else if (strcmp(interface, wl_shm_interface.name) == 0 &&
                app->shm == NULL) {
         app->shm = wl_registry_bind(registry,
@@ -755,6 +1090,8 @@ static void registry_global_remove(void *data,
     (void)registry;
     if (name == app->seat_global_name) {
         release_seat(app);
+    } else if (name == app->output_global_name) {
+        release_output(app);
     }
 }
 
@@ -765,6 +1102,11 @@ static const struct wl_registry_listener registry_listener = {
 
 static bool initialize_app(struct demo_app *app)
 {
+    app->xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    if (app->xkb_context == NULL) {
+        fail_app(app, "Could not initialize XKB keyboard handling");
+        return false;
+    }
     app->display = wl_display_connect(NULL);
     if (app->display == NULL) {
         fail_app(app, "Could not connect to a Wayland compositor");
@@ -780,24 +1122,29 @@ static bool initialize_app(struct demo_app *app)
         fail_app(app, "Could not discover Wayland globals");
         return false;
     }
-    if (app->failed || app->compositor == NULL || app->shm == NULL ||
-        app->wm_base == NULL) {
+    if (app->failed || app->compositor == NULL || app->output == NULL ||
+        app->shm == NULL || app->wm_base == NULL) {
         fail_app(app,
-                 "The compositor lacks wl_compositor, wl_shm, or xdg_wm_base");
+                 "The compositor lacks wl_compositor, wl_output, wl_shm, "
+                 "or xdg_wm_base");
         return false;
     }
     if (!app->saw_xrgb8888 && !app->saw_argb8888) {
         fail_app(app, "The compositor lacks a supported wl_shm pixel format");
         return false;
     }
-    if (app->seat == NULL || app->pointer == NULL) {
-        fputs("Wayland pointer input is unavailable; the demo remains "
-              "viewable.\n",
+    if (app->seat == NULL || app->pointer == NULL ||
+        app->keyboard == NULL) {
+        fputs("Some Wayland input capabilities are unavailable; the demo "
+              "remains viewable.\n",
               stderr);
     }
 
     app->surface = wl_compositor_create_surface(app->compositor);
-    if (app->surface == NULL) {
+    if (app->surface == NULL ||
+        wl_surface_add_listener(app->surface,
+                                &surface_listener,
+                                app) < 0) {
         fail_app(app, "Could not create a Wayland surface");
         return false;
     }
@@ -851,6 +1198,7 @@ static void destroy_app(struct demo_app *app)
     if (app->shm != NULL) {
         wl_shm_destroy(app->shm);
     }
+    release_output(app);
     if (app->compositor != NULL) {
         wl_compositor_destroy(app->compositor);
     }
@@ -861,13 +1209,24 @@ static void destroy_app(struct demo_app *app)
         (void)wl_display_flush(app->display);
         wl_display_disconnect(app->display);
     }
+    if (app->xkb_state != NULL) {
+        xkb_state_unref(app->xkb_state);
+    }
+    if (app->xkb_keymap != NULL) {
+        xkb_keymap_unref(app->xkb_keymap);
+    }
+    if (app->xkb_context != NULL) {
+        xkb_context_unref(app->xkb_context);
+    }
 }
 
 static void print_usage(const char *program)
 {
     printf("Usage: %s [--exit-after-first-frame] [--help]\n"
            "\n"
-           "Open a small wl_shm/xdg-shell client on WAYLAND_DISPLAY.\n",
+           "Open a small wl_shm/xdg-shell client on WAYLAND_DISPLAY.\n"
+           "Activate its control with a click, Space, or Enter; Escape "
+           "closes it.\n",
            program);
 }
 

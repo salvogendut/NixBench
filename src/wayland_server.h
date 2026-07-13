@@ -45,7 +45,9 @@ struct nb_wayland_surface_snapshot {
 struct nb_wayland_server *nb_wayland_server_create(
     struct nb_shell *shell,
     nb_menu_source_id menu_source,
-    const struct nb_menu_model *menu_model);
+    const struct nb_menu_model *menu_model,
+    int output_width,
+    int output_height);
 void nb_wayland_server_destroy(struct nb_wayland_server *server);
 
 /*
@@ -68,6 +70,10 @@ bool nb_wayland_server_add_client_fd(struct nb_wayland_server *server,
 
 /* Dispatch queued client requests without blocking and flush all clients. */
 bool nb_wayland_server_dispatch(struct nb_wayland_server *server);
+/* Update the single logical output; unchanged sizes are accepted silently. */
+bool nb_wayland_server_set_output_size(struct nb_wayland_server *server,
+                                       int width,
+                                       int height);
 /* Complete frame callbacks only after the compositor has presented a frame. */
 void nb_wayland_server_frame_presented(struct nb_wayland_server *server,
                                        uint32_t milliseconds);
@@ -111,6 +117,23 @@ void nb_wayland_server_pointer_cancel(struct nb_wayland_server *server,
                                       uint32_t milliseconds);
 nb_window_id nb_wayland_server_pointer_grab_window(
     const struct nb_wayland_server *server);
+
+/*
+ * Keyboard focus follows the active shell window. Physical keys are named
+ * with XKB key names (for example "AC01", "RTRN", or "LFSH") so the SDL
+ * adapter remains independent of Linux evdev headers and NetBSD raw codes.
+ */
+bool nb_wayland_server_keyboard_focus(
+    struct nb_wayland_server *server,
+    nb_window_id window);
+/* Key names absent from the active keymap are accepted and ignored. */
+bool nb_wayland_server_keyboard_key(struct nb_wayland_server *server,
+                                    const char *xkb_key_name,
+                                    uint32_t milliseconds,
+                                    bool pressed);
+/* Synthesize releases for held keys and remove keyboard focus. */
+void nb_wayland_server_keyboard_cancel(struct nb_wayland_server *server,
+                                       uint32_t milliseconds);
 
 /* Ask the owning xdg_toplevel to close; the client remains authoritative. */
 bool nb_wayland_server_request_close(struct nb_wayland_server *server,

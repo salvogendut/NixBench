@@ -55,6 +55,16 @@ if(NOT NIXBENCH_WAYLAND STREQUAL "OFF")
     NAMES wayland-server
     PATH_SUFFIXES lib
   )
+  find_path(
+    NIXBENCH_XKBCOMMON_INCLUDE_DIR
+    NAMES xkbcommon/xkbcommon.h
+    PATH_SUFFIXES include
+  )
+  find_library(
+    NIXBENCH_XKBCOMMON_LIBRARY
+    NAMES xkbcommon
+    PATH_SUFFIXES lib
+  )
   find_program(NIXBENCH_WAYLAND_SCANNER NAMES wayland-scanner)
   find_file(
     NIXBENCH_XDG_SHELL_XML
@@ -70,6 +80,12 @@ if(NOT NIXBENCH_WAYLAND STREQUAL "OFF")
   endif()
   if(NOT NIXBENCH_WAYLAND_SERVER_LIBRARY)
     list(APPEND _nixbench_wayland_missing "libwayland-server")
+  endif()
+  if(NOT NIXBENCH_XKBCOMMON_INCLUDE_DIR)
+    list(APPEND _nixbench_wayland_missing "xkbcommon/xkbcommon.h")
+  endif()
+  if(NOT NIXBENCH_XKBCOMMON_LIBRARY)
+    list(APPEND _nixbench_wayland_missing "libxkbcommon")
   endif()
   if(NOT NIXBENCH_WAYLAND_SCANNER)
     list(APPEND _nixbench_wayland_missing "wayland-scanner")
@@ -177,10 +193,12 @@ if(NIXBENCH_WAYLAND_ENABLED)
       "${CMAKE_CURRENT_SOURCE_DIR}/src"
       "${NIXBENCH_WAYLAND_GENERATED_DIR}"
       "${NIXBENCH_WAYLAND_SERVER_INCLUDE_DIR}"
+    PRIVATE "${NIXBENCH_XKBCOMMON_INCLUDE_DIR}"
   )
   target_link_libraries(
     nixbench_wayland
     PUBLIC "${NIXBENCH_WAYLAND_SERVER_LIBRARY}" m
+    PRIVATE "${NIXBENCH_XKBCOMMON_LIBRARY}"
   )
   nixbench_configure_c_target(nixbench_wayland)
 endif()
@@ -292,12 +310,14 @@ if(NIXBENCH_WAYLAND_DEMO_AVAILABLE)
     PRIVATE
       "${NIXBENCH_WAYLAND_GENERATED_DIR}"
       "${NIXBENCH_WAYLAND_CLIENT_INCLUDE_DIR}"
+      "${NIXBENCH_XKBCOMMON_INCLUDE_DIR}"
   )
   target_link_libraries(
     nixbench-wayland-demo
     PRIVATE
       nixbench_wayland_demo_ui
       "${NIXBENCH_WAYLAND_CLIENT_LIBRARY}"
+      "${NIXBENCH_XKBCOMMON_LIBRARY}"
   )
   nixbench_configure_c_target(nixbench-wayland-demo)
 endif()
@@ -367,12 +387,14 @@ if(BUILD_TESTING)
       PRIVATE
         "${NIXBENCH_WAYLAND_GENERATED_DIR}"
         "${NIXBENCH_WAYLAND_CLIENT_INCLUDE_DIR}"
+        "${NIXBENCH_XKBCOMMON_INCLUDE_DIR}"
     )
     target_link_libraries(
       nixbench_wayland_tests
       PRIVATE
         nixbench_wayland
         "${NIXBENCH_WAYLAND_CLIENT_LIBRARY}"
+        "${NIXBENCH_XKBCOMMON_LIBRARY}"
     )
     nixbench_configure_c_target(nixbench_wayland_tests)
     add_test(NAME nixbench.wayland.protocol COMMAND nixbench_wayland_tests)

@@ -1,17 +1,24 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "wayland_server.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <wayland-server-core.h>
 #include <wayland-server-protocol.h>
+#include <xkbcommon/xkbcommon.h>
 
 #include "xdg-shell-server-protocol.h"
 
 enum {
     NB_WAYLAND_COMPOSITOR_VERSION = 4,
+    NB_WAYLAND_OUTPUT_VERSION = 2,
     NB_WAYLAND_SEAT_VERSION = 5,
     NB_WAYLAND_XDG_SHELL_VERSION = 1,
     NB_WAYLAND_MAX_FRAME_CALLBACKS = 16,
@@ -20,7 +27,11 @@ enum {
     NB_WAYLAND_INITIAL_X = 120,
     NB_WAYLAND_INITIAL_Y = 78,
     NB_WAYLAND_CASCADE = 28,
-    NB_WAYLAND_CASCADE_COUNT = 8
+    NB_WAYLAND_CASCADE_COUNT = 8,
+    NB_WAYLAND_DEFAULT_REFRESH_MILLIHERTZ = 60000,
+    NB_WAYLAND_KEY_CAPACITY = 256,
+    NB_WAYLAND_KEYBOARD_REPEAT_RATE = 25,
+    NB_WAYLAND_KEYBOARD_REPEAT_DELAY = 600
 };
 
 enum nb_wayland_surface_role {
@@ -32,6 +43,18 @@ enum nb_wayland_surface_role {
 struct nb_wayland_server;
 
 struct nb_wayland_pointer_resource {
+    struct nb_wayland_server *server;
+    struct wl_resource *resource;
+    struct wl_list link;
+};
+
+struct nb_wayland_keyboard_resource {
+    struct nb_wayland_server *server;
+    struct wl_resource *resource;
+    struct wl_list link;
+};
+
+struct nb_wayland_output_resource {
     struct nb_wayland_server *server;
     struct wl_resource *resource;
     struct wl_list link;
@@ -74,9 +97,23 @@ struct nb_wayland_server {
     struct wl_display *display;
     struct wl_event_loop *event_loop;
     struct wl_global *compositor_global;
+    struct wl_global *output_global;
     struct wl_global *seat_global;
     struct wl_global *xdg_wm_base_global;
+    struct wl_list output_resources;
     struct wl_list pointer_resources;
+    struct wl_list keyboard_resources;
+    struct xkb_context *xkb_context;
+    struct xkb_keymap *xkb_keymap;
+    struct xkb_state *xkb_state;
+    char *keymap_text;
+    size_t keymap_size;
+    struct nb_wayland_surface *keyboard_focus;
+    bool keyboard_keys[NB_WAYLAND_KEY_CAPACITY];
+    uint32_t keyboard_mods_depressed;
+    uint32_t keyboard_mods_latched;
+    uint32_t keyboard_mods_locked;
+    uint32_t keyboard_group;
     struct nb_wayland_surface *pointer_focus;
     struct nb_wayland_surface *pointer_grab;
     struct nb_wayland_surface *pointer_cursor;
@@ -87,6 +124,9 @@ struct nb_wayland_server {
     int pointer_y;
     uint32_t pointer_time;
     bool pointer_position_valid;
+    int output_width;
+    int output_height;
+    int output_refresh_millihertz;
     bool destroying;
     struct nb_wayland_surface surfaces[NB_WAYLAND_MAX_SURFACES];
     unsigned int next_window_position;
@@ -94,7 +134,9 @@ struct nb_wayland_server {
 };
 
 static const struct wl_surface_interface surface_implementation;
+static const struct wl_output_interface output_implementation;
 static const struct wl_pointer_interface pointer_implementation;
+static const struct wl_keyboard_interface keyboard_implementation;
 static const struct xdg_surface_interface xdg_surface_implementation;
 static const struct xdg_toplevel_interface toplevel_implementation;
 
@@ -174,6 +216,347 @@ static const struct nb_wayland_surface *find_surface_by_window_const(
         }
     }
     return NULL;
+}
+
+static bool output_resource_belongs_to_client(
+    const struct nb_wayland_output_resource *output,
+    const struct wl_client *client)
+{
+    return output->resource != NULL &&
+           wl_resource_get_client(output->resource) == client;
+}
+
+static void output_send_state(
+    const struct nb_wayland_server *server,
+    struct wl_resource *resource,
+    bool include_geometry)
+{
+    if (include_geometry) {
+        wl_output_send_geometry(resource,
+                                0,
+                                0,
+                                0,
+                                0,
+                                WL_OUTPUT_SUBPIXEL_UNKNOWN,
+                                "NixBench",
+                                "Hosted output",
+                                WL_OUTPUT_TRANSFORM_NORMAL);
+    }
+    wl_output_send_mode(resource,
+                        WL_OUTPUT_MODE_CURRENT |
+                            WL_OUTPUT_MODE_PREFERRED,
+                        server->output_width,
+                        server->output_height,
+                        server->output_refresh_millihertz);
+    if (wl_resource_get_version(resource) >=
+        WL_OUTPUT_SCALE_SINCE_VERSION) {
+        wl_output_send_scale(resource, 1);
+    }
+    if (wl_resource_get_version(resource) >=
+        WL_OUTPUT_DONE_SINCE_VERSION) {
+        wl_output_send_done(resource);
+    }
+}
+
+static void surface_send_output_membership(
+    struct nb_wayland_surface *surface,
+    bool entered)
+{
+    struct nb_wayland_server *server = surface->server;
+    struct nb_wayland_output_resource *output;
+    struct wl_client *client;
+
+    if (server->destroying || surface->surface_resource == NULL) {
+        return;
+    }
+    client = wl_resource_get_client(surface->surface_resource);
+    wl_list_for_each(output, &server->output_resources, link) {
+        if (!output_resource_belongs_to_client(output, client)) {
+            continue;
+        }
+        if (entered) {
+            wl_surface_send_enter(surface->surface_resource,
+                                  output->resource);
+        } else {
+            wl_surface_send_leave(surface->surface_resource,
+                                  output->resource);
+        }
+    }
+}
+
+static void output_resource_destroyed(struct wl_resource *resource)
+{
+    struct nb_wayland_output_resource *output =
+        wl_resource_get_user_data(resource);
+
+    if (output == NULL) {
+        return;
+    }
+    output->resource = NULL;
+    wl_list_remove(&output->link);
+    wl_list_init(&output->link);
+    free(output);
+}
+
+static void output_release(struct wl_client *client,
+                           struct wl_resource *resource)
+{
+    (void)client;
+    wl_resource_destroy(resource);
+}
+
+static const struct wl_output_interface output_implementation = {
+    .release = output_release
+};
+
+static void bind_output(struct wl_client *client,
+                        void *data,
+                        uint32_t version,
+                        uint32_t id)
+{
+    struct nb_wayland_server *server = data;
+    struct nb_wayland_output_resource *output =
+        calloc(1, sizeof(*output));
+    size_t index;
+
+    if (output == NULL) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    output->server = server;
+    output->resource = wl_resource_create(
+        client,
+        &wl_output_interface,
+        protocol_version(version, NB_WAYLAND_OUTPUT_VERSION),
+        id);
+    if (output->resource == NULL) {
+        free(output);
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_list_insert(&server->output_resources, &output->link);
+    wl_resource_set_implementation(output->resource,
+                                   &output_implementation,
+                                   output,
+                                   output_resource_destroyed);
+    output_send_state(server, output->resource, true);
+
+    /* A late output binding still needs membership for mapped surfaces. */
+    for (index = 0; index < NB_WAYLAND_MAX_SURFACES; ++index) {
+        struct nb_wayland_surface *surface = &server->surfaces[index];
+
+        if (surface->occupied && surface->window != NB_WINDOW_ID_NONE &&
+            surface->surface_resource != NULL &&
+            wl_resource_get_client(surface->surface_resource) == client) {
+            wl_surface_send_enter(surface->surface_resource,
+                                  output->resource);
+        }
+    }
+}
+
+static bool keyboard_resource_belongs_to_client(
+    const struct nb_wayland_keyboard_resource *keyboard,
+    const struct wl_client *client)
+{
+    return keyboard->resource != NULL &&
+           wl_resource_get_client(keyboard->resource) == client;
+}
+
+static void keyboard_read_modifiers(struct nb_wayland_server *server,
+                                    uint32_t *depressed,
+                                    uint32_t *latched,
+                                    uint32_t *locked,
+                                    uint32_t *group)
+{
+    *depressed = (uint32_t)xkb_state_serialize_mods(
+        server->xkb_state, XKB_STATE_MODS_DEPRESSED);
+    *latched = (uint32_t)xkb_state_serialize_mods(
+        server->xkb_state, XKB_STATE_MODS_LATCHED);
+    *locked = (uint32_t)xkb_state_serialize_mods(
+        server->xkb_state, XKB_STATE_MODS_LOCKED);
+    *group = (uint32_t)xkb_state_serialize_layout(
+        server->xkb_state, XKB_STATE_LAYOUT_EFFECTIVE);
+}
+
+static void keyboard_store_modifiers(struct nb_wayland_server *server)
+{
+    keyboard_read_modifiers(server,
+                            &server->keyboard_mods_depressed,
+                            &server->keyboard_mods_latched,
+                            &server->keyboard_mods_locked,
+                            &server->keyboard_group);
+}
+
+static bool keyboard_build_pressed_array(
+    const struct nb_wayland_server *server,
+    struct wl_array *keys)
+{
+    size_t index;
+
+    wl_array_init(keys);
+    for (index = 0; index < NB_WAYLAND_KEY_CAPACITY; ++index) {
+        uint32_t *entry;
+
+        if (!server->keyboard_keys[index]) {
+            continue;
+        }
+        entry = wl_array_add(keys, sizeof(*entry));
+        if (entry == NULL) {
+            wl_array_release(keys);
+            return false;
+        }
+        *entry = (uint32_t)index;
+    }
+    return true;
+}
+
+static void keyboard_send_modifiers_to_client(
+    struct nb_wayland_server *server,
+    struct wl_client *client,
+    uint32_t serial)
+{
+    struct nb_wayland_keyboard_resource *keyboard;
+
+    if (client == NULL) {
+        return;
+    }
+    wl_list_for_each(keyboard, &server->keyboard_resources, link) {
+        if (keyboard_resource_belongs_to_client(keyboard, client)) {
+            wl_keyboard_send_modifiers(keyboard->resource,
+                                       serial,
+                                       server->keyboard_mods_depressed,
+                                       server->keyboard_mods_latched,
+                                       server->keyboard_mods_locked,
+                                       server->keyboard_group);
+        }
+    }
+}
+
+static bool keyboard_change_focus(struct nb_wayland_server *server,
+                                  struct nb_wayland_surface *new_focus)
+{
+    struct nb_wayland_surface *old_focus = server->keyboard_focus;
+    struct wl_client *old_client = NULL;
+    struct wl_client *new_client = NULL;
+    struct nb_wayland_keyboard_resource *keyboard;
+    struct wl_array keys;
+    uint32_t leave_serial = 0;
+    uint32_t enter_serial = 0;
+
+    if (new_focus != NULL &&
+        (new_focus->window == NB_WINDOW_ID_NONE ||
+         new_focus->surface_resource == NULL || new_focus->pixels == NULL)) {
+        new_focus = NULL;
+    }
+    if (old_focus == new_focus) {
+        return true;
+    }
+    if (server->destroying) {
+        server->keyboard_focus = new_focus;
+        return true;
+    }
+    if (new_focus != NULL &&
+        !keyboard_build_pressed_array(server, &keys)) {
+        wl_client_post_no_memory(
+            wl_resource_get_client(new_focus->surface_resource));
+        return false;
+    }
+
+    if (old_focus != NULL && old_focus->surface_resource != NULL) {
+        old_client = wl_resource_get_client(old_focus->surface_resource);
+        leave_serial = wl_display_next_serial(server->display);
+    }
+    if (new_focus != NULL) {
+        new_client = wl_resource_get_client(new_focus->surface_resource);
+        enter_serial = wl_display_next_serial(server->display);
+    }
+    wl_list_for_each(keyboard, &server->keyboard_resources, link) {
+        if (old_client != NULL &&
+            keyboard_resource_belongs_to_client(keyboard, old_client)) {
+            wl_keyboard_send_leave(keyboard->resource,
+                                   leave_serial,
+                                   old_focus->surface_resource);
+        }
+    }
+
+    server->keyboard_focus = new_focus;
+    if (new_focus != NULL) {
+        wl_list_for_each(keyboard, &server->keyboard_resources, link) {
+            if (keyboard_resource_belongs_to_client(keyboard, new_client)) {
+                wl_keyboard_send_enter(keyboard->resource,
+                                       enter_serial,
+                                       new_focus->surface_resource,
+                                       &keys);
+            }
+        }
+        keyboard_send_modifiers_to_client(server,
+                                          new_client,
+                                          enter_serial);
+        wl_array_release(&keys);
+    }
+    return true;
+}
+
+static void clear_surface_keyboard_state(
+    struct nb_wayland_surface *surface,
+    bool send_events)
+{
+    struct nb_wayland_server *server = surface->server;
+
+    if (server->keyboard_focus != surface) {
+        return;
+    }
+    if (send_events) {
+        (void)keyboard_change_focus(server, NULL);
+    } else {
+        server->keyboard_focus = NULL;
+    }
+}
+
+static bool initialize_keyboard_state(struct nb_wayland_server *server)
+{
+    server->xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    if (server->xkb_context == NULL) {
+        return false;
+    }
+    server->xkb_keymap = xkb_keymap_new_from_names(
+        server->xkb_context, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS);
+    if (server->xkb_keymap == NULL) {
+        return false;
+    }
+    server->xkb_state = xkb_state_new(server->xkb_keymap);
+    if (server->xkb_state == NULL) {
+        return false;
+    }
+    server->keymap_text = xkb_keymap_get_as_string(
+        server->xkb_keymap, XKB_KEYMAP_FORMAT_TEXT_V1);
+    if (server->keymap_text == NULL) {
+        return false;
+    }
+    server->keymap_size = strlen(server->keymap_text) + 1;
+    if (server->keymap_size > UINT32_MAX) {
+        return false;
+    }
+    keyboard_store_modifiers(server);
+    return true;
+}
+
+static void destroy_keyboard_state(struct nb_wayland_server *server)
+{
+    free(server->keymap_text);
+    server->keymap_text = NULL;
+    if (server->xkb_state != NULL) {
+        xkb_state_unref(server->xkb_state);
+    }
+    server->xkb_state = NULL;
+    if (server->xkb_keymap != NULL) {
+        xkb_keymap_unref(server->xkb_keymap);
+    }
+    server->xkb_keymap = NULL;
+    if (server->xkb_context != NULL) {
+        xkb_context_unref(server->xkb_context);
+    }
+    server->xkb_context = NULL;
 }
 
 static wl_fixed_t pointer_fixed_coordinate(int desktop_coordinate,
@@ -433,10 +816,14 @@ static void clear_surface_pointer_state(struct nb_wayland_surface *surface,
 }
 
 static void unmap_surface(struct nb_wayland_surface *surface,
-                          bool send_pointer_events)
+                          bool send_client_events)
 {
     if (surface->window != NB_WINDOW_ID_NONE) {
-        clear_surface_pointer_state(surface, send_pointer_events);
+        if (send_client_events) {
+            surface_send_output_membership(surface, false);
+        }
+        clear_surface_keyboard_state(surface, send_client_events);
+        clear_surface_pointer_state(surface, send_client_events);
         (void)nb_shell_destroy_window(surface->server->shell,
                                       surface->window);
         surface->window = NB_WINDOW_ID_NONE;
@@ -680,6 +1067,7 @@ static void map_surface(struct nb_wayland_surface *surface)
                                             surface->server->menu_model);
     if (surface->window != NB_WINDOW_ID_NONE) {
         ++surface->server->next_window_position;
+        surface_send_output_membership(surface, true);
     }
 }
 
@@ -1191,15 +1579,148 @@ static void seat_get_pointer(struct wl_client *client,
     }
 }
 
+static int create_keymap_file(const struct nb_wayland_server *server)
+{
+    char path[] = "/tmp/nixbench-keymap-XXXXXX";
+    size_t written = 0;
+    int fd = mkstemp(path);
+
+    if (fd < 0) {
+        return -1;
+    }
+    if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0 || unlink(path) != 0) {
+        goto error;
+    }
+    while (written < server->keymap_size) {
+        const ssize_t result = write(fd,
+                                     server->keymap_text + written,
+                                     server->keymap_size - written);
+
+        if (result < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            goto error;
+        }
+        if (result == 0) {
+            errno = EIO;
+            goto error;
+        }
+        written += (size_t)result;
+    }
+    if (lseek(fd, 0, SEEK_SET) < 0) {
+        goto error;
+    }
+    return fd;
+
+error:
+    {
+        const int saved_errno = errno;
+
+        (void)unlink(path);
+        (void)close(fd);
+        errno = saved_errno;
+    }
+    return -1;
+}
+
+static void keyboard_resource_destroyed(struct wl_resource *resource)
+{
+    struct nb_wayland_keyboard_resource *keyboard =
+        wl_resource_get_user_data(resource);
+
+    if (keyboard == NULL) {
+        return;
+    }
+    keyboard->resource = NULL;
+    wl_list_remove(&keyboard->link);
+    wl_list_init(&keyboard->link);
+    free(keyboard);
+}
+
+static void keyboard_release(struct wl_client *client,
+                             struct wl_resource *resource)
+{
+    (void)client;
+    wl_resource_destroy(resource);
+}
+
+static const struct wl_keyboard_interface keyboard_implementation = {
+    .release = keyboard_release
+};
+
 static void seat_get_keyboard(struct wl_client *client,
                               struct wl_resource *resource,
                               uint32_t id)
 {
-    (void)client;
-    (void)id;
-    wl_resource_post_error(resource,
-                           WL_SEAT_ERROR_MISSING_CAPABILITY,
-                           "NixBench seat has no keyboard capability");
+    struct nb_wayland_server *server =
+        wl_resource_get_user_data(resource);
+    struct nb_wayland_keyboard_resource *keyboard =
+        calloc(1, sizeof(*keyboard));
+    int keymap_fd;
+
+    if (keyboard == NULL) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    keyboard->server = server;
+    keyboard->resource = wl_resource_create(client,
+                                             &wl_keyboard_interface,
+                                             wl_resource_get_version(resource),
+                                             id);
+    if (keyboard->resource == NULL) {
+        free(keyboard);
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_list_insert(&server->keyboard_resources, &keyboard->link);
+    wl_resource_set_implementation(keyboard->resource,
+                                   &keyboard_implementation,
+                                   keyboard,
+                                   keyboard_resource_destroyed);
+
+    keymap_fd = create_keymap_file(server);
+    if (keymap_fd < 0) {
+        wl_client_post_implementation_error(
+            client, "NixBench could not publish its keyboard keymap");
+        return;
+    }
+    wl_keyboard_send_keymap(keyboard->resource,
+                            WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1,
+                            keymap_fd,
+                            (uint32_t)server->keymap_size);
+    (void)close(keymap_fd);
+    if (wl_resource_get_version(keyboard->resource) >=
+        WL_KEYBOARD_REPEAT_INFO_SINCE_VERSION) {
+        wl_keyboard_send_repeat_info(
+            keyboard->resource,
+            NB_WAYLAND_KEYBOARD_REPEAT_RATE,
+            NB_WAYLAND_KEYBOARD_REPEAT_DELAY);
+    }
+
+    if (server->keyboard_focus != NULL &&
+        server->keyboard_focus->surface_resource != NULL &&
+        wl_resource_get_client(
+            server->keyboard_focus->surface_resource) == client) {
+        struct wl_array keys;
+        const uint32_t serial = wl_display_next_serial(server->display);
+
+        if (!keyboard_build_pressed_array(server, &keys)) {
+            wl_client_post_no_memory(client);
+            return;
+        }
+        wl_keyboard_send_enter(keyboard->resource,
+                               serial,
+                               server->keyboard_focus->surface_resource,
+                               &keys);
+        wl_keyboard_send_modifiers(keyboard->resource,
+                                   serial,
+                                   server->keyboard_mods_depressed,
+                                   server->keyboard_mods_latched,
+                                   server->keyboard_mods_locked,
+                                   server->keyboard_group);
+        wl_array_release(&keys);
+    }
 }
 
 static void seat_get_touch(struct wl_client *client,
@@ -1246,10 +1767,12 @@ static void bind_seat(struct wl_client *client,
                                    &seat_implementation,
                                    data,
                                    NULL);
-    wl_seat_send_capabilities(resource, WL_SEAT_CAPABILITY_POINTER);
     if (wl_resource_get_version(resource) >= WL_SEAT_NAME_SINCE_VERSION) {
         wl_seat_send_name(resource, "nixbench-seat0");
     }
+    wl_seat_send_capabilities(resource,
+                              WL_SEAT_CAPABILITY_POINTER |
+                                  WL_SEAT_CAPABILITY_KEYBOARD);
 }
 
 static void positioner_destroy(struct wl_client *client,
@@ -1776,12 +2299,14 @@ static void bind_xdg_wm_base(struct wl_client *client,
 struct nb_wayland_server *nb_wayland_server_create(
     struct nb_shell *shell,
     nb_menu_source_id menu_source,
-    const struct nb_menu_model *menu_model)
+    const struct nb_menu_model *menu_model,
+    int output_width,
+    int output_height)
 {
     struct nb_wayland_server *server;
 
     if (shell == NULL || menu_source == NB_MENU_SOURCE_NONE ||
-        menu_model == NULL) {
+        menu_model == NULL || output_width <= 0 || output_height <= 0) {
         return NULL;
     }
 
@@ -1792,9 +2317,21 @@ struct nb_wayland_server *nb_wayland_server_create(
     server->shell = shell;
     server->menu_source = menu_source;
     server->menu_model = menu_model;
+    server->output_width = output_width;
+    server->output_height = output_height;
+    server->output_refresh_millihertz =
+        NB_WAYLAND_DEFAULT_REFRESH_MILLIHERTZ;
+    wl_list_init(&server->output_resources);
     wl_list_init(&server->pointer_resources);
+    wl_list_init(&server->keyboard_resources);
+    if (!initialize_keyboard_state(server)) {
+        destroy_keyboard_state(server);
+        free(server);
+        return NULL;
+    }
     server->display = wl_display_create();
     if (server->display == NULL) {
+        destroy_keyboard_state(server);
         free(server);
         return NULL;
     }
@@ -1802,6 +2339,7 @@ struct nb_wayland_server *nb_wayland_server_create(
     if (server->event_loop == NULL ||
         wl_display_init_shm(server->display) != 0) {
         wl_display_destroy(server->display);
+        destroy_keyboard_state(server);
         free(server);
         return NULL;
     }
@@ -1811,6 +2349,11 @@ struct nb_wayland_server *nb_wayland_server_create(
         NB_WAYLAND_COMPOSITOR_VERSION,
         server,
         bind_compositor);
+    server->output_global = wl_global_create(server->display,
+                                             &wl_output_interface,
+                                             NB_WAYLAND_OUTPUT_VERSION,
+                                             server,
+                                             bind_output);
     server->seat_global = wl_global_create(server->display,
                                            &wl_seat_interface,
                                            NB_WAYLAND_SEAT_VERSION,
@@ -1823,9 +2366,11 @@ struct nb_wayland_server *nb_wayland_server_create(
         server,
         bind_xdg_wm_base);
     if (server->compositor_global == NULL ||
+        server->output_global == NULL ||
         server->seat_global == NULL ||
         server->xdg_wm_base_global == NULL) {
         wl_display_destroy(server->display);
+        destroy_keyboard_state(server);
         free(server);
         return NULL;
     }
@@ -1855,6 +2400,7 @@ void nb_wayland_server_destroy(struct nb_wayland_server *server)
         memset(surface, 0, sizeof(*surface));
     }
     wl_display_destroy(server->display);
+    destroy_keyboard_state(server);
     free(server);
 }
 
@@ -1901,6 +2447,35 @@ bool nb_wayland_server_dispatch(struct nb_wayland_server *server)
         return false;
     }
     wl_display_flush_clients(server->display);
+    return true;
+}
+
+bool nb_wayland_server_set_output_size(struct nb_wayland_server *server,
+                                       int width,
+                                       int height)
+{
+    struct nb_wayland_output_resource *output;
+
+    if (server == NULL || server->destroying || width <= 0 || height <= 0) {
+        return false;
+    }
+    if (server->output_width == width && server->output_height == height) {
+        return true;
+    }
+    server->output_width = width;
+    server->output_height = height;
+    wl_list_for_each(output, &server->output_resources, link) {
+        wl_output_send_mode(output->resource,
+                            WL_OUTPUT_MODE_CURRENT |
+                                WL_OUTPUT_MODE_PREFERRED,
+                            width,
+                            height,
+                            server->output_refresh_millihertz);
+        if (wl_resource_get_version(output->resource) >=
+            WL_OUTPUT_DONE_SINCE_VERSION) {
+            wl_output_send_done(output->resource);
+        }
+    }
     return true;
 }
 
@@ -2136,6 +2711,161 @@ nb_window_id nb_wayland_server_pointer_grab_window(
         return NB_WINDOW_ID_NONE;
     }
     return server->pointer_grab->window;
+}
+
+bool nb_wayland_server_keyboard_focus(
+    struct nb_wayland_server *server,
+    nb_window_id window)
+{
+    struct nb_wayland_surface *surface;
+
+    if (server == NULL || server->destroying) {
+        return false;
+    }
+    surface = find_surface_by_window(server, window);
+    if (surface != NULL &&
+        (surface->role != NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL ||
+         surface->pixels == NULL)) {
+        surface = NULL;
+    }
+    return keyboard_change_focus(server, surface);
+}
+
+static bool keyboard_wire_keycode(
+    const struct nb_wayland_server *server,
+    const char *xkb_key_name,
+    uint32_t *wire_keycode)
+{
+    xkb_keycode_t xkb_keycode;
+
+    if (xkb_key_name == NULL || xkb_key_name[0] == '\0') {
+        return false;
+    }
+    xkb_keycode = xkb_keymap_key_by_name(server->xkb_keymap,
+                                         xkb_key_name);
+    if (xkb_keycode == XKB_KEYCODE_INVALID || xkb_keycode < 8 ||
+        xkb_keycode - 8 >= NB_WAYLAND_KEY_CAPACITY) {
+        return false;
+    }
+    *wire_keycode = (uint32_t)(xkb_keycode - 8);
+    return true;
+}
+
+static void keyboard_send_key_to_focus(
+    struct nb_wayland_server *server,
+    uint32_t serial,
+    uint32_t milliseconds,
+    uint32_t wire_keycode,
+    uint32_t state)
+{
+    struct nb_wayland_keyboard_resource *keyboard;
+    struct wl_client *client;
+
+    if (server->keyboard_focus == NULL ||
+        server->keyboard_focus->surface_resource == NULL) {
+        return;
+    }
+    client = wl_resource_get_client(
+        server->keyboard_focus->surface_resource);
+    wl_list_for_each(keyboard, &server->keyboard_resources, link) {
+        if (keyboard_resource_belongs_to_client(keyboard, client)) {
+            wl_keyboard_send_key(keyboard->resource,
+                                 serial,
+                                 milliseconds,
+                                 wire_keycode,
+                                 state);
+        }
+    }
+}
+
+static void keyboard_update_wire_key(
+    struct nb_wayland_server *server,
+    uint32_t wire_keycode,
+    uint32_t milliseconds,
+    bool pressed)
+{
+    struct wl_client *focused_client = NULL;
+    uint32_t depressed;
+    uint32_t latched;
+    uint32_t locked;
+    uint32_t group;
+    const uint32_t serial = wl_display_next_serial(server->display);
+
+    keyboard_send_key_to_focus(
+        server,
+        serial,
+        milliseconds,
+        wire_keycode,
+        pressed ? WL_KEYBOARD_KEY_STATE_PRESSED
+                : WL_KEYBOARD_KEY_STATE_RELEASED);
+    server->keyboard_keys[wire_keycode] = pressed;
+    (void)xkb_state_update_key(
+        server->xkb_state,
+        (xkb_keycode_t)(wire_keycode + 8),
+        pressed ? XKB_KEY_DOWN : XKB_KEY_UP);
+    keyboard_read_modifiers(server,
+                            &depressed,
+                            &latched,
+                            &locked,
+                            &group);
+    if (depressed == server->keyboard_mods_depressed &&
+        latched == server->keyboard_mods_latched &&
+        locked == server->keyboard_mods_locked &&
+        group == server->keyboard_group) {
+        return;
+    }
+    server->keyboard_mods_depressed = depressed;
+    server->keyboard_mods_latched = latched;
+    server->keyboard_mods_locked = locked;
+    server->keyboard_group = group;
+    if (server->keyboard_focus != NULL &&
+        server->keyboard_focus->surface_resource != NULL) {
+        focused_client = wl_resource_get_client(
+            server->keyboard_focus->surface_resource);
+    }
+    keyboard_send_modifiers_to_client(server, focused_client, serial);
+}
+
+bool nb_wayland_server_keyboard_key(struct nb_wayland_server *server,
+                                    const char *xkb_key_name,
+                                    uint32_t milliseconds,
+                                    bool pressed)
+{
+    uint32_t wire_keycode;
+
+    if (server == NULL || server->destroying || xkb_key_name == NULL) {
+        return false;
+    }
+    if (!keyboard_wire_keycode(server, xkb_key_name, &wire_keycode)) {
+        return true;
+    }
+    if (server->keyboard_keys[wire_keycode] == pressed) {
+        return true;
+    }
+    keyboard_update_wire_key(server,
+                             wire_keycode,
+                             milliseconds,
+                             pressed);
+    return true;
+}
+
+void nb_wayland_server_keyboard_cancel(struct nb_wayland_server *server,
+                                       uint32_t milliseconds)
+{
+    size_t index;
+
+    if (server == NULL || server->destroying) {
+        return;
+    }
+    for (index = 0; index < NB_WAYLAND_KEY_CAPACITY; ++index) {
+        if (server->keyboard_keys[index]) {
+            keyboard_update_wire_key(server,
+                                     (uint32_t)index,
+                                     milliseconds,
+                                     false);
+        }
+    }
+    (void)keyboard_change_focus(server, NULL);
 }
 
 bool nb_wayland_server_request_close(struct nb_wayland_server *server,
