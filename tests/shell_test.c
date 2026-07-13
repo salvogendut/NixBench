@@ -279,6 +279,64 @@ static void test_window_capture_crosses_bar(void)
     CHECK(!nb_shell_has_pointer_interaction(&fixture.shell));
 }
 
+static void test_pointer_target_query(void)
+{
+    const struct nb_rect viewport = {0, 0, 800, 600};
+    struct fixture fixture = make_fixture();
+    struct nb_shell_pointer_target target;
+    const nb_window_id active_before =
+        nb_desktop_active_window_id(&fixture.shell.desktop);
+    const enum nb_shell_pointer_owner owner_before =
+        fixture.shell.pointer_owner;
+
+    target = nb_shell_pointer_target_at(&fixture.shell,
+                                        180,
+                                        150,
+                                        viewport);
+    CHECK(target.window == fixture.b);
+    CHECK(target.hit == NB_WINDOW_HIT_CONTENT);
+
+    target = nb_shell_pointer_target_at(&fixture.shell,
+                                        200,
+                                        100,
+                                        viewport);
+    CHECK(target.window == fixture.b);
+    CHECK(target.hit == NB_WINDOW_HIT_TITLE);
+
+    target = nb_shell_pointer_target_at(&fixture.shell,
+                                        760,
+                                        550,
+                                        viewport);
+    CHECK(target.window == NB_WINDOW_ID_NONE);
+    CHECK(target.hit == NB_WINDOW_HIT_NONE);
+
+    target = nb_shell_pointer_target_at(&fixture.shell,
+                                        10,
+                                        10,
+                                        viewport);
+    CHECK(target.window == NB_WINDOW_ID_NONE);
+    CHECK(target.hit == NB_WINDOW_HIT_NONE);
+
+    CHECK(nb_desktop_active_window_id(&fixture.shell.desktop) ==
+          active_before);
+    CHECK(fixture.shell.pointer_owner == owner_before);
+    CHECK(!nb_menu_is_open(&fixture.shell.menu));
+
+    CHECK(nb_shell_menu_key_press(&fixture.shell,
+                                  NB_MENU_KEY_TOGGLE).type ==
+          NB_SHELL_ACTION_NONE);
+    CHECK(nb_menu_is_open(&fixture.shell.menu));
+    target = nb_shell_pointer_target_at(&fixture.shell,
+                                        180,
+                                        150,
+                                        viewport);
+    CHECK(target.window == NB_WINDOW_ID_NONE);
+    CHECK(target.hit == NB_WINDOW_HIT_NONE);
+    CHECK(nb_menu_is_open(&fixture.shell.menu));
+    CHECK(nb_desktop_active_window_id(&fixture.shell.desktop) ==
+          active_before);
+}
+
 static void test_close_and_keyboard_actions(void)
 {
     const struct nb_rect viewport = {0, 0, 800, 600};
@@ -346,6 +404,7 @@ int main(void)
     test_menu_routing_and_actions();
     test_shared_application_menu_source();
     test_window_capture_crosses_bar();
+    test_pointer_target_query();
     test_close_and_keyboard_actions();
     test_cancel_and_clamp();
 

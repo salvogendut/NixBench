@@ -58,13 +58,19 @@ toolkits while NixBench owns window management and composition:
 - Moving the outer display from SDL/Xorg to NetBSD KMS changes the physical
   output backend, not the client protocol or application toolkit.
 
-The current implementation is only the first protocol slice. It advertises
-`wl_compositor`, `wl_shm`, and stable `xdg_wm_base`; accepts ARGB/XRGB shared
-memory buffers; and maps an `xdg_toplevel` into an internal NixBench window.
-The compositor copies committed buffers before releasing them, so clients and
-the shell do not share mutable rendering state. A socket-pair protocol test
-exercises configure/acknowledge, mapping, pixels, frame completion, close, and
-unmap without requiring a running display server.
+The current implementation is an early protocol slice. It advertises
+`wl_compositor`, `wl_shm`, a pointer-only `wl_seat`, and stable `xdg_wm_base`;
+accepts ARGB/XRGB shared-memory buffers; and maps an `xdg_toplevel` into an
+internal NixBench window. SDL pointer motion and buttons are routed to client
+content with surface-coordinate scaling and an implicit button grab. The
+compositor copies committed buffers before releasing them, so clients and the
+shell do not share mutable rendering state.
+
+A standalone `nixbench-wayland-demo` client renders through `wl_shm` and
+exercises pointer interaction with a beveled toggle control. The socket-pair
+protocol test covers configure/acknowledge, mapping, pixels, frame completion,
+seat discovery, scaled pointer events, grabs, focus cleanup, close, and unmap
+without requiring a running display server.
 
 X.org is a transitional development platform, not the final runtime
 architecture. It lets the project validate the shell, interaction model, and
@@ -115,12 +121,19 @@ retain the exact focused-window context, and Quit NixInfo closes only NixInfo.
 Application-specific drawing uses a clipped content-rendering seam that can
 now be supplied by the experimental Wayland shared-memory surface path.
 
+The separate `nixbench-wayland-demo` executable is the first out-of-process
+protocol consumer. It creates an `xdg_toplevel`, manages release-aware
+shared-memory buffers and frame callbacks, and reacts to compositor-delivered
+pointer events.
+
 Neither the in-process event/request contract nor the Wayland integration is a
-stable public API yet. The Wayland slice does not currently advertise seats or
-outputs and has no client input, popups, subsurfaces, clipboard, accelerated
-buffers, resize negotiation, process supervision, or application-supplied
-global menus. General GTK/SDL applications are therefore not expected to be
-usable yet. NixBench also does not yet operate directly on the NetBSD console.
+stable public API yet. The Wayland slice currently provides pointer input only:
+it does not advertise outputs or keyboard/touch capabilities and has no
+pointer-axis scrolling, client cursor rendering, buffer scale/transform or
+input-region handling, popups, subsurfaces, clipboard, accelerated buffers,
+resize negotiation, process supervision, or application-supplied global menus.
+General GTK/SDL applications are therefore not expected to be usable yet.
+NixBench also does not yet operate directly on the NetBSD console.
 
 The initial chrome uses an original palette and geometry while exploring a
 classic beveled Workbench/AROS-inspired vocabulary. AROS was studied as a design
@@ -133,8 +146,9 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
 
 - **NetBSD 10.1 (GENERIC), amd64** with SDL3 3.4.2, Wayland, and
   wayland-protocols from pkgsrc: default dependency discovery, generated
-  xdg-shell bindings, all 13 tests, and an X11-hosted startup with a published
-  nested Wayland socket were confirmed working on July 13, 2026.
+  xdg-shell bindings, all 15 tests, and an X11-hosted startup with a published
+  nested Wayland socket and the demo client's first rendered frame were
+  confirmed working on July 13, 2026.
 
 This is a manual target-system validation; automated NetBSD testing remains
 future work.
@@ -148,12 +162,15 @@ Required development dependencies:
 - SDL 3.2.0 or newer, including its development files
 - A video backend supported by SDL3; Xorg is the initial NetBSD host
 
-The experimental client-surface path additionally uses the Wayland server
-library and scanner plus the stable `xdg-shell.xml` from `wayland-protocols`.
-Configuration defaults to `-DNIXBENCH_WAYLAND=AUTO`: it enables the feature
-when all components are found and otherwise builds the SDL-only desktop. Use
-`-DNIXBENCH_WAYLAND=ON` to require it, or `OFF` to omit it explicitly. NetBSD's
-pkgsrc `wayland` and `wayland-protocols` packages provide these components; no
+The compositor path additionally uses the Wayland server library and scanner
+plus the stable `xdg-shell.xml` from `wayland-protocols`. The standalone demo
+also requires the Wayland client development library. Configuration defaults
+to `-DNIXBENCH_WAYLAND=AUTO`: it enables the feature when all server components
+are found and otherwise builds the SDL-only desktop. Use
+`-DNIXBENCH_WAYLAND=ON` to require it, or `OFF` to omit it explicitly.
+`NIXBENCH_BUILD_EXAMPLES` defaults to `ON`; use
+`-DNIXBENCH_BUILD_EXAMPLES=OFF` to omit experimental clients. NetBSD's pkgsrc
+`wayland` and `wayland-protocols` packages provide these components; no
 `pkg-config` executable is required by this build.
 
 SDL3 is available from NetBSD pkgsrc as `devel/SDL3`. Configure, build, and test
@@ -202,9 +219,20 @@ install -d -m 700 "$HOME/.nixbench-runtime"
 XDG_RUNTIME_DIR="$HOME/.nixbench-runtime" ./build/nixbench
 ```
 
-This socket is currently intended for the protocol test and small experimental
-clients. Toolkit compatibility requires the additional protocol layers listed
-above.
+In another terminal, use the display name logged by NixBench (normally
+`wayland-0`) to start the standalone client:
+
+```sh
+XDG_RUNTIME_DIR="$HOME/.nixbench-runtime" \
+WAYLAND_DISPLAY=wayland-0 \
+./build/nixbench-wayland-demo
+```
+
+Clicking the centered control toggles its color and indicator. The active
+client window also supplies the temporary Application > Close Application menu
+in NixBench's global bar. Pass `--exit-after-first-frame` to the demo for a
+noninteractive rendering smoke run. Toolkit compatibility still requires the
+additional protocol layers listed above.
 
 ## Contributing
 

@@ -36,6 +36,11 @@ struct nb_shell_action {
     nb_menu_command menu_command;
 };
 
+struct nb_shell_pointer_target {
+    nb_window_id window;
+    enum nb_window_hit hit;
+};
+
 struct nb_shell_menu_binding {
     nb_window_id window;
     nb_menu_source_id menu_source;
@@ -70,6 +75,15 @@ bool nb_shell_update_menu_source(struct nb_shell *shell,
                                  nb_menu_source_id menu_source,
                                  const struct nb_menu_model *menu_model);
 
+/*
+ * Return the frontmost shell window beneath a point without changing focus,
+ * stacking, menus, or pointer state. Menus and the menu bar mask windows.
+ */
+struct nb_shell_pointer_target nb_shell_pointer_target_at(
+    const struct nb_shell *shell,
+    int x,
+    int y,
+    struct nb_rect viewport);
 bool nb_shell_pointer_down(struct nb_shell *shell,
                            int x,
                            int y,

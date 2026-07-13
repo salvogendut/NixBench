@@ -206,6 +206,42 @@ bool nb_shell_update_menu_source(struct nb_shell *shell,
     return found;
 }
 
+struct nb_shell_pointer_target nb_shell_pointer_target_at(
+    const struct nb_shell *shell,
+    int x,
+    int y,
+    struct nb_rect viewport)
+{
+    struct nb_shell_pointer_target target = {
+        NB_WINDOW_ID_NONE,
+        NB_WINDOW_HIT_NONE
+    };
+    size_t stack_index;
+
+    if (nb_menu_is_open(&shell->menu) ||
+        nb_menu_hit_test(&shell->menu, x, y, viewport).kind !=
+            NB_MENU_HIT_NONE) {
+        return target;
+    }
+
+    stack_index = nb_desktop_window_count(&shell->desktop);
+    while (stack_index > 0) {
+        const size_t current = --stack_index;
+        const struct nb_window *window =
+            nb_desktop_window_at(&shell->desktop, current);
+        const enum nb_window_hit hit =
+            nb_window_hit_test(window, x, y);
+
+        if (hit != NB_WINDOW_HIT_NONE) {
+            target.window = nb_desktop_window_id_at(&shell->desktop,
+                                                    current);
+            target.hit = hit;
+            return target;
+        }
+    }
+    return target;
+}
+
 bool nb_shell_pointer_down(struct nb_shell *shell,
                            int x,
                            int y,

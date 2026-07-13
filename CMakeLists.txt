@@ -12,6 +12,12 @@ include(GNUInstallDirs)
 
 find_package(SDL3 3.2.0 CONFIG REQUIRED COMPONENTS SDL3)
 
+option(
+  NIXBENCH_BUILD_EXAMPLES
+  "Build experimental NixBench client applications"
+  ON
+)
+
 set(
   NIXBENCH_WAYLAND "AUTO"
   CACHE STRING "Build the experimental Wayland server (AUTO, ON, or OFF)"
@@ -179,6 +185,31 @@ if(NIXBENCH_WAYLAND_ENABLED)
   nixbench_configure_c_target(nixbench_wayland)
 endif()
 
+set(NIXBENCH_WAYLAND_CLIENT_AVAILABLE FALSE)
+if(NIXBENCH_WAYLAND_ENABLED)
+  find_path(
+    NIXBENCH_WAYLAND_CLIENT_INCLUDE_DIR
+    NAMES wayland-client.h
+    PATH_SUFFIXES include
+  )
+  find_library(
+    NIXBENCH_WAYLAND_CLIENT_LIBRARY
+    NAMES wayland-client
+    PATH_SUFFIXES lib
+  )
+  if(
+    NIXBENCH_WAYLAND_CLIENT_INCLUDE_DIR
+    AND NIXBENCH_WAYLAND_CLIENT_LIBRARY
+  )
+    set(NIXBENCH_WAYLAND_CLIENT_AVAILABLE TRUE)
+  else()
+    message(
+      STATUS
+      "Wayland client development files not found; client programs disabled"
+    )
+  endif()
+endif()
+
 add_library(
   nixbench_model STATIC
   src/application.c
@@ -228,6 +259,49 @@ target_link_libraries(nixbench PRIVATE nixbench_model)
 
 install(TARGETS nixbench RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
+set(NIXBENCH_WAYLAND_DEMO_AVAILABLE FALSE)
+if(
+  NIXBENCH_WAYLAND_ENABLED
+  AND NIXBENCH_WAYLAND_CLIENT_AVAILABLE
+  AND NIXBENCH_BUILD_EXAMPLES
+)
+  set(NIXBENCH_WAYLAND_DEMO_AVAILABLE TRUE)
+endif()
+
+if(BUILD_TESTING OR NIXBENCH_WAYLAND_DEMO_AVAILABLE)
+  add_library(
+    nixbench_wayland_demo_ui STATIC
+    examples/wayland_demo_ui.c
+  )
+  target_include_directories(
+    nixbench_wayland_demo_ui
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/examples"
+  )
+  nixbench_configure_c_target(nixbench_wayland_demo_ui)
+endif()
+
+if(NIXBENCH_WAYLAND_DEMO_AVAILABLE)
+  add_executable(
+    nixbench-wayland-demo
+    examples/wayland_demo.c
+    "${NIXBENCH_XDG_SHELL_PRIVATE_CODE}"
+  )
+  add_dependencies(nixbench-wayland-demo nixbench_wayland_protocol)
+  target_include_directories(
+    nixbench-wayland-demo
+    PRIVATE
+      "${NIXBENCH_WAYLAND_GENERATED_DIR}"
+      "${NIXBENCH_WAYLAND_CLIENT_INCLUDE_DIR}"
+  )
+  target_link_libraries(
+    nixbench-wayland-demo
+    PRIVATE
+      nixbench_wayland_demo_ui
+      "${NIXBENCH_WAYLAND_CLIENT_LIBRARY}"
+  )
+  nixbench_configure_c_target(nixbench-wayland-demo)
+endif()
+
 if(BUILD_TESTING)
   add_executable(nixbench_desktop_tests tests/desktop_test.c)
   target_link_libraries(nixbench_desktop_tests PRIVATE nixbench_model)
@@ -275,44 +349,33 @@ if(BUILD_TESTING)
   )
   nixbench_configure_c_target(nixbench_renderer_tests)
 
-  if(NIXBENCH_WAYLAND_ENABLED)
-    find_path(
-      NIXBENCH_WAYLAND_CLIENT_INCLUDE_DIR
-      NAMES wayland-client.h
-      PATH_SUFFIXES include
-    )
-    find_library(
-      NIXBENCH_WAYLAND_CLIENT_LIBRARY
-      NAMES wayland-client
-      PATH_SUFFIXES lib
-    )
+  add_executable(
+    nixbench_wayland_demo_ui_tests
+    tests/wayland_demo_ui_test.c
+  )
+  target_link_libraries(
+    nixbench_wayland_demo_ui_tests
+    PRIVATE nixbench_wayland_demo_ui
+  )
+  nixbench_configure_c_target(nixbench_wayland_demo_ui_tests)
 
-    if(
-      NIXBENCH_WAYLAND_CLIENT_INCLUDE_DIR
-      AND NIXBENCH_WAYLAND_CLIENT_LIBRARY
+  if(NIXBENCH_WAYLAND_CLIENT_AVAILABLE)
+    add_executable(nixbench_wayland_tests tests/wayland_test.c)
+    add_dependencies(nixbench_wayland_tests nixbench_wayland_protocol)
+    target_include_directories(
+      nixbench_wayland_tests
+      PRIVATE
+        "${NIXBENCH_WAYLAND_GENERATED_DIR}"
+        "${NIXBENCH_WAYLAND_CLIENT_INCLUDE_DIR}"
     )
-      add_executable(nixbench_wayland_tests tests/wayland_test.c)
-      add_dependencies(nixbench_wayland_tests nixbench_wayland_protocol)
-      target_include_directories(
-        nixbench_wayland_tests
-        PRIVATE
-          "${NIXBENCH_WAYLAND_CLIENT_INCLUDE_DIR}"
-          "${NIXBENCH_WAYLAND_GENERATED_DIR}"
-      )
-      target_link_libraries(
-        nixbench_wayland_tests
-        PRIVATE
-          nixbench_wayland
-          "${NIXBENCH_WAYLAND_CLIENT_LIBRARY}"
-      )
-      nixbench_configure_c_target(nixbench_wayland_tests)
-      add_test(NAME nixbench.wayland.protocol COMMAND nixbench_wayland_tests)
-    else()
-      message(
-        STATUS
-        "Wayland client development files not found; protocol test disabled"
-      )
-    endif()
+    target_link_libraries(
+      nixbench_wayland_tests
+      PRIVATE
+        nixbench_wayland
+        "${NIXBENCH_WAYLAND_CLIENT_LIBRARY}"
+    )
+    nixbench_configure_c_target(nixbench_wayland_tests)
+    add_test(NAME nixbench.wayland.protocol COMMAND nixbench_wayland_tests)
   endif()
 
   add_test(NAME nixbench.desktop.model COMMAND nixbench_desktop_tests)
@@ -326,6 +389,10 @@ if(BUILD_TESTING)
     COMMAND nixbench_nixinfo_system_tests
   )
   add_test(NAME nixbench.renderer.callback COMMAND nixbench_renderer_tests)
+  add_test(
+    NAME nixbench.wayland.demo-ui
+    COMMAND nixbench_wayland_demo_ui_tests
+  )
   add_test(NAME nixbench.cli.version COMMAND nixbench --version)
   add_test(NAME nixbench.cli.help COMMAND nixbench --help)
   add_test(NAME nixbench.cli.unknown-option COMMAND nixbench --unknown-option)
@@ -335,4 +402,7 @@ if(BUILD_TESTING)
     nixbench.sdl.smoke
     PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_RENDER_DRIVER=software"
   )
+  if(NIXBENCH_WAYLAND_DEMO_AVAILABLE)
+    add_test(NAME nixbench.wayland.demo-help COMMAND nixbench-wayland-demo --help)
+  endif()
 endif()

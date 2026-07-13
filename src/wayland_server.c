@@ -12,6 +12,7 @@
 
 enum {
     NB_WAYLAND_COMPOSITOR_VERSION = 4,
+    NB_WAYLAND_SEAT_VERSION = 5,
     NB_WAYLAND_XDG_SHELL_VERSION = 1,
     NB_WAYLAND_MAX_FRAME_CALLBACKS = 16,
     NB_WAYLAND_INITIAL_CONTENT_WIDTH = 560,
@@ -22,11 +23,23 @@ enum {
     NB_WAYLAND_CASCADE_COUNT = 8
 };
 
+enum nb_wayland_surface_role {
+    NB_WAYLAND_SURFACE_ROLE_NONE,
+    NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL,
+    NB_WAYLAND_SURFACE_ROLE_CURSOR
+};
+
 struct nb_wayland_server;
+
+struct nb_wayland_pointer_resource {
+    struct nb_wayland_server *server;
+    struct wl_resource *resource;
+    struct wl_list link;
+};
 
 struct nb_wayland_surface {
     bool occupied;
-    bool role_assigned;
+    enum nb_wayland_surface_role role;
     bool configure_sent;
     bool configured;
     struct nb_wayland_server *server;
@@ -61,13 +74,27 @@ struct nb_wayland_server {
     struct wl_display *display;
     struct wl_event_loop *event_loop;
     struct wl_global *compositor_global;
+    struct wl_global *seat_global;
     struct wl_global *xdg_wm_base_global;
+    struct wl_list pointer_resources;
+    struct nb_wayland_surface *pointer_focus;
+    struct nb_wayland_surface *pointer_grab;
+    struct nb_wayland_surface *pointer_cursor;
+    struct wl_client *pointer_enter_client;
+    uint32_t pointer_enter_serial;
+    uint32_t pointer_buttons;
+    int pointer_x;
+    int pointer_y;
+    uint32_t pointer_time;
+    bool pointer_position_valid;
+    bool destroying;
     struct nb_wayland_surface surfaces[NB_WAYLAND_MAX_SURFACES];
     unsigned int next_window_position;
     char display_name[NB_WAYLAND_DISPLAY_NAME_CAPACITY];
 };
 
 static const struct wl_surface_interface surface_implementation;
+static const struct wl_pointer_interface pointer_implementation;
 static const struct xdg_surface_interface xdg_surface_implementation;
 static const struct xdg_toplevel_interface toplevel_implementation;
 
@@ -149,9 +176,267 @@ static const struct nb_wayland_surface *find_surface_by_window_const(
     return NULL;
 }
 
-static void unmap_surface(struct nb_wayland_surface *surface)
+static wl_fixed_t pointer_fixed_coordinate(int desktop_coordinate,
+                                           int content_origin,
+                                           int content_extent,
+                                           int surface_extent)
+{
+    double coordinate;
+    const double maximum = (double)INT32_MAX / 256.0;
+    const double minimum = (double)INT32_MIN / 256.0;
+
+    if (content_extent <= 0 || surface_extent <= 0) {
+        return 0;
+    }
+    coordinate = ((double)desktop_coordinate - (double)content_origin) *
+                 (double)surface_extent / (double)content_extent;
+    if (coordinate >= maximum) {
+        return INT32_MAX;
+    }
+    if (coordinate <= minimum) {
+        return INT32_MIN;
+    }
+    return wl_fixed_from_double(coordinate);
+}
+
+static bool pointer_surface_coordinates(
+    const struct nb_wayland_surface *surface,
+    int desktop_x,
+    int desktop_y,
+    wl_fixed_t *surface_x,
+    wl_fixed_t *surface_y)
+{
+    const struct nb_window *window;
+    struct nb_rect content;
+
+    if (surface == NULL || surface->window == NB_WINDOW_ID_NONE ||
+        surface->width <= 0 || surface->height <= 0 ||
+        surface->surface_resource == NULL) {
+        return false;
+    }
+    window = nb_desktop_find_window(&surface->server->shell->desktop,
+                                    surface->window);
+    if (window == NULL) {
+        return false;
+    }
+    content = nb_window_content_rect(window);
+    if (content.width <= 0 || content.height <= 0) {
+        return false;
+    }
+    *surface_x = pointer_fixed_coordinate(desktop_x,
+                                          content.x,
+                                          content.width,
+                                          surface->width);
+    *surface_y = pointer_fixed_coordinate(desktop_y,
+                                          content.y,
+                                          content.height,
+                                          surface->height);
+    return true;
+}
+
+static bool pointer_resource_belongs_to_client(
+    const struct nb_wayland_pointer_resource *pointer,
+    const struct wl_client *client)
+{
+    return pointer->resource != NULL &&
+           wl_resource_get_client(pointer->resource) == client;
+}
+
+static void pointer_send_frames_to_client(
+    struct nb_wayland_server *server,
+    struct wl_client *client)
+{
+    struct nb_wayland_pointer_resource *pointer;
+
+    if (client == NULL) {
+        return;
+    }
+    wl_list_for_each(pointer, &server->pointer_resources, link) {
+        if (pointer_resource_belongs_to_client(pointer, client) &&
+            wl_resource_get_version(pointer->resource) >=
+                WL_POINTER_FRAME_SINCE_VERSION) {
+            wl_pointer_send_frame(pointer->resource);
+        }
+    }
+}
+
+static void pointer_change_focus(struct nb_wayland_server *server,
+                                 struct nb_wayland_surface *new_focus)
+{
+    struct nb_wayland_surface *old_focus = server->pointer_focus;
+    struct wl_client *old_client = NULL;
+    struct wl_client *new_client = NULL;
+    struct nb_wayland_pointer_resource *pointer;
+    wl_fixed_t surface_x = 0;
+    wl_fixed_t surface_y = 0;
+    uint32_t leave_serial = 0;
+    uint32_t enter_serial = 0;
+
+    if (new_focus != NULL &&
+        !pointer_surface_coordinates(new_focus,
+                                     server->pointer_x,
+                                     server->pointer_y,
+                                     &surface_x,
+                                     &surface_y)) {
+        new_focus = NULL;
+    }
+    if (old_focus == new_focus) {
+        return;
+    }
+    if (server->destroying) {
+        server->pointer_focus = new_focus;
+        server->pointer_cursor = NULL;
+        server->pointer_enter_client = NULL;
+        return;
+    }
+
+    if (old_focus != NULL && old_focus->surface_resource != NULL) {
+        old_client = wl_resource_get_client(old_focus->surface_resource);
+        leave_serial = wl_display_next_serial(server->display);
+    }
+    if (new_focus != NULL && new_focus->surface_resource != NULL) {
+        new_client = wl_resource_get_client(new_focus->surface_resource);
+        enter_serial = wl_display_next_serial(server->display);
+    }
+
+    wl_list_for_each(pointer, &server->pointer_resources, link) {
+        if (old_client != NULL &&
+            pointer_resource_belongs_to_client(pointer, old_client)) {
+            wl_pointer_send_leave(pointer->resource,
+                                  leave_serial,
+                                  old_focus->surface_resource);
+        }
+    }
+
+    server->pointer_focus = new_focus;
+    server->pointer_cursor = NULL;
+    server->pointer_enter_client = new_client;
+    server->pointer_enter_serial = enter_serial;
+
+    wl_list_for_each(pointer, &server->pointer_resources, link) {
+        if (new_client != NULL &&
+            pointer_resource_belongs_to_client(pointer, new_client)) {
+            wl_pointer_send_enter(pointer->resource,
+                                  enter_serial,
+                                  new_focus->surface_resource,
+                                  surface_x,
+                                  surface_y);
+        }
+    }
+
+    if (old_client != NULL && old_client == new_client) {
+        pointer_send_frames_to_client(server, old_client);
+    } else {
+        pointer_send_frames_to_client(server, old_client);
+        pointer_send_frames_to_client(server, new_client);
+    }
+}
+
+static uint32_t pointer_protocol_button(
+    enum nb_wayland_pointer_button button)
+{
+    /* Linux evdev values mandated by the Wayland core protocol. */
+    switch (button) {
+    case NB_WAYLAND_POINTER_BUTTON_LEFT:
+        return UINT32_C(0x110);
+    case NB_WAYLAND_POINTER_BUTTON_MIDDLE:
+        return UINT32_C(0x112);
+    case NB_WAYLAND_POINTER_BUTTON_RIGHT:
+        return UINT32_C(0x111);
+    case NB_WAYLAND_POINTER_BUTTON_SIDE:
+        return UINT32_C(0x113);
+    case NB_WAYLAND_POINTER_BUTTON_EXTRA:
+        return UINT32_C(0x114);
+    case NB_WAYLAND_POINTER_BUTTON_COUNT:
+        break;
+    }
+    return 0;
+}
+
+static void pointer_send_button(struct nb_wayland_server *server,
+                                struct nb_wayland_surface *surface,
+                                uint32_t milliseconds,
+                                enum nb_wayland_pointer_button button,
+                                uint32_t state)
+{
+    struct nb_wayland_pointer_resource *pointer;
+    struct wl_client *client;
+    const uint32_t serial = wl_display_next_serial(server->display);
+    const uint32_t protocol_button = pointer_protocol_button(button);
+
+    if (surface == NULL || surface->surface_resource == NULL ||
+        protocol_button == 0) {
+        return;
+    }
+    client = wl_resource_get_client(surface->surface_resource);
+    wl_list_for_each(pointer, &server->pointer_resources, link) {
+        if (pointer_resource_belongs_to_client(pointer, client)) {
+            wl_pointer_send_button(pointer->resource,
+                                   serial,
+                                   milliseconds,
+                                   protocol_button,
+                                   state);
+        }
+    }
+    pointer_send_frames_to_client(server, client);
+}
+
+static void pointer_cancel_internal(struct nb_wayland_server *server,
+                                    uint32_t milliseconds,
+                                    bool send_events)
+{
+    struct nb_wayland_surface *target = server->pointer_grab != NULL
+                                            ? server->pointer_grab
+                                            : server->pointer_focus;
+    unsigned int index;
+
+    if (send_events && !server->destroying && target != NULL) {
+        for (index = 0;
+             index < (unsigned int)NB_WAYLAND_POINTER_BUTTON_COUNT;
+             ++index) {
+            const uint32_t mask = UINT32_C(1) << index;
+
+            if ((server->pointer_buttons & mask) != 0) {
+                pointer_send_button(
+                    server,
+                    target,
+                    milliseconds,
+                    (enum nb_wayland_pointer_button)index,
+                    WL_POINTER_BUTTON_STATE_RELEASED);
+            }
+        }
+    }
+    server->pointer_buttons = 0;
+    server->pointer_grab = NULL;
+    if (send_events && !server->destroying) {
+        pointer_change_focus(server, NULL);
+    } else {
+        server->pointer_focus = NULL;
+        server->pointer_cursor = NULL;
+        server->pointer_enter_client = NULL;
+    }
+}
+
+static void clear_surface_pointer_state(struct nb_wayland_surface *surface,
+                                        bool send_events)
+{
+    struct nb_wayland_server *server = surface->server;
+
+    if (server->pointer_cursor == surface) {
+        server->pointer_cursor = NULL;
+    }
+    if (server->pointer_focus != surface &&
+        server->pointer_grab != surface) {
+        return;
+    }
+    pointer_cancel_internal(server, server->pointer_time, send_events);
+}
+
+static void unmap_surface(struct nb_wayland_surface *surface,
+                          bool send_pointer_events)
 {
     if (surface->window != NB_WINDOW_ID_NONE) {
+        clear_surface_pointer_state(surface, send_pointer_events);
         (void)nb_shell_destroy_window(surface->server->shell,
                                       surface->window);
         surface->window = NB_WINDOW_ID_NONE;
@@ -271,7 +556,8 @@ static void maybe_release_surface_slot(struct nb_wayland_surface *surface)
         return;
     }
 
-    unmap_surface(surface);
+    clear_surface_pointer_state(surface, false);
+    unmap_surface(surface, false);
     clear_pending_attach(surface);
     destroy_frame_resources(surface);
     free(surface->pixels);
@@ -428,7 +714,8 @@ static void surface_resource_destroyed(struct wl_resource *resource)
     if (surface == NULL || !surface->occupied) {
         return;
     }
-    unmap_surface(surface);
+    clear_surface_pointer_state(surface, false);
+    unmap_surface(surface, false);
     clear_pending_attach(surface);
     destroy_frame_resources(surface);
     free(surface->pixels);
@@ -451,6 +738,7 @@ static void surface_destroy(struct wl_client *client,
                                "destroy xdg role objects first");
         return;
     }
+    unmap_surface(surface, true);
     wl_resource_destroy(resource);
 }
 
@@ -600,7 +888,7 @@ static void surface_commit(struct wl_client *client,
         }
 
         if (surface->pixels == NULL) {
-            unmap_surface(surface);
+            unmap_surface(surface, true);
             surface->configure_sent = false;
             surface->configured = false;
             surface->configure_serial = 0;
@@ -770,6 +1058,200 @@ static void bind_compositor(struct wl_client *client,
                                    NULL);
 }
 
+static void pointer_resource_destroyed(struct wl_resource *resource)
+{
+    struct nb_wayland_pointer_resource *pointer =
+        wl_resource_get_user_data(resource);
+
+    if (pointer == NULL) {
+        return;
+    }
+    pointer->resource = NULL;
+    wl_list_remove(&pointer->link);
+    wl_list_init(&pointer->link);
+    free(pointer);
+}
+
+static void pointer_set_cursor(struct wl_client *client,
+                               struct wl_resource *resource,
+                               uint32_t serial,
+                               struct wl_resource *surface_resource,
+                               int32_t hotspot_x,
+                               int32_t hotspot_y)
+{
+    struct nb_wayland_pointer_resource *pointer =
+        wl_resource_get_user_data(resource);
+    struct nb_wayland_server *server = pointer->server;
+    struct nb_wayland_surface *surface = NULL;
+
+    (void)hotspot_x;
+    (void)hotspot_y;
+    if (server->pointer_enter_client != client ||
+        server->pointer_enter_serial != serial) {
+        return;
+    }
+    if (surface_resource != NULL) {
+        if (!wl_resource_instance_of(surface_resource,
+                                     &wl_surface_interface,
+                                     &surface_implementation)) {
+            wl_resource_post_error(resource,
+                                   WL_POINTER_ERROR_ROLE,
+                                   "invalid cursor surface");
+            return;
+        }
+        surface = wl_resource_get_user_data(surface_resource);
+        if (surface == NULL || surface->server != server ||
+            wl_resource_get_client(surface_resource) != client) {
+            wl_resource_post_error(resource,
+                                   WL_POINTER_ERROR_ROLE,
+                                   "foreign cursor surface");
+            return;
+        }
+        if (surface->role != NB_WAYLAND_SURFACE_ROLE_NONE &&
+            surface->role != NB_WAYLAND_SURFACE_ROLE_CURSOR) {
+            wl_resource_post_error(resource,
+                                   WL_POINTER_ERROR_ROLE,
+                                   "wl_surface already has another role");
+            return;
+        }
+        surface->role = NB_WAYLAND_SURFACE_ROLE_CURSOR;
+    }
+    server->pointer_cursor = surface;
+}
+
+static void pointer_release(struct wl_client *client,
+                            struct wl_resource *resource)
+{
+    (void)client;
+    wl_resource_destroy(resource);
+}
+
+static const struct wl_pointer_interface pointer_implementation = {
+    .set_cursor = pointer_set_cursor,
+    .release = pointer_release
+};
+
+static void seat_get_pointer(struct wl_client *client,
+                             struct wl_resource *resource,
+                             uint32_t id)
+{
+    struct nb_wayland_server *server =
+        wl_resource_get_user_data(resource);
+    struct nb_wayland_pointer_resource *pointer =
+        calloc(1, sizeof(*pointer));
+
+    if (pointer == NULL) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    pointer->server = server;
+    pointer->resource = wl_resource_create(client,
+                                           &wl_pointer_interface,
+                                           wl_resource_get_version(resource),
+                                           id);
+    if (pointer->resource == NULL) {
+        free(pointer);
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_list_insert(&server->pointer_resources, &pointer->link);
+    wl_resource_set_implementation(pointer->resource,
+                                   &pointer_implementation,
+                                   pointer,
+                                   pointer_resource_destroyed);
+
+    if (server->pointer_position_valid &&
+        server->pointer_focus != NULL &&
+        server->pointer_focus->surface_resource != NULL &&
+        wl_resource_get_client(
+            server->pointer_focus->surface_resource) == client) {
+        wl_fixed_t surface_x;
+        wl_fixed_t surface_y;
+
+        if (pointer_surface_coordinates(server->pointer_focus,
+                                        server->pointer_x,
+                                        server->pointer_y,
+                                        &surface_x,
+                                        &surface_y)) {
+            const uint32_t serial =
+                wl_display_next_serial(server->display);
+
+            server->pointer_enter_client = client;
+            server->pointer_enter_serial = serial;
+            wl_pointer_send_enter(pointer->resource,
+                                  serial,
+                                  server->pointer_focus->surface_resource,
+                                  surface_x,
+                                  surface_y);
+            if (wl_resource_get_version(pointer->resource) >=
+                WL_POINTER_FRAME_SINCE_VERSION) {
+                wl_pointer_send_frame(pointer->resource);
+            }
+        }
+    }
+}
+
+static void seat_get_keyboard(struct wl_client *client,
+                              struct wl_resource *resource,
+                              uint32_t id)
+{
+    (void)client;
+    (void)id;
+    wl_resource_post_error(resource,
+                           WL_SEAT_ERROR_MISSING_CAPABILITY,
+                           "NixBench seat has no keyboard capability");
+}
+
+static void seat_get_touch(struct wl_client *client,
+                           struct wl_resource *resource,
+                           uint32_t id)
+{
+    (void)client;
+    (void)id;
+    wl_resource_post_error(resource,
+                           WL_SEAT_ERROR_MISSING_CAPABILITY,
+                           "NixBench seat has no touch capability");
+}
+
+static void seat_release(struct wl_client *client,
+                         struct wl_resource *resource)
+{
+    (void)client;
+    wl_resource_destroy(resource);
+}
+
+static const struct wl_seat_interface seat_implementation = {
+    .get_pointer = seat_get_pointer,
+    .get_keyboard = seat_get_keyboard,
+    .get_touch = seat_get_touch,
+    .release = seat_release
+};
+
+static void bind_seat(struct wl_client *client,
+                      void *data,
+                      uint32_t version,
+                      uint32_t id)
+{
+    struct wl_resource *resource = wl_resource_create(
+        client,
+        &wl_seat_interface,
+        protocol_version(version, NB_WAYLAND_SEAT_VERSION),
+        id);
+
+    if (resource == NULL) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(resource,
+                                   &seat_implementation,
+                                   data,
+                                   NULL);
+    wl_seat_send_capabilities(resource, WL_SEAT_CAPABILITY_POINTER);
+    if (wl_resource_get_version(resource) >= WL_SEAT_NAME_SINCE_VERSION) {
+        wl_seat_send_name(resource, "nixbench-seat0");
+    }
+}
+
 static void positioner_destroy(struct wl_client *client,
                                struct wl_resource *resource)
 {
@@ -872,7 +1354,7 @@ static void xdg_toplevel_resource_destroyed(struct wl_resource *resource)
     if (surface == NULL || !surface->occupied) {
         return;
     }
-    unmap_surface(surface);
+    unmap_surface(surface, false);
     clear_pending_attach(surface);
     free(surface->pixels);
     surface->pixels = NULL;
@@ -917,7 +1399,11 @@ static void xdg_surface_destroy(struct wl_client *client,
 static void xdg_toplevel_destroy(struct wl_client *client,
                                  struct wl_resource *resource)
 {
+    struct nb_wayland_surface *surface =
+        wl_resource_get_user_data(resource);
+
     (void)client;
+    unmap_surface(surface, true);
     wl_resource_destroy(resource);
 }
 
@@ -1050,7 +1536,9 @@ static void xdg_surface_get_toplevel(struct wl_client *client,
     struct nb_wayland_surface *surface =
         wl_resource_get_user_data(resource);
 
-    if (surface->toplevel_resource != NULL) {
+    if (surface->toplevel_resource != NULL ||
+        (surface->role != NB_WAYLAND_SURFACE_ROLE_NONE &&
+         surface->role != NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL)) {
         wl_resource_post_error(resource,
                                XDG_SURFACE_ERROR_ALREADY_CONSTRUCTED,
                                "wl_surface already has an xdg role");
@@ -1065,7 +1553,7 @@ static void xdg_surface_get_toplevel(struct wl_client *client,
         wl_client_post_no_memory(client);
         return;
     }
-    surface->role_assigned = true;
+    surface->role = NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL;
     surface->configure_sent = false;
     surface->configured = false;
     surface->configure_serial = 0;
@@ -1219,9 +1707,14 @@ static void xdg_wm_base_get_xdg_surface(
                                "wl_surface already has a role");
         return;
     }
-    if (!surface->role_assigned &&
-        (surface->pending_attach || surface->committed_once ||
-         surface->pixels != NULL)) {
+    if (surface->role != NB_WAYLAND_SURFACE_ROLE_NONE) {
+        wl_resource_post_error(resource,
+                               XDG_WM_BASE_ERROR_ROLE,
+                               "wl_surface already has a role");
+        return;
+    }
+    if (surface->pending_attach || surface->committed_once ||
+        surface->pixels != NULL) {
         wl_resource_post_error(resource,
                                XDG_WM_BASE_ERROR_INVALID_SURFACE_STATE,
                                "wl_surface already has buffer state");
@@ -1299,6 +1792,7 @@ struct nb_wayland_server *nb_wayland_server_create(
     server->shell = shell;
     server->menu_source = menu_source;
     server->menu_model = menu_model;
+    wl_list_init(&server->pointer_resources);
     server->display = wl_display_create();
     if (server->display == NULL) {
         free(server);
@@ -1317,6 +1811,11 @@ struct nb_wayland_server *nb_wayland_server_create(
         NB_WAYLAND_COMPOSITOR_VERSION,
         server,
         bind_compositor);
+    server->seat_global = wl_global_create(server->display,
+                                           &wl_seat_interface,
+                                           NB_WAYLAND_SEAT_VERSION,
+                                           server,
+                                           bind_seat);
     server->xdg_wm_base_global = wl_global_create(
         server->display,
         &xdg_wm_base_interface,
@@ -1324,6 +1823,7 @@ struct nb_wayland_server *nb_wayland_server_create(
         server,
         bind_xdg_wm_base);
     if (server->compositor_global == NULL ||
+        server->seat_global == NULL ||
         server->xdg_wm_base_global == NULL) {
         wl_display_destroy(server->display);
         free(server);
@@ -1339,6 +1839,8 @@ void nb_wayland_server_destroy(struct nb_wayland_server *server)
     if (server == NULL) {
         return;
     }
+    server->destroying = true;
+    pointer_cancel_internal(server, server->pointer_time, false);
     wl_display_destroy_clients(server->display);
     for (index = 0; index < NB_WAYLAND_MAX_SURFACES; ++index) {
         struct nb_wayland_surface *surface = &server->surfaces[index];
@@ -1346,7 +1848,7 @@ void nb_wayland_server_destroy(struct nb_wayland_server *server)
         if (!surface->occupied) {
             continue;
         }
-        unmap_surface(surface);
+        unmap_surface(surface, false);
         clear_pending_attach(surface);
         destroy_frame_resources(surface);
         free(surface->pixels);
@@ -1476,6 +1978,164 @@ bool nb_wayland_server_surface_snapshot(
     snapshot->stride = surface->width * (int)sizeof(uint32_t);
     snapshot->revision = surface->revision;
     return true;
+}
+
+static struct nb_wayland_surface *pointer_hover_surface(
+    struct nb_wayland_server *server,
+    nb_window_id hover_window)
+{
+    struct nb_wayland_surface *surface =
+        find_surface_by_window(server, hover_window);
+
+    if (surface == NULL ||
+        surface->role != NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL ||
+        surface->surface_resource == NULL || surface->pixels == NULL) {
+        return NULL;
+    }
+    return surface;
+}
+
+bool nb_wayland_server_pointer_motion(struct nb_wayland_server *server,
+                                      nb_window_id hover_window,
+                                      int desktop_x,
+                                      int desktop_y,
+                                      uint32_t milliseconds)
+{
+    struct nb_wayland_surface *target;
+    bool focus_changed;
+
+    if (server == NULL || server->destroying) {
+        return false;
+    }
+    server->pointer_x = desktop_x;
+    server->pointer_y = desktop_y;
+    server->pointer_time = milliseconds;
+    server->pointer_position_valid = true;
+    target = server->pointer_grab != NULL
+                 ? server->pointer_grab
+                 : pointer_hover_surface(server, hover_window);
+    focus_changed = server->pointer_focus != target;
+    pointer_change_focus(server, target);
+
+    if (!focus_changed && target != NULL) {
+        struct nb_wayland_pointer_resource *pointer;
+        struct wl_client *client =
+            wl_resource_get_client(target->surface_resource);
+        wl_fixed_t surface_x;
+        wl_fixed_t surface_y;
+
+        if (!pointer_surface_coordinates(target,
+                                         desktop_x,
+                                         desktop_y,
+                                         &surface_x,
+                                         &surface_y)) {
+            pointer_change_focus(server, NULL);
+            return false;
+        }
+        wl_list_for_each(pointer, &server->pointer_resources, link) {
+            if (pointer_resource_belongs_to_client(pointer, client)) {
+                wl_pointer_send_motion(pointer->resource,
+                                       milliseconds,
+                                       surface_x,
+                                       surface_y);
+            }
+        }
+        pointer_send_frames_to_client(server, client);
+    }
+    return true;
+}
+
+bool nb_wayland_server_pointer_button(
+    struct nb_wayland_server *server,
+    nb_window_id hover_window,
+    int desktop_x,
+    int desktop_y,
+    uint32_t milliseconds,
+    enum nb_wayland_pointer_button button,
+    bool pressed)
+{
+    struct nb_wayland_surface *target;
+    unsigned int button_index;
+    uint32_t mask;
+
+    if (server == NULL || server->destroying ||
+        pointer_protocol_button(button) == 0 ||
+        button < NB_WAYLAND_POINTER_BUTTON_LEFT ||
+        button >= NB_WAYLAND_POINTER_BUTTON_COUNT) {
+        return false;
+    }
+    button_index = (unsigned int)button;
+    mask = UINT32_C(1) << button_index;
+    server->pointer_x = desktop_x;
+    server->pointer_y = desktop_y;
+    server->pointer_time = milliseconds;
+    server->pointer_position_valid = true;
+
+    if (pressed) {
+        target = server->pointer_grab != NULL
+                     ? server->pointer_grab
+                     : pointer_hover_surface(server, hover_window);
+        if ((server->pointer_buttons & mask) != 0) {
+            return true;
+        }
+        if (server->pointer_buttons == 0) {
+            pointer_change_focus(server, target);
+            target = server->pointer_focus;
+        }
+        if (target == NULL) {
+            return true;
+        }
+        if (server->pointer_buttons == 0) {
+            server->pointer_grab = target;
+        }
+        server->pointer_buttons |= mask;
+        pointer_send_button(server,
+                            target,
+                            milliseconds,
+                            button,
+                            WL_POINTER_BUTTON_STATE_PRESSED);
+        return true;
+    }
+
+    if ((server->pointer_buttons & mask) == 0) {
+        return true;
+    }
+    target = server->pointer_grab != NULL
+                 ? server->pointer_grab
+                 : server->pointer_focus;
+    pointer_send_button(server,
+                        target,
+                        milliseconds,
+                        button,
+                        WL_POINTER_BUTTON_STATE_RELEASED);
+    server->pointer_buttons &= ~mask;
+    if (server->pointer_buttons == 0) {
+        server->pointer_grab = NULL;
+        pointer_change_focus(server,
+                             pointer_hover_surface(server,
+                                                   hover_window));
+    }
+    return true;
+}
+
+void nb_wayland_server_pointer_cancel(struct nb_wayland_server *server,
+                                      uint32_t milliseconds)
+{
+    if (server == NULL || server->destroying) {
+        return;
+    }
+    server->pointer_time = milliseconds;
+    pointer_cancel_internal(server, milliseconds, true);
+}
+
+nb_window_id nb_wayland_server_pointer_grab_window(
+    const struct nb_wayland_server *server)
+{
+    if (server == NULL || server->pointer_grab == NULL ||
+        server->pointer_buttons == 0) {
+        return NB_WINDOW_ID_NONE;
+    }
+    return server->pointer_grab->window;
 }
 
 bool nb_wayland_server_request_close(struct nb_wayland_server *server,

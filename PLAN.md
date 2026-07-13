@@ -149,6 +149,12 @@ Exit criteria:
 - Malformed messages and terminated applications cannot destabilize the shell.
 - Public integration surfaces have protocol tests and versioning rules.
 
+Current checkpoint: an independent `wl_shm`/`xdg-shell` demo maps into the
+hosted desktop and receives pointer input through a pointer-only `wl_seat`. It
+remains an integration probe rather than a completed native application:
+desktop-managed launching and installation, keyboard/output protocols, toolkit
+trials, and global-menu integration are still outstanding.
+
 ## Milestone 6: Package and validate the hosted prototype
 
 Make the desktop reproducible and practical to evaluate on NetBSD.

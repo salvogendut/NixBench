@@ -330,6 +330,23 @@ static void begin_pointer_capture(bool *capture_active)
     }
 }
 
+static void reconcile_pointer_capture(struct runtime *runtime)
+{
+    bool wanted = nb_shell_has_pointer_interaction(&runtime->shell);
+
+#if NIXBENCH_HAS_WAYLAND
+    wanted = wanted ||
+             (runtime->wayland != NULL &&
+              nb_wayland_server_pointer_grab_window(runtime->wayland) !=
+                  NB_WINDOW_ID_NONE);
+#endif
+    if (wanted) {
+        begin_pointer_capture(&runtime->capture_active);
+    } else {
+        release_pointer_capture(&runtime->capture_active);
+    }
+}
+
 static bool sync_application_focus(struct runtime *runtime)
 {
     if (nb_application_host_sync_focus(&runtime->applications)) {
@@ -351,6 +368,7 @@ static bool dispatch_wayland(struct runtime *runtime)
                      "Could not dispatch the nested Wayland display");
         return false;
     }
+    reconcile_pointer_capture(runtime);
     return sync_application_focus(runtime);
 }
 
@@ -562,10 +580,64 @@ static bool apply_shell_action(struct runtime *runtime,
     return true;
 }
 
+#if NIXBENCH_HAS_WAYLAND
+static nb_window_id wayland_hover_window(
+    const struct runtime *runtime,
+    struct nb_shell_pointer_target target)
+{
+    if (runtime->wayland == NULL || target.hit != NB_WINDOW_HIT_CONTENT ||
+        !nb_wayland_server_owns_window(runtime->wayland, target.window)) {
+        return NB_WINDOW_ID_NONE;
+    }
+    return target.window;
+}
+
+static bool wayland_button_for_sdl(
+    Uint8 sdl_button,
+    enum nb_wayland_pointer_button *wayland_button)
+{
+    if (sdl_button == SDL_BUTTON_LEFT) {
+        *wayland_button = NB_WAYLAND_POINTER_BUTTON_LEFT;
+    } else if (sdl_button == SDL_BUTTON_MIDDLE) {
+        *wayland_button = NB_WAYLAND_POINTER_BUTTON_MIDDLE;
+    } else if (sdl_button == SDL_BUTTON_RIGHT) {
+        *wayland_button = NB_WAYLAND_POINTER_BUTTON_RIGHT;
+    } else if (sdl_button == SDL_BUTTON_X1) {
+        *wayland_button = NB_WAYLAND_POINTER_BUTTON_SIDE;
+    } else if (sdl_button == SDL_BUTTON_X2) {
+        *wayland_button = NB_WAYLAND_POINTER_BUTTON_EXTRA;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+static bool update_wayland_pointer(struct runtime *runtime,
+                                   struct nb_shell_pointer_target target,
+                                   int x,
+                                   int y)
+{
+    nb_window_id hover_window;
+
+    if (runtime->wayland == NULL) {
+        return true;
+    }
+    hover_window = nb_shell_has_pointer_interaction(&runtime->shell)
+                       ? NB_WINDOW_ID_NONE
+                       : wayland_hover_window(runtime, target);
+    return nb_wayland_server_pointer_motion(runtime->wayland,
+                                            hover_window,
+                                            x,
+                                            y,
+                                            (uint32_t)SDL_GetTicks());
+}
+#endif
+
 static bool process_pointer_event(SDL_Renderer *renderer,
                                   SDL_Event *event,
                                   struct runtime *runtime)
 {
+    struct nb_shell_pointer_target target;
     struct nb_rect viewport;
     int x;
     int y;
@@ -576,39 +648,154 @@ static bool process_pointer_event(SDL_Renderer *renderer,
     }
 
     if (event->type == SDL_EVENT_MOUSE_MOTION) {
-        if (!nb_shell_wants_pointer_motion(&runtime->shell)) {
-            return true;
-        }
         x = renderer_coordinate(event->motion.x);
         y = renderer_coordinate(event->motion.y);
-        nb_shell_pointer_move(&runtime->shell, x, y, viewport);
+        if (nb_shell_wants_pointer_motion(&runtime->shell)) {
+            (void)nb_shell_pointer_move(&runtime->shell, x, y, viewport);
+        }
+        target = nb_shell_pointer_target_at(&runtime->shell,
+                                            x,
+                                            y,
+                                            viewport);
+#if NIXBENCH_HAS_WAYLAND
+        if (!update_wayland_pointer(runtime, target, x, y)) {
+            return false;
+        }
+#endif
+        reconcile_pointer_capture(runtime);
         return true;
     }
 
     x = renderer_coordinate(event->button.x);
     y = renderer_coordinate(event->button.y);
-    if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
-        event->button.button == SDL_BUTTON_LEFT) {
-        const bool was_interacting =
-            nb_shell_has_pointer_interaction(&runtime->shell);
+    target = nb_shell_pointer_target_at(&runtime->shell, x, y, viewport);
 
-        nb_shell_pointer_down(&runtime->shell, x, y, viewport);
-        if (!sync_application_focus(runtime)) {
-            return false;
-        }
-        if (!was_interacting &&
-            nb_shell_has_pointer_interaction(&runtime->shell)) {
-            begin_pointer_capture(&runtime->capture_active);
-        }
-    } else if (event->type == SDL_EVENT_MOUSE_BUTTON_UP &&
-               event->button.button == SDL_BUTTON_LEFT) {
-        const struct nb_shell_action action =
-            nb_shell_pointer_up(&runtime->shell, x, y, viewport);
+    if (event->button.button == SDL_BUTTON_LEFT) {
+#if NIXBENCH_HAS_WAYLAND
+        const bool wayland_grabbed =
+            runtime->wayland != NULL &&
+            nb_wayland_server_pointer_grab_window(runtime->wayland) !=
+                NB_WINDOW_ID_NONE;
+#endif
 
-        release_pointer_capture(&runtime->capture_active);
-        return apply_shell_action(runtime, action);
+        if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+#if NIXBENCH_HAS_WAYLAND
+            if (wayland_grabbed) {
+                const bool forwarded = nb_wayland_server_pointer_button(
+                    runtime->wayland,
+                    wayland_hover_window(runtime, target),
+                    x,
+                    y,
+                    (uint32_t)SDL_GetTicks(),
+                    NB_WAYLAND_POINTER_BUTTON_LEFT,
+                    true);
+
+                reconcile_pointer_capture(runtime);
+                return forwarded;
+            }
+#endif
+            (void)nb_shell_pointer_down(&runtime->shell, x, y, viewport);
+            if (!sync_application_focus(runtime)) {
+                return false;
+            }
+#if NIXBENCH_HAS_WAYLAND
+            {
+                const nb_window_id hover_window =
+                    wayland_hover_window(runtime, target);
+                const bool forwards_to_wayland =
+                    runtime->wayland != NULL &&
+                    !nb_shell_has_pointer_interaction(&runtime->shell) &&
+                    hover_window != NB_WINDOW_ID_NONE;
+
+                if (forwards_to_wayland &&
+                    !nb_wayland_server_pointer_button(
+                        runtime->wayland,
+                        hover_window,
+                        x,
+                        y,
+                        (uint32_t)SDL_GetTicks(),
+                        NB_WAYLAND_POINTER_BUTTON_LEFT,
+                        true)) {
+                    return false;
+                }
+                if (!forwards_to_wayland &&
+                    !update_wayland_pointer(runtime, target, x, y)) {
+                    return false;
+                }
+            }
+#endif
+        } else if (event->type == SDL_EVENT_MOUSE_BUTTON_UP) {
+#if NIXBENCH_HAS_WAYLAND
+            if (wayland_grabbed) {
+                const bool forwarded = nb_wayland_server_pointer_button(
+                    runtime->wayland,
+                    wayland_hover_window(runtime, target),
+                    x,
+                    y,
+                    (uint32_t)SDL_GetTicks(),
+                    NB_WAYLAND_POINTER_BUTTON_LEFT,
+                    false);
+
+                reconcile_pointer_capture(runtime);
+                return forwarded;
+            }
+#endif
+            {
+                const struct nb_shell_action action =
+                    nb_shell_pointer_up(&runtime->shell, x, y, viewport);
+
+                if (!apply_shell_action(runtime, action)) {
+                    return false;
+                }
+            }
+#if NIXBENCH_HAS_WAYLAND
+            target = nb_shell_pointer_target_at(&runtime->shell,
+                                                x,
+                                                y,
+                                                viewport);
+            if (!update_wayland_pointer(runtime, target, x, y)) {
+                return false;
+            }
+#endif
+        }
+        reconcile_pointer_capture(runtime);
+        return true;
     }
 
+#if NIXBENCH_HAS_WAYLAND
+    if (runtime->wayland != NULL &&
+        !nb_shell_has_pointer_interaction(&runtime->shell)) {
+        enum nb_wayland_pointer_button button;
+        nb_window_id hover_window;
+
+        if (!wayland_button_for_sdl(event->button.button, &button)) {
+            return true;
+        }
+        hover_window = wayland_hover_window(runtime, target);
+        if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+            nb_wayland_server_pointer_grab_window(runtime->wayland) ==
+                NB_WINDOW_ID_NONE &&
+            hover_window != NB_WINDOW_ID_NONE) {
+            if (!nb_shell_activate_window(&runtime->shell, hover_window) ||
+                !sync_application_focus(runtime)) {
+                return false;
+            }
+        }
+        if (!nb_wayland_server_pointer_button(
+                runtime->wayland,
+                hover_window,
+                x,
+                y,
+                (uint32_t)SDL_GetTicks(),
+                button,
+                event->type == SDL_EVENT_MOUSE_BUTTON_DOWN)) {
+            return false;
+        }
+        reconcile_pointer_capture(runtime);
+    }
+#else
+    (void)target;
+#endif
     return true;
 }
 
@@ -651,9 +838,7 @@ static bool process_key_event(const SDL_KeyboardEvent *event,
         const struct nb_shell_action action =
             nb_shell_menu_key_press(&runtime->shell, menu_key);
 
-        if (!nb_shell_has_pointer_interaction(&runtime->shell)) {
-            release_pointer_capture(&runtime->capture_active);
-        }
+        reconcile_pointer_capture(runtime);
         return apply_shell_action(runtime, action);
     }
 
@@ -662,6 +847,16 @@ static bool process_key_event(const SDL_KeyboardEvent *event,
         return true;
     }
     return true;
+}
+
+static void cancel_pointer_input(struct runtime *runtime)
+{
+    nb_shell_pointer_cancel(&runtime->shell);
+#if NIXBENCH_HAS_WAYLAND
+    nb_wayland_server_pointer_cancel(runtime->wayland,
+                                     (uint32_t)SDL_GetTicks());
+#endif
+    reconcile_pointer_capture(runtime);
 }
 
 int main(int argc, char *argv[])
@@ -784,13 +979,10 @@ int main(int argc, char *argv[])
                         runtime.running = false;
                     }
                 } else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
-                    release_pointer_capture(&runtime.capture_active);
-                    nb_shell_pointer_cancel(&runtime.shell);
+                    cancel_pointer_input(&runtime);
                 } else if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE &&
-                           !runtime.capture_active &&
-                           nb_shell_has_pointer_interaction(
-                               &runtime.shell)) {
-                    nb_shell_pointer_cancel(&runtime.shell);
+                           !runtime.capture_active) {
+                    cancel_pointer_input(&runtime);
                 } else if (event.type == SDL_EVENT_MOUSE_MOTION ||
                            event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
                            event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
