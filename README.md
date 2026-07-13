@@ -175,10 +175,15 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
 
 - **NetBSD 10.1 (GENERIC), amd64** with SDL3 3.4.2, Wayland, libxkbcommon,
   and wayland-protocols from pkgsrc: default dependency discovery, generated
-  xdg-shell bindings, all 15 tests (including output and XKB keyboard protocol
-  coverage), and an X11-hosted startup with a published nested Wayland socket
-  and the demo client's first rendered frame were confirmed working on July
-  13, 2026.
+  xdg-shell bindings, native compilation of both SDL and experimental
+  `wsdisplay` hosts, and all 23 current tests were confirmed working on July
+  13, 2026. An earlier X11-hosted run also published the nested Wayland socket
+  and displayed the demo client's first rendered frame.
+
+  The unprivileged capability probe on that host reports SDL's Wayland, X11,
+  offscreen, and dummy drivers but no KMSDRM driver. It can access four DRM card
+  nodes, while `wsdisplay`, keyboard, and mouse access is denied to the test
+  user. No console mode change or framebuffer mapping was attempted.
 
 This is a manual target-system validation; automated NetBSD testing remains
 future work.
