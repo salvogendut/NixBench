@@ -209,6 +209,15 @@ Exit criteria:
 - The same shell behavior tests pass under the hosted-window and standalone
   backends.
 
+Current checkpoint: `nixbench-backend-probe` performs a non-destructive
+capability inventory before any console takeover code is introduced. It lists
+the video drivers compiled into SDL and, on NetBSD, queries `wsdisplay`
+framebuffer metadata plus wscons and DRM device accessibility. It never changes
+the display mode, maps device memory, consumes input events, or claims DRM
+master status. The next checkpoint is a narrow host-output abstraction and a
+software `wsdisplay` presentation experiment on a machine whose console driver
+exposes a supported RGB framebuffer.
+
 ## Milestone 8: Add standalone X11 compatibility
 
 Allow legacy X11 applications to participate in a standalone NixBench session

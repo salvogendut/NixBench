@@ -248,6 +248,24 @@ if(NIXBENCH_WAYLAND_ENABLED)
   target_link_libraries(nixbench_wayland PUBLIC nixbench_model)
 endif()
 
+add_library(nixbench_backend_probe STATIC src/backend_probe.c)
+target_include_directories(
+  nixbench_backend_probe
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(nixbench_backend_probe PRIVATE SDL3::SDL3)
+nixbench_configure_c_target(nixbench_backend_probe)
+
+add_executable(
+  nixbench-backend-probe
+  src/backend_probe_main.c
+)
+target_link_libraries(
+  nixbench-backend-probe
+  PRIVATE SDL3::SDL3 nixbench_backend_probe
+)
+nixbench_configure_c_target(nixbench-backend-probe)
+
 add_executable(
   nixbench
   src/desktop_renderer.c
@@ -275,7 +293,10 @@ target_compile_definitions(
 target_link_libraries(nixbench PRIVATE SDL3::SDL3)
 target_link_libraries(nixbench PRIVATE nixbench_model)
 
-install(TARGETS nixbench RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+install(
+  TARGETS nixbench nixbench-backend-probe
+  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+)
 
 set(NIXBENCH_WAYLAND_DEMO_AVAILABLE FALSE)
 if(
@@ -323,6 +344,16 @@ if(NIXBENCH_WAYLAND_DEMO_AVAILABLE)
 endif()
 
 if(BUILD_TESTING)
+  add_executable(
+    nixbench_backend_probe_tests
+    tests/backend_probe_test.c
+  )
+  target_link_libraries(
+    nixbench_backend_probe_tests
+    PRIVATE nixbench_backend_probe
+  )
+  nixbench_configure_c_target(nixbench_backend_probe_tests)
+
   add_executable(nixbench_desktop_tests tests/desktop_test.c)
   target_link_libraries(nixbench_desktop_tests PRIVATE nixbench_model)
   nixbench_configure_c_target(nixbench_desktop_tests)
@@ -401,6 +432,18 @@ if(BUILD_TESTING)
   endif()
 
   add_test(NAME nixbench.desktop.model COMMAND nixbench_desktop_tests)
+  add_test(
+    NAME nixbench.backend-probe.unit
+    COMMAND nixbench_backend_probe_tests
+  )
+  add_test(
+    NAME nixbench.backend-probe.help
+    COMMAND nixbench-backend-probe --help
+  )
+  add_test(
+    NAME nixbench.backend-probe.smoke
+    COMMAND nixbench-backend-probe
+  )
   add_test(NAME nixbench.window.model COMMAND nixbench_window_tests)
   add_test(NAME nixbench.menu.model COMMAND nixbench_menu_tests)
   add_test(NAME nixbench.shell.model COMMAND nixbench_shell_tests)

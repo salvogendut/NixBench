@@ -99,11 +99,17 @@ The final target starts from a NetBSD console without an X server beneath it:
 - X11 support becomes an optional compatibility service layered on NixBench; it
   is not required to run the desktop or native applications.
 
-SDL3's [KMSDRM backend](https://wiki.libsdl.org/SDL3/README-kmsbsd) does not
-currently support NetBSD console output. Reaching the standalone target
-therefore includes enabling that backend on NetBSD or providing the necessary
-NetBSD platform integration, preferably in a form that can be maintained
-upstream.
+SDL3 contains an experimental KMSDRM path that can use wscons input on NetBSD,
+but it is only compiled when libdrm, GBM, and EGL support are all available,
+and [SDL currently describes NetBSD KMSDRM as unsupported][sdl-kmsbsd].
+Its presence in an SDL package and its behavior on supported NetBSD DRM
+hardware must therefore be detected rather than assumed. A software
+`wsdisplay` framebuffer path is also being evaluated as a bring-up and fallback
+backend. The initial work follows the interfaces described by
+[wsdisplay(4)](https://man.netbsd.org/NetBSD-10.1/wsdisplay.4) without taking
+control of the console yet.
+
+[sdl-kmsbsd]: https://wiki.libsdl.org/SDL3/README-kmsbsd
 
 The Wayland integration boundary and eventual X11 compatibility mechanism are
 not public contracts yet. The roadmap requires focused prototypes before either
@@ -189,6 +195,21 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
+
+Inspect the backends available on the current machine with:
+
+```sh
+./build/nixbench-backend-probe
+```
+
+The probe lists SDL video drivers and, on NetBSD, checks the default
+`wsdisplay`, wscons input, and DRM device paths. It opens `wsdisplay` read-only
+only long enough to query its type, current mode, and framebuffer layout. It
+does not switch modes, map framebuffer memory, consume input events, or claim
+DRM master status. Alternate device paths can be supplied with `--wsdisplay`,
+`--keyboard`, `--mouse`, and `--drm-directory`; use `--help` for details.
+Results describe whether the next takeover experiment has the required pieces,
+not whether a DRM modeset or framebuffer presentation has already succeeded.
 
 Open the desktop in a development window:
 
