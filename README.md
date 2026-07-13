@@ -77,9 +77,9 @@ choice is stabilized.
 
 NixBench now has a minimal C11/SDL3 shell and a small internal window manager.
 Two overlapping demonstration windows are drawn entirely by NixBench. They can
-be independently focused, raised, moved, and closed, and remain inside the
-desktop. The manager uses stable window identifiers and keeps geometry,
-stacking, focus, hit testing, and pointer routing independent of SDL and X11;
+be independently focused, raised, moved, resized, and closed, and remain inside
+the desktop. The manager uses stable window identifiers and keeps geometry,
+stacking, focus, hit testing, and pointer routing independent of SDL and X11.
 SDL is confined to input adaptation and rendering. These are shell-owned test
 windows rather than application surfaces, and NixBench does not yet operate
 directly on the NetBSD console.
@@ -125,10 +125,10 @@ Open the desktop in a development window:
 
 Windowed operation is the development default. Click an internal window to
 focus it and bring it to the front, drag it by its title bar, and use its
-top-left gadget to close it. Clicking the desktop clears the active window.
-Pass `--fullscreen` only for a hosted full-display preview. Press Escape or
-close the outer host window to exit NixBench. Use `--help` to list all current
-options.
+top-left gadget to close it. Resize it using the gadget at the right end of its
+bottom decorator rail. Clicking the desktop clears the active window. Pass
+`--fullscreen` only for a hosted full-display preview. Press Escape or close
+the outer host window to exit NixBench. Use `--help` to list all current options.
 
 The CMake configuration deliberately uses the system SDL3 package instead of
 downloading dependencies during the build. Direct X11 dependencies are not

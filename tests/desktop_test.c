@@ -233,6 +233,73 @@ static void test_close_request_and_lifecycle(void)
     check_invariants(&fixture.desktop);
 }
 
+static void test_resize_capture_routing(void)
+{
+    struct fixture fixture = make_fixture();
+    const struct nb_rect bounds = {0, 0, 800, 600};
+    const struct nb_window *window_a =
+        nb_desktop_find_window(&fixture.desktop, fixture.a);
+    const struct nb_window *window_b =
+        nb_desktop_find_window(&fixture.desktop, fixture.b);
+    struct nb_desktop_action action;
+    struct nb_rect resize_a;
+    struct nb_rect close_b;
+    int resize_x;
+    int resize_y;
+    int close_x;
+    int close_y;
+
+    CHECK(window_a != NULL);
+    CHECK(window_b != NULL);
+
+    CHECK(nb_desktop_pointer_down(&fixture.desktop, 80, 150) ==
+          NB_WINDOW_HIT_CONTENT);
+    action = nb_desktop_pointer_up(&fixture.desktop, 80, 150);
+    CHECK(action.type == NB_WINDOW_ACTION_NONE);
+    CHECK(nb_desktop_window_id_at(&fixture.desktop, 1) == fixture.a);
+
+    resize_a = nb_window_resize_rect(window_a);
+    close_b = nb_window_close_rect(window_b);
+    resize_x = resize_a.x + (resize_a.width / 2);
+    resize_y = resize_a.y + (resize_a.height / 2);
+    close_x = close_b.x + (close_b.width / 2);
+    close_y = close_b.y + (close_b.height / 2);
+
+    CHECK(nb_desktop_pointer_down(&fixture.desktop, resize_x, resize_y) ==
+          NB_WINDOW_HIT_RESIZE);
+    CHECK(nb_desktop_has_pointer_interaction(&fixture.desktop));
+    CHECK(window_a->pointer_mode == NB_WINDOW_POINTER_RESIZE);
+    CHECK(nb_desktop_active_window_id(&fixture.desktop) == fixture.a);
+    CHECK(nb_desktop_pointer_down(&fixture.desktop, close_x, close_y) ==
+          NB_WINDOW_HIT_NONE);
+
+    CHECK(nb_desktop_pointer_move(&fixture.desktop,
+                                  close_x,
+                                  close_y,
+                                  bounds));
+    CHECK(window_a->frame.width == NB_WINDOW_MIN_WIDTH);
+    CHECK(window_a->frame.height == NB_WINDOW_MIN_HEIGHT);
+    CHECK(window_b->frame.width == 300);
+    CHECK(window_b->frame.height == 220);
+    CHECK(window_b->pointer_mode == NB_WINDOW_POINTER_IDLE);
+    CHECK(!window_b->close_pressed);
+
+    CHECK(nb_desktop_pointer_move(&fixture.desktop, 600, 500, bounds));
+    CHECK(window_a->frame.x == 40);
+    CHECK(window_a->frame.y == 40);
+    CHECK(window_a->frame.width == 573);
+    CHECK(window_a->frame.height == 473);
+    CHECK(nb_desktop_window_id_at(&fixture.desktop, 0) == fixture.b);
+    CHECK(nb_desktop_window_id_at(&fixture.desktop, 1) == fixture.a);
+
+    action = nb_desktop_pointer_up(&fixture.desktop, 600, 500);
+    CHECK(action.type == NB_WINDOW_ACTION_NONE);
+    CHECK(action.window == NB_WINDOW_ID_NONE);
+    CHECK(!nb_desktop_has_pointer_interaction(&fixture.desktop));
+    CHECK(window_a->pointer_mode == NB_WINDOW_POINTER_IDLE);
+    check_invariants(&fixture.desktop);
+}
+
 static void test_active_fallback(void)
 {
     struct fixture fixture = make_fixture();
@@ -401,6 +468,7 @@ int main(void)
     test_stacking_and_focus();
     test_drag_capture_routing();
     test_close_request_and_lifecycle();
+    test_resize_capture_routing();
     test_active_fallback();
     test_clamp_all();
     test_capacity_and_stale_ids();

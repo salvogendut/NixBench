@@ -6,8 +6,12 @@
 enum {
     NB_WINDOW_BORDER_WIDTH = 3,
     NB_WINDOW_TITLE_HEIGHT = 24,
+    NB_WINDOW_FOOTER_HEIGHT = 20,
     NB_WINDOW_GADGET_MARGIN = 4,
     NB_WINDOW_CLOSE_SIZE = 16,
+    NB_WINDOW_RESIZE_SIZE = 20,
+    NB_WINDOW_MIN_WIDTH = 160,
+    NB_WINDOW_MIN_HEIGHT = 100,
     NB_WINDOW_TITLE_CAPACITY = 64
 };
 
@@ -23,13 +27,15 @@ enum nb_window_hit {
     NB_WINDOW_HIT_FRAME,
     NB_WINDOW_HIT_CONTENT,
     NB_WINDOW_HIT_TITLE,
-    NB_WINDOW_HIT_CLOSE
+    NB_WINDOW_HIT_CLOSE,
+    NB_WINDOW_HIT_RESIZE
 };
 
 enum nb_window_pointer_mode {
     NB_WINDOW_POINTER_IDLE,
     NB_WINDOW_POINTER_DRAG,
-    NB_WINDOW_POINTER_CLOSE
+    NB_WINDOW_POINTER_CLOSE,
+    NB_WINDOW_POINTER_RESIZE
 };
 
 enum nb_window_action {
@@ -44,8 +50,8 @@ struct nb_window {
     bool active;
     enum nb_window_pointer_mode pointer_mode;
     bool close_pressed;
-    int grab_x;
-    int grab_y;
+    int pointer_offset_x;
+    int pointer_offset_y;
 };
 
 void nb_window_init(struct nb_window *window,
@@ -54,7 +60,9 @@ void nb_window_init(struct nb_window *window,
 
 struct nb_rect nb_window_title_rect(const struct nb_window *window);
 struct nb_rect nb_window_content_rect(const struct nb_window *window);
+struct nb_rect nb_window_footer_rect(const struct nb_window *window);
 struct nb_rect nb_window_close_rect(const struct nb_window *window);
+struct nb_rect nb_window_resize_rect(const struct nb_window *window);
 
 enum nb_window_hit nb_window_hit_test(const struct nb_window *window,
                                       int x,

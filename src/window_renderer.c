@@ -143,20 +143,99 @@ static bool render_content(SDL_Renderer *renderer,
                            const struct nb_window *window)
 {
     const struct nb_rect content = nb_window_content_rect(window);
+    static const char first_line[] = "This window is managed by NixBench.";
+    static const char second_line[] =
+        "Drag the title; resize at bottom right.";
+    const char *lines[] = {first_line, second_line};
+    const int line_y[] = {content.y + 24, content.y + 44};
+    size_t line_index;
 
     if (!fill_rect(renderer, content, content_color) ||
         !set_color(renderer, text_color)) {
         return false;
     }
 
-    return SDL_RenderDebugText(renderer,
-                               (float)(content.x + 18),
-                               (float)(content.y + 24),
-                               "This window is managed by NixBench.") &&
-           SDL_RenderDebugText(renderer,
-                               (float)(content.x + 18),
-                               (float)(content.y + 44),
-                               "Click to focus; drag the title bar.");
+    for (line_index = 0; line_index < 2; ++line_index) {
+        const int text_x = content.x + 18;
+        const int available_width = content.x + content.width - text_x - 4;
+        char clipped_text[64];
+        size_t maximum_characters;
+        size_t text_index;
+
+        if (available_width < 8 || line_y[line_index] < content.y ||
+            line_y[line_index] + 8 > content.y + content.height) {
+            continue;
+        }
+
+        maximum_characters = (size_t)(available_width / 8);
+        if (maximum_characters >= sizeof(clipped_text)) {
+            maximum_characters = sizeof(clipped_text) - 1;
+        }
+        for (text_index = 0;
+             text_index < maximum_characters &&
+             lines[line_index][text_index] != '\0';
+             ++text_index) {
+            clipped_text[text_index] = lines[line_index][text_index];
+        }
+        clipped_text[text_index] = '\0';
+
+        if (clipped_text[0] != '\0' &&
+            !SDL_RenderDebugText(renderer,
+                                 (float)text_x,
+                                 (float)line_y[line_index],
+                                 clipped_text)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool render_resize_gadget(SDL_Renderer *renderer,
+                                 const struct nb_window *window)
+{
+    const struct nb_rect resize = nb_window_resize_rect(window);
+    const bool pressed =
+        window->pointer_mode == NB_WINDOW_POINTER_RESIZE;
+    const float inset = pressed ? 1.0f : 0.0f;
+
+    if (!fill_rect(renderer, resize, frame_color) ||
+        !render_bevel(renderer, resize, pressed)) {
+        return false;
+    }
+
+    if (resize.width < 17 || resize.height < 17) {
+        return true;
+    }
+
+    if (!set_color(renderer, frame_shadow)) {
+        return false;
+    }
+
+    return SDL_RenderLine(renderer,
+                          (float)(resize.x + 5) + inset,
+                          (float)(resize.y + resize.height - 4) + inset,
+                          (float)(resize.x + resize.width - 4) + inset,
+                          (float)(resize.y + 5) + inset) &&
+           SDL_RenderLine(renderer,
+                          (float)(resize.x + 9) + inset,
+                          (float)(resize.y + resize.height - 4) + inset,
+                          (float)(resize.x + resize.width - 4) + inset,
+                          (float)(resize.y + 9) + inset) &&
+           SDL_RenderLine(renderer,
+                          (float)(resize.x + 13) + inset,
+                          (float)(resize.y + resize.height - 4) + inset,
+                          (float)(resize.x + resize.width - 4) + inset,
+                          (float)(resize.y + 13) + inset);
+}
+
+static bool render_footer(SDL_Renderer *renderer,
+                          const struct nb_window *window)
+{
+    const struct nb_rect footer = nb_window_footer_rect(window);
+
+    return fill_rect(renderer, footer, frame_color) &&
+           render_bevel(renderer, footer, false);
 }
 
 bool nb_window_render(SDL_Renderer *renderer, const struct nb_window *window)
@@ -168,5 +247,7 @@ bool nb_window_render(SDL_Renderer *renderer, const struct nb_window *window)
     return fill_rect(renderer, window->frame, frame_color) &&
            render_bevel(renderer, window->frame, false) &&
            render_title(renderer, window) &&
-           render_content(renderer, window);
+           render_content(renderer, window) &&
+           render_footer(renderer, window) &&
+           render_resize_gadget(renderer, window);
 }
