@@ -281,13 +281,16 @@ the fixed `/dev/wskbd` and `/dev/wsmouse` mux aliases only for the bounded
 worker lifetime, draws a software cursor, routes the left button to menus and
 window dragging, and lets Escape request an early clean exit. Both preview
 modes use SDL only for an in-memory software surface; neither initializes SDL
-video nor opens X11 or Wayland. Its
+video nor opens X11 or Wayland. An additional explicit `--runtime-preview`
+mode now connects the same host and input provider to the shared desktop
+runtime used by the SDL frontend, including the real NixInfo application and
+application-owned global menus; Wayland publication remains disabled. Its
 unsupported-platform stub is covered by normal tests, and the NetBSD branch
 compiles against the official NetBSD 10.1 amd64 headers under strict warnings.
-It is intentionally not a selectable desktop runtime yet: broader hardware
-validation, complete wscons keymap/seat/hotplug support, failure-injection
-tests, privilege separation, and a separate privileged watchdog that can
-recover after a compositor crash are the next safety gates.
+This is still a bounded hardware-validation mode rather than a desktop session:
+broader hardware validation, complete wscons keymap/seat/hotplug support,
+failure-injection tests, privilege separation, and a separate privileged
+watchdog that can recover after a compositor crash are the next safety gates.
 The detailed design and source references are in
 [`docs/standalone-backend.md`](docs/standalone-backend.md).
 
@@ -299,11 +302,12 @@ does not alter display state. A run requires both
 root-only recovery record at `/var/run/nixbench-wsdisplay-smoke.state` before
 forking. The diagnostic pattern remains the default; `--desktop-preview`
 selects the bounded output-only shell scene, while `--interactive-preview`
-adds the fixed wscons muxes explicitly. The guided hardware script now selects
-the interactive mode, retains its typed confirmation and outer timeout, and
-never extends the harness beyond the 30000 ms hard maximum. Input descriptors
-are closed and held state is cancelled before every acknowledged VT release
-and cleanup. The framebuffer worker maps and presents; an unmapped parent
+adds the fixed wscons muxes explicitly. `--runtime-preview` uses those muxes
+with the shared desktop runtime, and the guided hardware script now selects
+that mode. It retains its typed confirmation and outer timeout and never
+extends the harness beyond the 30000 ms hard maximum. Input descriptors are
+closed and held state is cancelled before every acknowledged VT release and
+cleanup. The framebuffer worker maps and presents; an unmapped parent
 enforces the deadline, reaps the worker, and independently restores and
 verifies the saved console state. `--recover` provides a separate-session
 restoration path if the record remains. Automated tests cover support code,

@@ -180,6 +180,13 @@ into the display or input backend: rendering remains an in-memory SDL software
 surface, `wsdisplay` remains the sole display owner, and no X11, Wayland, or SDL
 video subsystem is started. The display adapter itself stays output-only.
 
+`--runtime-preview` is the next explicit research mode. It connects that same
+software framebuffer host and wscons provider to the shared desktop runtime
+used by the hosted SDL frontend. The scene therefore contains the real NixInfo
+application and its application-owned global menus rather than the lightweight
+preview model. Wayland service publication remains disabled for this step, so
+the mode does not require X11, Wayland, or SDL video.
+
 The unmapped parent applies a hard deadline of at most 30000 ms, terminates and
 reaps an unresponsive child, then independently restores and verifies every
 saved console property. Job-control stop signals also request supervised
@@ -187,12 +194,13 @@ shutdown rather than pausing the parent indefinitely. The state file is
 removed only after restoration is verified.
 
 `tools/run-wsdisplay-smoke.sh` configures, builds, tests, performs preflight,
-explicitly selects `--interactive-preview`, and verifies postflight state. It
+explicitly selects `--runtime-preview`, and verifies postflight state. It
 still requires an SSH session, passwordless recovery access, a typed
 `TAKEOVER`, both harness acknowledgements, and the outer timeout. That outer
 deadline is the requested duration rounded up to seconds plus a ten-second
 restoration margin. A direct `--desktop-preview` invocation remains the
-compatible output-only shell preview.
+compatible output-only shell preview, while `--interactive-preview` retains the
+previous lightweight interactive scene as a fallback.
 
 If the supervisor itself fails, a second SSH session can run
 `sudo ./build/nixbench-wsdisplay-smoke --recover` against the persisted record.

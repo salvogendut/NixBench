@@ -118,9 +118,14 @@ same canonical CPU frame without initializing SDL video. A separate,
 explicit `--interactive-preview` research mode temporarily owns the fixed
 `/dev/wskbd` and `/dev/wsmouse` mux aliases, adds a software cursor, routes the
 left button to menus and window dragging, and accepts Escape as an orderly
-early exit. The adapter and harness are not a crash-safe login session: a
-production wscons input/session layer and privileged recovery watchdog are
-still required before this can become a standalone runtime mode. See
+early exit. A new explicit `--runtime-preview` replaces that lightweight scene
+with the same shared desktop runtime used by the hosted SDL frontend, including
+the real NixInfo application and application-owned global menus. It keeps
+Wayland publication disabled and still uses only the software canvas,
+`wsdisplay`, and wscons devices. The adapter and harness are not a crash-safe
+login session: a production wscons input/session layer and privileged recovery
+watchdog are still required before this can become a standalone desktop
+session. See
 [the standalone backend architecture](docs/standalone-backend.md) for the
 staged safety and implementation boundaries.
 
@@ -334,14 +339,14 @@ It defaults to 3000 ms; an alternate safe duration can be passed as its sole
 argument, up to `./tools/run-wsdisplay-smoke.sh 30000`. Thirty seconds is the
 hard harness maximum. The script derives its outer timeout from that duration
 and still requires typing `TAKEOVER` before it supplies the harness
-acknowledgements. It explicitly selects `--interactive-preview`: the real
-global menu bar and clock, desktop background, managed-window chrome, and a
-software cursor are rendered into an SDL software surface without initializing
-SDL video or opening X11 or Wayland. The worker temporarily opens only the
-fixed `/dev/wskbd` and `/dev/wsmouse` mux aliases. Relative pointer motion and
-the left button exercise menus and window dragging; Escape requests an orderly
-early exit. Absolute-only pointer devices are not translated by this first
-research provider.
+acknowledgements. It explicitly selects `--runtime-preview`: the shared desktop
+runtime, real NixInfo application, application-owned global menu bar, clock,
+managed-window chrome, and software cursor are rendered into an SDL software
+surface without initializing SDL video or opening X11 or Wayland. The worker
+temporarily opens only the fixed `/dev/wskbd` and `/dev/wsmouse` mux aliases.
+Relative pointer motion and the left button exercise menus and window dragging;
+Escape requests an orderly early exit. Absolute-only pointer devices are not
+translated by this first research provider.
 
 Preflight reads `/dev/ttyEstat` to select the active zero-based screen node;
 it does not change display state. A presentation run changes that console to
@@ -349,16 +354,18 @@ framebuffer mode briefly and accepts only durations from 250 through 30000
 milliseconds (default 3000). Direct harness runs draw the diagnostic pattern
 by default. `--desktop-preview` selects the same shell scene while remaining
 output-only, and `--interactive-preview` explicitly adds the bounded wscons
-input experiment. It refuses to run unless both risk acknowledgements are
-present. Keep a second SSH session available and retain an outer timeout during
-hardware bring-up:
+input experiment. `--runtime-preview` instead connects that wscons provider and
+the software framebuffer host to the shared desktop runtime used by the hosted
+frontend. It refuses to run unless both risk acknowledgements are present. Keep
+a second SSH session available and retain an outer timeout during hardware
+bring-up:
 
 ```sh
 sudo -n /usr/bin/timeout -s SIGTERM -k 15s 10s \
   ./build/nixbench-wsdisplay-smoke \
   --acknowledge-console-takeover \
   --acknowledge-no-crash-watchdog \
-  --interactive-preview \
+  --runtime-preview \
   --duration-ms 3000
 ```
 
