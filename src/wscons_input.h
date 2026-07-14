@@ -84,6 +84,10 @@ struct nb_wscons_input_stats {
     uint64_t adaptive_idle_resets;
     uint64_t adaptive_timestamp_resets;
     uint64_t adaptive_edge_resets;
+    uint64_t adaptive_precision_carry_resets;
+    uint64_t adaptive_direction_carry_resets;
+    uint64_t adaptive_nonedge_suppressed_events;
+    uint64_t adaptive_zero_relative_events;
 };
 
 /* Public so the portable reducer can be stack-allocated and tested directly. */
@@ -98,6 +102,8 @@ struct nb_wscons_input_reducer {
     unsigned int pointer_sensitivity_percent;
     int pointer_remainder_x;
     int pointer_remainder_y;
+    int pointer_direction_x;
+    int pointer_direction_y;
     uint64_t adaptive_group_milliseconds;
     uint64_t adaptive_group_distance_x;
     uint64_t adaptive_group_distance_y;

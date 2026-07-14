@@ -292,13 +292,16 @@ Raw wscons motion retains a flat 100% library/default profile, with opt-in
 `--wscons-pointer-profile flat|adaptive`; adaptive rejects an explicit fixed
 sensitivity, and the guided X220 runner selects it. It groups X/Y events read
 in the same monotonic millisecond, applies the preceding group's velocity with
-a one-quarter EWMA, and ramps gain from 100% through 250 counts/s to 150% at
+a one-quarter EWMA, and ramps gain from 100% through 400 counts/s to 150% at
 750, 200% at 1500, and 250% at 2500 counts/s. History resets after 100 ms idle,
 timestamp regression, an edge clamp, configuration change, or lifecycle
-transition. Diagnostics expose the selected profile, adaptive gain buckets,
-peak capped filtered velocity/gain, idle/timestamp/edge reset counts,
-raw/logical motion, and
-input-to-copy measurements. Hosted SDL coordinates are never scaled.
+transition. Returning to identity gain clears both fractional carries, and an
+axis sign reversal clears that axis carry, so a previous accelerated fraction
+cannot cause a delayed precision correction. Diagnostics expose the selected
+profile, adaptive gain buckets, peak capped filtered velocity/gain,
+idle/timestamp/edge and carry reset counts, non-edge suppression, zero-valued
+relative packets, raw/logical motion, and input-to-copy measurements. Hosted
+SDL coordinates are never scaled.
 The first measured runtime averaged 176 ms per input-associated frame. A
 canonical 32-bit fast path and optimized hardware build reduced this to 36 ms,
 with 2 ms in rendering and 34 ms in full mapped-framebuffer presentation. The
@@ -347,9 +350,13 @@ window. Motion was functional but noticeably slower and less fluid than the
 hosted path. Subsequent pipeline profiling isolated the dominant cost to the
 full-frame mapped-framebuffer write. Canonical conversion is now fast and the
 backend's source-shadow damage suppression has been physically validated at a
-5 ms average. The new raw-wscons adaptive profile is the next physical pointer-
-feel comparison; input-wait policy and the current lifecycle-event priority and
-bounded batch rules remain separate tuning work.
+5 ms average. A subsequent adaptive-pointer trace distributed 1709 relative
+events as 888 at 100% gain, 626 at 101..149%, 186 at 150..199%, 9 at
+200..249%, and none at 250%, while input-to-copy latency remained 5 ms on
+average. The overall feel was good, but low-speed movement was reported to
+flutter rather than track straight. The revised identity threshold and carry
+clearing await physical validation; input-wait policy and the current
+lifecycle-event priority and bounded batch rules remain separate tuning work.
 A first guided `--runtime-preview` X220 trial completed on 2026-07-14. The
 physical console displayed the shared runtime and real NixInfo application
 through `wsdisplay` and wscons without X11, Wayland publication, or SDL video;

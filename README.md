@@ -246,6 +246,14 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
   video. The user confirmed the scene worked, and the guided postflight
   completed with the console restored.
 
+  A subsequent adaptive-pointer trial kept 888 of 1709 relative events at
+  100% gain, put 626 at 101..149%, 186 at 150..199%, and 9 at 200..249%; it
+  never reached 250%. Userspace input read through framebuffer-copy completion
+  still averaged 5 ms. The overall feel was good, but the user reported that
+  small movements fluttered instead of holding a straight course. The carry-
+  hygiene revision described below is intended to address that report and is
+  awaiting physical validation.
+
 This is a manual target-system validation; automated NetBSD testing remains
 future work.
 
@@ -372,11 +380,15 @@ The adaptive profile combines X and Y events stamped in the same userspace-
 read millisecond into one motion group. A group uses the preceding completed
 group's velocity, smoothed with a one-quarter EWMA, so both axes receive the
 same gain while the group remains uninterrupted. A clamp deliberately resets
-the profile before any later axis event. Gain is 100% through 250 raw counts
+the profile before any later axis event. Gain is 100% through 400 raw counts
 per second, interpolates linearly to 150% at 750, 200% at 1500, and 250% at
 2500, then remains at 250%. Its history resets after at least 100 ms idle, a
 timestamp regression, a pointer-
 edge clamp, a profile/configuration change, or an input lifecycle transition.
+When filtered motion returns to identity gain, the reducer clears both
+fractional carries rather than applying an old accelerated fraction to later
+precision motion. It also clears an axis carry when that axis reverses sign,
+preventing a residual from the previous direction from delaying a correction.
 Velocity is estimated from userspace read timestamps, so a queued burst can
 temporarily look faster than the physical device stream; this remains an
 experimental profile to validate on hardware.
@@ -384,8 +396,9 @@ experimental profile to validate on hardware.
 `--wscons-input-stats` identifies the active profile and reports raw and
 logical distance, unit deltas, suppression/clamping, adaptive gain buckets,
 peak filtered velocity (capped at 2500 counts/s) and gain, idle/timestamp/edge
-reset counts, event gaps, and userspace-read-to-framebuffer-copy-complete
-timing. That timing excludes
+reset counts, precision and direction carry resets, non-edge suppression,
+zero-valued relative packets, event gaps, and userspace-read-to-framebuffer-
+copy-complete timing. That timing excludes
 device/kernel queueing, scanout, and physical-display latency. Its input-frame
 pipeline also separates time waiting to render, SDL software rendering,
 synchronous host presentation, the framebuffer-copy-complete timestamp, and

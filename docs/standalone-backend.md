@@ -201,13 +201,20 @@ userspace-read millisecond. Each group is scaled from the preceding completed
 group's raw velocity, filtered with a one-quarter EWMA; using one completed
 group ensures both axes of an uninterrupted current group share a gain. An
 edge clamp intentionally resets the profile before any later axis event. The
-piecewise-linear curve is 100% at and below 250 counts/s, reaches 150% at 750
+piecewise-linear curve is 100% at and below 400 counts/s, reaches 150% at 750
 counts/s, 200% at 1500 counts/s, and 250% at 2500 counts/s, where it saturates.
 Adaptive history is discarded after an idle interval of at least 100 ms,
 timestamp regression,
 pointer-edge clamp, profile or sensitivity configuration change, and input
 open/close or other lifecycle transition. A resumed stream therefore begins at
 identity gain instead of inheriting stale motion.
+
+Adaptive scaling also treats fractional carry as motion-history state. When
+filtered velocity returns to identity gain, both axis carries are cleared;
+when one axis reverses sign, that axis carry is cleared before scaling the new
+delta. These transitions prevent an accelerated residual from producing a
+delayed correction during slow or reversed movement. The revised identity
+threshold and carry rules await physical hardware validation.
 
 The current native adapter timestamps each event after its userspace `read`
 rather than preserving a device timestamp. The estimator therefore observes
@@ -218,8 +225,9 @@ hardware-tuning checkpoint, not a claim of device-accurate velocity.
 `--wscons-input-stats` identifies the active profile and prints raw/logical
 distance and event-shape counters, adaptive gain buckets, peak filtered
 velocity (capped at 2500 counts/s) and gain, idle/timestamp/edge reset counts,
-and userspace-read-to-framebuffer-copy-
-complete timing. Live events are stamped at read time with `CLOCK_MONOTONIC`,
+precision and direction carry resets, non-edge suppressed events, zero-valued
+relative packets, and userspace-read-to-framebuffer-copy-complete timing. Live
+events are stamped at read time with `CLOCK_MONOTONIC`,
 matching the wsdisplay completion clock. The metric excludes time already
 spent in the device/kernel queue and does not measure scanout or glass latency.
 An input-frame pipeline breakdown separates the wait to render, SDL software
@@ -257,6 +265,13 @@ resolution. Source-shadow damage suppression was then validated on the same
 hardware: the latest guided runtime trial averaged 5 ms from userspace input
 read through framebuffer-copy completion.
 
+The next adaptive-pointer trace retained that 5 ms average. Of 1709 relative
+events, 888 used 100% gain, 626 used 101..149%, 186 used 150..199%, 9 used
+200..249%, and none reached 250%. The user judged the overall feel good but
+reported flutter during small movements instead of a straight course. That
+observation motivated the 400-count/s identity region and carry-clearing
+checkpoint above; its effect has not yet been validated on the physical X220.
+
 To avoid rewriting roughly 4.0 MiB for every cursor update, the `wsdisplay`
 host now owns a tightly packed copy of the last accepted 32-bit source
 frame. After complete upfront validation, unchanged rows cause no device write
@@ -293,9 +308,10 @@ managed window. Motion was functional but felt slower and less fluid than the
 hosted path. The later pipeline measurements isolated the initial delay to
 full-frame conversion and mapped-framebuffer writes; the optimized conversion
 felt substantially better. Damage-suppressed mapped writes subsequently
-averaged 5 ms in physical validation. The adaptive raw-wscons profile is now
-the next pointer-feel comparison; input-wait policy remains an independent
-follow-up.
+averaged 5 ms in physical validation. A later adaptive trial retained the
+5 ms average and felt good overall, but exposed low-speed flutter. The new
+identity threshold and precision/direction carry resets await a repeat
+pointer-feel comparison; input-wait policy remains an independent follow-up.
 
 On 2026-07-14, the first guided `--runtime-preview` X220 trial completed as
 well. The physical console displayed the shared runtime and real NixInfo

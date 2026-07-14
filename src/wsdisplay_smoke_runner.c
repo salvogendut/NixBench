@@ -950,6 +950,14 @@ static void print_input_stats(const struct nb_smoke_worker *worker)
                (unsigned long long)stats.adaptive_idle_resets,
                (unsigned long long)stats.adaptive_timestamp_resets,
                (unsigned long long)stats.adaptive_edge_resets);
+        printf("  adaptive carry: precision-carries-cleared=%llu "
+               "direction-carries-cleared=%llu nonedge-suppressed=%llu "
+               "zero-relative=%llu\n",
+               (unsigned long long)stats.adaptive_precision_carry_resets,
+               (unsigned long long)stats.adaptive_direction_carry_resets,
+               (unsigned long long)
+                   stats.adaptive_nonedge_suppressed_events,
+               (unsigned long long)stats.adaptive_zero_relative_events);
     }
     printf("  native: read=%llu untranslated=%llu\n",
            (unsigned long long)stats.native_events_read,
