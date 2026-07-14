@@ -176,8 +176,8 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
 - **NetBSD 10.1 (GENERIC), amd64** with SDL3 3.4.2, Wayland, libxkbcommon,
   and wayland-protocols from pkgsrc: default dependency discovery, generated
   xdg-shell bindings, native compilation of both SDL and experimental
-  `wsdisplay` hosts, and all 23 current tests were confirmed working on July
-  13, 2026. An earlier X11-hosted run also published the nested Wayland socket
+  `wsdisplay` hosts, and all 24 current tests were confirmed working on July
+  14, 2026. An earlier X11-hosted run also published the nested Wayland socket
   and displayed the demo client's first rendered frame.
 
   The capability probe on the current QEMU guest reports SDL's Wayland, X11,
