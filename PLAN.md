@@ -375,7 +375,11 @@ the result was all good. A readiness-driven blocking wait now covers the
 wsdisplay self-pipe and both wscons descriptors, gives lifecycle events
 simultaneous-readiness priority, and retains bounded 128-event host and
 64-event input phases. Its wait counters are exposed, portable tests pass, and
-physical NetBSD validation is the remaining gate.
+the X220 trial physically validated the normal input-driven path. All 1232
+waits woke for input, with no timeout, interruption, signal-pipe wake,
+simultaneous readiness, queued host event, or clock regression. Input-read-to-
+copy completion averaged 6 ms with a 24 ms maximum, console restoration
+passed, and the user reported that the interaction felt good.
 A first guided `--runtime-preview` X220 trial completed on 2026-07-14. The
 physical console displayed the shared runtime and real NixInfo application
 through `wsdisplay` and wscons without X11, Wayland publication, or SDL video;

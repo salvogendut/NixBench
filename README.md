@@ -239,9 +239,13 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
   timestamp-bucket grouping is now physically validated on the X220: all 1738
   relative events used native timestamps, forming 1035 buckets with 703 same-
   timestamp events and no fallback or clock-source reset. The user reported
-  that the result was all good. A subsequent readiness-driven blocking wait is
-  implemented but awaits its hardware trial. The successful interaction trial
-  does not turn this research harness into a production input/session path.
+  that the result was all good. The subsequent readiness-driven blocking-wait
+  trial also felt good: all 1232 waits woke for wscons input, with no timeout,
+  interruption, lifecycle race, or clock regression. Input read through
+  framebuffer-copy completion averaged 6 ms and reached 24 ms at most, and the
+  supervisor restored and independently verified the console. The successful
+  interaction trials do not turn this research harness into a production
+  input/session path.
 
   On 2026-07-14, the first guided `--runtime-preview` trial also completed on
   the X220. The physical console displayed the shared desktop runtime and real
@@ -415,8 +419,12 @@ deadline. Lifecycle events are checked before blocking and after every wake,
 timeout, or interruption, and take priority when lifecycle and input become
 ready together. Each loop phase drains at most 128 host events and 64 input
 events, with host events rechecked around input handling and presentation so an
-input flood cannot starve VT release or termination. This path is covered by
-device-free tests but still awaits physical NetBSD validation.
+input flood cannot starve VT release or termination. Device-free tests cover
+the wait rules, and the X220 hardware trial physically validated the normal
+input-driven path: 1232 calls produced 1232 input-ready wakes and no timeout,
+interruption, signal-pipe wake, simultaneous readiness, or queued host event.
+The interaction felt good, average input-read-to-copy completion was 6 ms, and
+console restoration passed.
 
 `--wscons-input-stats` identifies the active profile and reports raw and
 logical distance, unit deltas, suppression/clamping, adaptive gain buckets,

@@ -253,8 +253,12 @@ input flood cannot starve VT release or termination. The input descriptors are
 borrowed only for one wait call, so suspension cannot leave stale descriptors
 registered in the host. `--wscons-input-stats` reports wait calls, input and
 signal-pipe readiness, simultaneous readiness, host events, timeouts, and
-interruptions. This path is covered by device-free tests but still awaits
-physical NetBSD validation.
+interruptions. Device-free tests cover the wait rules. In the physical X220
+trial, all 1232 calls woke for wscons input; signal-pipe readiness,
+simultaneous readiness, queued host events, timeouts, interruptions, and clock
+regressions remained zero. Input-read-to-framebuffer-copy completion averaged
+6 ms with a 24 ms maximum, interaction felt good, and console restoration
+passed.
 
 The unmapped parent applies a hard deadline of at most 30000 ms, terminates and
 reaps an unresponsive child, then independently restores and verifies every
@@ -343,8 +347,11 @@ was also reported all good: all 1738 relative events used native timestamps,
 forming 1035 buckets with 703 same-timestamp events and no fallback or clock-
 source reset. Input-to-framebuffer-copy completion averaged 8 ms with a 22 ms
 maximum, and console restoration passed. The subsequent readiness-driven wait
-is implemented with lifecycle priority and bounded input batches but awaits a
-physical comparison.
+was then physically validated with lifecycle priority and bounded input
+batches intact. All 1232 waits were input-ready, with no timeout,
+interruption, lifecycle race, or clock regression. Input-to-copy completion
+averaged 6 ms with a 24 ms maximum, the interaction felt good, and console
+restoration passed again.
 
 On 2026-07-14, the first guided `--runtime-preview` X220 trial completed as
 well. The physical console displayed the shared runtime and real NixInfo
