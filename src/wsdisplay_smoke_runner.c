@@ -39,6 +39,7 @@ int nb_wsdisplay_smoke_run(
 #include <time.h>
 #include <unistd.h>
 
+#include "desktop_runtime.h"
 #include "desktop_preview.h"
 #include "host_wsdisplay.h"
 #include "wscons_input.h"
@@ -618,6 +619,7 @@ static void print_host_error(struct nb_host *host, const char *operation)
 struct nb_smoke_frame_source {
     struct nb_wsdisplay_smoke_image diagnostic;
     struct nb_desktop_preview *desktop;
+    struct nb_desktop_runtime *runtime;
 };
 
 struct nb_smoke_worker {
@@ -633,15 +635,21 @@ struct nb_smoke_worker {
     bool user_exit_requested;
 };
 
-static bool desktop_content(enum nb_wsdisplay_smoke_content content)
+static bool preview_content(enum nb_wsdisplay_smoke_content content)
 {
     return content == NB_WSDISPLAY_SMOKE_CONTENT_DESKTOP_PREVIEW ||
            content == NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW;
 }
 
+static bool runtime_content(enum nb_wsdisplay_smoke_content content)
+{
+    return content == NB_WSDISPLAY_SMOKE_CONTENT_RUNTIME_PREVIEW;
+}
+
 static bool interactive_content(enum nb_wsdisplay_smoke_content content)
 {
-    return content == NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW;
+    return content == NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW ||
+           runtime_content(content);
 }
 
 static const char *content_description(
@@ -649,6 +657,9 @@ static const char *content_description(
 {
     if (content == NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW) {
         return "interactive NixBench desktop preview";
+    }
+    if (runtime_content(content)) {
+        return "NixBench desktop runtime preview";
     }
     return content == NB_WSDISPLAY_SMOKE_CONTENT_DESKTOP_PREVIEW
                ? "NixBench desktop preview"
@@ -687,6 +698,65 @@ static void print_input_error(struct nb_wscons_input *input,
     }
 }
 
+static void apply_runtime_update(
+    struct nb_smoke_worker *worker,
+    const struct nb_desktop_runtime_update *update)
+{
+    worker->redraw_needed = worker->redraw_needed || update->redraw;
+    worker->user_exit_requested =
+        worker->user_exit_requested || update->quit_requested;
+}
+
+static bool set_content_pointer(struct nb_smoke_worker *worker,
+                                int x,
+                                int y,
+                                bool visible)
+{
+    if (runtime_content(worker->options->content)) {
+        return nb_desktop_runtime_set_pointer(worker->source.runtime,
+                                              x,
+                                              y,
+                                              visible);
+    }
+    return nb_desktop_preview_set_pointer(worker->source.desktop,
+                                          x,
+                                          y,
+                                          visible);
+}
+
+static bool configure_runtime_content(struct nb_smoke_worker *worker)
+{
+    struct nb_desktop_runtime_update update;
+
+    if (worker->source.runtime == NULL) {
+        struct nb_desktop_runtime_options options;
+
+        nb_desktop_runtime_options_init(&options);
+        options.software_pointer = true;
+        worker->source.runtime =
+            nb_desktop_runtime_create(&options, &worker->output);
+        if (worker->source.runtime == NULL) {
+            fputs("Could not create the NixBench desktop runtime\n", stderr);
+            return false;
+        }
+    } else if (!nb_desktop_runtime_set_output(worker->source.runtime,
+                                               &worker->output)) {
+        fputs("Could not configure the NixBench desktop runtime\n", stderr);
+        return false;
+    }
+
+    if (!nb_desktop_runtime_set_focus(
+            worker->source.runtime,
+            true,
+            nb_host_monotonic_milliseconds(worker->host),
+            &update)) {
+        fputs("Could not focus the NixBench desktop runtime\n", stderr);
+        return false;
+    }
+    apply_runtime_update(worker, &update);
+    return true;
+}
+
 static bool configure_content(struct nb_smoke_worker *worker)
 {
     int pointer_x;
@@ -696,7 +766,11 @@ static bool configure_content(struct nb_smoke_worker *worker)
         print_host_error(worker->host, "Could not query wsdisplay output");
         return false;
     }
-    if (desktop_content(worker->options->content)) {
+    if (runtime_content(worker->options->content)) {
+        if (!configure_runtime_content(worker)) {
+            return false;
+        }
+    } else if (preview_content(worker->options->content)) {
         if (!nb_desktop_preview_set_output(worker->source.desktop,
                                            &worker->output)) {
             fputs("Could not configure the NixBench desktop preview\n",
@@ -720,10 +794,10 @@ static bool configure_content(struct nb_smoke_worker *worker)
             !nb_wscons_input_get_position(worker->input,
                                            &pointer_x,
                                            &pointer_y) ||
-            !nb_desktop_preview_set_pointer(worker->source.desktop,
-                                             pointer_x,
-                                             pointer_y,
-                                             true)) {
+            !set_content_pointer(worker,
+                                 pointer_x,
+                                 pointer_y,
+                                 true)) {
             fputs("Could not update interactive preview coordinates\n",
                   stderr);
             return false;
@@ -743,7 +817,16 @@ static bool render_content(struct nb_smoke_worker *worker,
         fputs("Frame serial exhausted\n", stderr);
         return false;
     }
-    if (desktop_content(worker->options->content)) {
+    if (runtime_content(worker->options->content)) {
+        current_clock_text(clock_text);
+        if (!nb_desktop_runtime_render(worker->source.runtime,
+                                       clock_text,
+                                       worker->next_serial,
+                                       frame)) {
+            fputs("Could not render the NixBench desktop runtime\n", stderr);
+            return false;
+        }
+    } else if (preview_content(worker->options->content)) {
         current_clock_text(clock_text);
         if (!nb_desktop_preview_render(worker->source.desktop,
                                        clock_text,
@@ -792,17 +875,45 @@ static bool try_present_content(struct nb_smoke_worker *worker)
 static bool process_input_event(struct nb_smoke_worker *worker,
                                 const struct nb_host_event *event)
 {
-    struct nb_desktop_preview_update update;
+    if (runtime_content(worker->options->content)) {
+        struct nb_desktop_runtime_update update;
 
-    if (!nb_desktop_preview_handle_input(worker->source.desktop,
-                                         event,
-                                         &update)) {
-        fputs("Could not route a wscons input event\n", stderr);
+        if (!nb_desktop_runtime_handle_input(worker->source.runtime,
+                                             event,
+                                             &update)) {
+            fputs("Could not route input to the NixBench desktop runtime\n",
+                  stderr);
+            return false;
+        }
+        apply_runtime_update(worker, &update);
+    } else {
+        struct nb_desktop_preview_update update;
+
+        if (!nb_desktop_preview_handle_input(worker->source.desktop,
+                                             event,
+                                             &update)) {
+            fputs("Could not route a wscons input event\n", stderr);
+            return false;
+        }
+        worker->redraw_needed = worker->redraw_needed || update.redraw;
+        worker->user_exit_requested =
+            worker->user_exit_requested || update.exit_requested;
+    }
+    return true;
+}
+
+static bool dispatch_runtime_content(struct nb_smoke_worker *worker)
+{
+    struct nb_desktop_runtime_update update;
+
+    if (!runtime_content(worker->options->content)) {
+        return true;
+    }
+    if (!nb_desktop_runtime_dispatch(worker->source.runtime, &update)) {
+        fputs("Could not dispatch the NixBench desktop runtime\n", stderr);
         return false;
     }
-    worker->redraw_needed = worker->redraw_needed || update.redraw;
-    worker->user_exit_requested =
-        worker->user_exit_requested || update.exit_requested;
+    apply_runtime_update(worker, &update);
     return true;
 }
 
@@ -817,11 +928,21 @@ static bool process_worker_host_event(struct nb_smoke_worker *worker,
             worker->pending_serial) {
             worker->pending_serial = 0;
             worker->frame_completed = true;
+            if (runtime_content(worker->options->content)) {
+                nb_desktop_runtime_frame_presented(
+                    worker->source.runtime,
+                    event->milliseconds);
+            }
         }
         return true;
     case NB_HOST_EVENT_CONSOLE_RELEASE_REQUESTED:
-        if (worker->input != NULL) {
+        if (runtime_content(worker->options->content)) {
+            nb_desktop_runtime_cancel_input(worker->source.runtime,
+                                            event->milliseconds);
+        } else if (worker->input != NULL) {
             (void)nb_desktop_preview_cancel_input(worker->source.desktop);
+        }
+        if (worker->input != NULL) {
             nb_wscons_input_suspend(worker->input);
         }
         worker->pending_serial = 0;
@@ -930,7 +1051,7 @@ static int run_worker(const struct nb_wsdisplay_smoke_options *options,
     memset(&worker, 0, sizeof(worker));
     worker.options = options;
     worker.next_serial = 1;
-    if (desktop_content(options->content)) {
+    if (preview_content(options->content)) {
         worker.source.desktop = nb_desktop_preview_create();
         if (worker.source.desktop == NULL) {
             fputs("Could not create the NixBench desktop preview\n", stderr);
@@ -964,10 +1085,10 @@ static int run_worker(const struct nb_wsdisplay_smoke_options *options,
         if (!nb_wscons_input_get_position(worker.input,
                                           &pointer_x,
                                           &pointer_y) ||
-            !nb_desktop_preview_set_pointer(worker.source.desktop,
-                                             pointer_x,
-                                             pointer_y,
-                                             true)) {
+            !set_content_pointer(&worker,
+                                 pointer_x,
+                                 pointer_y,
+                                 true)) {
             fputs("Could not initialize the interactive cursor\n", stderr);
             goto cleanup;
         }
@@ -992,7 +1113,8 @@ static int run_worker(const struct nb_wsdisplay_smoke_options *options,
                                   : (uint32_t)remaining;
         enum nb_host_event_status status;
 
-        if (!drain_host_events(&worker) ||
+        if (!dispatch_runtime_content(&worker) ||
+            !drain_host_events(&worker) ||
             !drain_input_events(&worker) ||
             !drain_host_events(&worker) ||
             !try_present_content(&worker)) {
@@ -1025,6 +1147,7 @@ cleanup:
     if (worker.host != NULL) {
         nb_host_destroy(worker.host);
     }
+    nb_desktop_runtime_destroy(worker.source.runtime);
     nb_desktop_preview_destroy(worker.source.desktop);
     nb_wsdisplay_smoke_image_destroy(&worker.source.diagnostic);
     return success ? 0 : 1;
@@ -1251,7 +1374,8 @@ int nb_wsdisplay_smoke_run(
     }
     if (options->content != NB_WSDISPLAY_SMOKE_CONTENT_DIAGNOSTIC &&
         options->content != NB_WSDISPLAY_SMOKE_CONTENT_DESKTOP_PREVIEW &&
-        options->content != NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW) {
+        options->content != NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW &&
+        options->content != NB_WSDISPLAY_SMOKE_CONTENT_RUNTIME_PREVIEW) {
         fputs("Invalid wsdisplay smoke content selection\n", stderr);
         return 2;
     }

@@ -71,6 +71,12 @@ static void test_parser_takeover(void)
         "--acknowledge-no-crash-watchdog",
         "--interactive-preview"
     };
+    char *runtime[] = {
+        "smoke",
+        "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog",
+        "--runtime-preview"
+    };
 
     CHECK(parse((int)(sizeof(diagnostic) / sizeof(diagnostic[0])),
                 diagnostic,
@@ -94,6 +100,11 @@ static void test_parser_takeover(void)
                 &options,
                 error));
     CHECK(options.content == NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW);
+    CHECK(parse((int)(sizeof(runtime) / sizeof(runtime[0])),
+                runtime,
+                &options,
+                error));
+    CHECK(options.content == NB_WSDISPLAY_SMOKE_CONTENT_RUNTIME_PREVIEW);
 }
 
 static void test_parser_rejections(void)
@@ -153,6 +164,19 @@ static void test_parser_rejections(void)
     char *unsafe_interactive[] = {
         "smoke", "--preflight-only", "--interactive-preview"
     };
+    char *duplicate_runtime[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--runtime-preview",
+        "--runtime-preview"
+    };
+    char *conflicting_runtime[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--interactive-preview",
+        "--runtime-preview"
+    };
+    char *unsafe_runtime[] = {
+        "smoke", "--preflight-only", "--runtime-preview"
+    };
 
     CHECK(!parse(5, low, &options, error));
     CHECK(!parse(5, high, &options, error));
@@ -170,6 +194,9 @@ static void test_parser_rejections(void)
     CHECK(!parse(5, duplicate_preview, &options, error));
     CHECK(!parse(5, conflicting_preview, &options, error));
     CHECK(!parse(3, unsafe_interactive, &options, error));
+    CHECK(!parse(5, duplicate_runtime, &options, error));
+    CHECK(!parse(5, conflicting_runtime, &options, error));
+    CHECK(!parse(3, unsafe_runtime, &options, error));
 }
 
 static void test_vt_number_translation(void)

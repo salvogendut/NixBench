@@ -513,6 +513,7 @@ if(NIXBENCH_BUILD_WSDISPLAY_SMOKE)
   target_link_libraries(
     nixbench-wsdisplay-smoke
     PRIVATE
+      nixbench_desktop_runtime
       nixbench_desktop_preview
       nixbench_host_wsdisplay
       nixbench_wscons_input
