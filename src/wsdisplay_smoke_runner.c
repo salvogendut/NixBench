@@ -958,6 +958,13 @@ static void print_input_stats(const struct nb_smoke_worker *worker)
                (unsigned long long)
                    stats.adaptive_nonedge_suppressed_events,
                (unsigned long long)stats.adaptive_zero_relative_events);
+        printf("  adaptive clock: native=%llu fallback=%llu groups=%llu "
+               "same-stamp=%llu source-resets=%llu\n",
+               (unsigned long long)stats.adaptive_native_timestamp_events,
+               (unsigned long long)stats.adaptive_fallback_timestamp_events,
+               (unsigned long long)stats.adaptive_motion_groups,
+               (unsigned long long)stats.adaptive_same_timestamp_events,
+               (unsigned long long)stats.adaptive_clock_source_resets);
     }
     printf("  native: read=%llu untranslated=%llu\n",
            (unsigned long long)stats.native_events_read,

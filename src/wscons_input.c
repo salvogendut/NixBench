@@ -37,6 +37,8 @@ struct nb_wscons_input {
 
 enum {
     NB_WSCONS_ADAPTIVE_IDLE_RESET_MILLISECONDS = 100,
+    NB_WSCONS_ADAPTIVE_IDLE_RESET_NANOSECONDS = 100000000,
+    NB_WSCONS_NANOSECONDS_PER_SECOND = 1000000000,
     NB_WSCONS_ADAPTIVE_PRECISION_VELOCITY = 400,
     NB_WSCONS_ADAPTIVE_LOW_VELOCITY = 750,
     NB_WSCONS_ADAPTIVE_HIGH_VELOCITY = 1500,
@@ -49,12 +51,14 @@ static void reset_adaptive_motion(
     struct nb_wscons_input_reducer *reducer)
 {
     reducer->adaptive_group_milliseconds = 0;
+    reducer->adaptive_group_motion_nanoseconds = 0;
     reducer->adaptive_group_distance_x = 0;
     reducer->adaptive_group_distance_y = 0;
     reducer->adaptive_filtered_velocity_counts_per_second = 0;
     reducer->adaptive_gain_percent =
         NB_WSCONS_POINTER_ADAPTIVE_MIN_GAIN_PERCENT;
     reducer->adaptive_group_valid = false;
+    reducer->adaptive_group_uses_native_timestamp = false;
     reducer->pointer_remainder_x = 0;
     reducer->pointer_remainder_y = 0;
     reducer->pointer_direction_x = 0;
@@ -259,11 +263,14 @@ static uint64_t signed_distance(int64_t value)
 }
 
 /*
- * X and Y arrive as separate wscons events. Events stamped in the same
- * millisecond therefore form one motion group and receive one shared gain.
- * Once a later group starts, the completed group's approximate vector length
- * and elapsed time update the velocity used by the new group. This deliberate
- * one-group delay avoids axis-order bias without buffering host events.
+ * X and Y arrive as separate wscons events. Matching native wscons timestamps
+ * form one timestamp bucket; getnanotime(9) can stamp separate injections in
+ * the same kernel tick identically, so a bucket is not a physical-report
+ * boundary. Portable and invalid-native events retain userspace read
+ * milliseconds as a fallback. Once a later bucket starts, the completed
+ * bucket's approximate vector length and elapsed time update the velocity used
+ * by the new bucket. This deliberate one-bucket delay avoids axis-order bias
+ * without buffering host events.
  */
 
 static uint64_t approximate_group_distance(
@@ -288,20 +295,24 @@ static uint64_t approximate_group_distance(
 
 static uint64_t adaptive_group_velocity(
     const struct nb_wscons_input_reducer *reducer,
-    uint64_t elapsed_milliseconds)
+    uint64_t elapsed,
+    uint64_t ticks_per_second)
 {
     const uint64_t distance = approximate_group_distance(reducer);
-    const uint64_t distance_at_limit =
-        ((uint64_t)NB_WSCONS_ADAPTIVE_VELOCITY_LIMIT *
-             elapsed_milliseconds +
-         UINT64_C(999)) /
-        UINT64_C(1000);
+    uint64_t scaled_distance;
+    uint64_t velocity;
 
-    /* elapsed is 1..99 ms, so this comparison also protects distance * 1000. */
-    if (distance >= distance_at_limit) {
+    if (elapsed == 0 || ticks_per_second == 0) {
+        return 0;
+    }
+    if (distance > UINT64_MAX / ticks_per_second) {
         return NB_WSCONS_ADAPTIVE_VELOCITY_LIMIT;
     }
-    return distance * UINT64_C(1000) / elapsed_milliseconds;
+    scaled_distance = distance * ticks_per_second;
+    velocity = scaled_distance / elapsed;
+    return velocity > NB_WSCONS_ADAPTIVE_VELOCITY_LIMIT
+               ? NB_WSCONS_ADAPTIVE_VELOCITY_LIMIT
+               : velocity;
 }
 
 static uint64_t filter_adaptive_velocity(uint64_t previous,
@@ -376,40 +387,81 @@ static void clear_precision_carry(
 
 static void begin_adaptive_group(
     struct nb_wscons_input_reducer *reducer,
-    uint64_t milliseconds)
+    const struct nb_wscons_raw_event *raw_event)
 {
-    reducer->adaptive_group_milliseconds = milliseconds;
+    reducer->adaptive_group_milliseconds =
+        raw_event->motion_nanoseconds_valid ? 0
+                                            : raw_event->milliseconds;
+    reducer->adaptive_group_motion_nanoseconds =
+        raw_event->motion_nanoseconds_valid
+            ? raw_event->motion_nanoseconds
+            : 0;
     reducer->adaptive_group_distance_x = 0;
     reducer->adaptive_group_distance_y = 0;
     reducer->adaptive_group_valid = true;
+    reducer->adaptive_group_uses_native_timestamp =
+        raw_event->motion_nanoseconds_valid;
+    saturating_increment(&reducer->stats.adaptive_motion_groups);
 }
 
 static unsigned int prepare_adaptive_gain(
     struct nb_wscons_input_reducer *reducer,
-    uint64_t milliseconds)
+    const struct nb_wscons_raw_event *raw_event)
 {
     struct nb_wscons_input_stats *stats = &reducer->stats;
+    const bool uses_native_timestamp =
+        raw_event->motion_nanoseconds_valid;
+    const uint64_t timestamp = uses_native_timestamp
+                                   ? raw_event->motion_nanoseconds
+                                   : raw_event->milliseconds;
+    const uint64_t ticks_per_second = uses_native_timestamp
+                                          ? NB_WSCONS_NANOSECONDS_PER_SECOND
+                                          : UINT64_C(1000);
+    const uint64_t idle_reset_ticks =
+        uses_native_timestamp
+            ? NB_WSCONS_ADAPTIVE_IDLE_RESET_NANOSECONDS
+            : NB_WSCONS_ADAPTIVE_IDLE_RESET_MILLISECONDS;
+    uint64_t group_timestamp;
+
+    saturating_increment(uses_native_timestamp
+                             ? &stats->adaptive_native_timestamp_events
+                             : &stats->adaptive_fallback_timestamp_events);
 
     if (!reducer->adaptive_group_valid) {
-        begin_adaptive_group(reducer, milliseconds);
+        begin_adaptive_group(reducer, raw_event);
         return reducer->adaptive_gain_percent;
     }
-    if (milliseconds < reducer->adaptive_group_milliseconds) {
+    if (reducer->adaptive_group_uses_native_timestamp !=
+        uses_native_timestamp) {
+        saturating_increment(&stats->adaptive_clock_source_resets);
+        reset_adaptive_motion(reducer);
+        begin_adaptive_group(reducer, raw_event);
+        return reducer->adaptive_gain_percent;
+    }
+    group_timestamp = uses_native_timestamp
+                          ? reducer->adaptive_group_motion_nanoseconds
+                          : reducer->adaptive_group_milliseconds;
+    if (timestamp < group_timestamp) {
         saturating_increment(&stats->adaptive_timestamp_resets);
         reset_adaptive_motion(reducer);
-        begin_adaptive_group(reducer, milliseconds);
+        begin_adaptive_group(reducer, raw_event);
         return reducer->adaptive_gain_percent;
     }
-    if (milliseconds > reducer->adaptive_group_milliseconds) {
-        const uint64_t elapsed =
-            milliseconds - reducer->adaptive_group_milliseconds;
+    if (timestamp == group_timestamp) {
+        saturating_increment(&stats->adaptive_same_timestamp_events);
+        return reducer->adaptive_gain_percent;
+    }
+    {
+        const uint64_t elapsed = timestamp - group_timestamp;
 
-        if (elapsed >= NB_WSCONS_ADAPTIVE_IDLE_RESET_MILLISECONDS) {
+        if (elapsed >= idle_reset_ticks) {
             saturating_increment(&stats->adaptive_idle_resets);
             reset_adaptive_motion(reducer);
         } else {
             const uint64_t instantaneous =
-                adaptive_group_velocity(reducer, elapsed);
+                adaptive_group_velocity(reducer,
+                                        elapsed,
+                                        ticks_per_second);
             const unsigned int previous_gain =
                 reducer->adaptive_gain_percent;
 
@@ -431,7 +483,7 @@ static unsigned int prepare_adaptive_gain(
                     reducer->adaptive_filtered_velocity_counts_per_second;
             }
         }
-        begin_adaptive_group(reducer, milliseconds);
+        begin_adaptive_group(reducer, raw_event);
     }
     return reducer->adaptive_gain_percent;
 }
@@ -665,8 +717,7 @@ static enum nb_wscons_reduce_result reduce_relative_event(
 
     record_relative_event(reducer, raw_event, horizontal);
     if (reducer->pointer_profile == NB_WSCONS_POINTER_PROFILE_ADAPTIVE) {
-        gain_percent = prepare_adaptive_gain(reducer,
-                                             raw_event->milliseconds);
+        gain_percent = prepare_adaptive_gain(reducer, raw_event);
         accumulate_adaptive_distance(reducer, horizontal, magnitude);
         record_adaptive_gain(reducer, gain_percent);
         prepare_adaptive_direction(
@@ -981,6 +1032,29 @@ static bool monotonic_milliseconds(uint64_t *value, int *system_error)
     return true;
 }
 
+static bool wscons_motion_nanoseconds(const struct timespec *timestamp,
+                                      uint64_t *value)
+{
+    uint64_t seconds;
+    uint64_t nanoseconds;
+
+    if (timestamp == NULL || value == NULL || timestamp->tv_sec < 0 ||
+        timestamp->tv_nsec < 0 ||
+        timestamp->tv_nsec >= NB_WSCONS_NANOSECONDS_PER_SECOND) {
+        return false;
+    }
+    seconds = (uint64_t)timestamp->tv_sec;
+    nanoseconds = (uint64_t)timestamp->tv_nsec;
+    if (seconds >
+        (UINT64_MAX - nanoseconds) /
+            (uint64_t)NB_WSCONS_NANOSECONDS_PER_SECOND) {
+        return false;
+    }
+    *value = seconds * (uint64_t)NB_WSCONS_NANOSECONDS_PER_SECOND +
+             nanoseconds;
+    return true;
+}
+
 static bool translate_native_event(const struct wscons_event *native,
                                    uint64_t read_milliseconds,
                                    struct nb_wscons_raw_event *raw)
@@ -988,6 +1062,9 @@ static bool translate_native_event(const struct wscons_event *native,
     memset(raw, 0, sizeof(*raw));
     raw->value = native->value;
     raw->milliseconds = read_milliseconds;
+    raw->motion_nanoseconds_valid =
+        wscons_motion_nanoseconds(&native->time,
+                                  &raw->motion_nanoseconds);
     switch (native->type) {
     case WSCONS_EVENT_KEY_UP:
         raw->type = NB_WSCONS_RAW_EVENT_KEY_UP;

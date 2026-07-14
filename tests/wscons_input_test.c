@@ -25,7 +25,30 @@ static enum nb_wscons_reduce_result apply(
     uint64_t milliseconds,
     struct nb_host_event *event)
 {
-    const struct nb_wscons_raw_event raw = {type, value, milliseconds};
+    const struct nb_wscons_raw_event raw = {
+        .type = type,
+        .value = value,
+        .milliseconds = milliseconds
+    };
+
+    return nb_wscons_input_reducer_apply(reducer, &raw, event);
+}
+
+static enum nb_wscons_reduce_result apply_with_motion_nanoseconds(
+    struct nb_wscons_input_reducer *reducer,
+    enum nb_wscons_raw_event_type type,
+    int value,
+    uint64_t milliseconds,
+    uint64_t motion_nanoseconds,
+    struct nb_host_event *event)
+{
+    const struct nb_wscons_raw_event raw = {
+        .type = type,
+        .value = value,
+        .milliseconds = milliseconds,
+        .motion_nanoseconds = motion_nanoseconds,
+        .motion_nanoseconds_valid = true
+    };
 
     return nb_wscons_input_reducer_apply(reducer, &raw, event);
 }
@@ -486,6 +509,11 @@ static void test_adaptive_pointer_velocity(void)
     CHECK(stats.adaptive_gain_101_149_events == 0);
     CHECK(stats.adaptive_peak_filtered_velocity_counts_per_second == 125);
     CHECK(stats.adaptive_peak_gain_percent == 100);
+    CHECK(stats.adaptive_native_timestamp_events == 0);
+    CHECK(stats.adaptive_fallback_timestamp_events == 22);
+    CHECK(stats.adaptive_motion_groups == 21);
+    CHECK(stats.adaptive_same_timestamp_events == 1);
+    CHECK(stats.adaptive_clock_source_resets == 0);
 
     CHECK(nb_wscons_input_reducer_init(&reducer, 10000, 10000));
     CHECK(nb_wscons_input_reducer_set_pointer_profile(
@@ -612,6 +640,343 @@ static void test_adaptive_gain_boundaries(void)
     }
 }
 
+static void test_adaptive_native_motion_timestamps(void)
+{
+    struct nb_wscons_input_reducer reducer;
+    struct nb_host_event event;
+    struct nb_wscons_input_stats stats;
+
+    CHECK(nb_wscons_input_reducer_init(&reducer, 10000, 10000));
+    CHECK(nb_wscons_input_reducer_set_pointer_profile(
+        &reducer,
+        NB_WSCONS_POINTER_PROFILE_ADAPTIVE));
+
+    CHECK(apply_with_motion_nanoseconds(
+              &reducer,
+              NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+              4,
+              100,
+              UINT64_C(1000000000),
+              &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.milliseconds == 100);
+    CHECK(reducer.adaptive_group_uses_native_timestamp);
+    CHECK(reducer.adaptive_group_motion_nanoseconds ==
+          UINT64_C(1000000000));
+    CHECK(reducer.adaptive_group_milliseconds == 0);
+
+    /* Equal native stamps group even when userspace read times differ. */
+    CHECK(apply_with_motion_nanoseconds(
+              &reducer,
+              NB_WSCONS_RAW_EVENT_MOUSE_DELTA_Y,
+              4,
+              112,
+              UINT64_C(1000000000),
+              &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.milliseconds == 112);
+    CHECK(reducer.adaptive_filtered_velocity_counts_per_second == 0);
+    CHECK(reducer.adaptive_group_distance_x == 4);
+    CHECK(reducer.adaptive_group_distance_y == 4);
+
+    /* Distinct native stamps split groups even in one read millisecond. */
+    CHECK(apply_with_motion_nanoseconds(
+              &reducer,
+              NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+              4,
+              112,
+              UINT64_C(1008000000),
+              &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.milliseconds == 112);
+    CHECK(reducer.adaptive_filtered_velocity_counts_per_second == 188);
+    CHECK(reducer.adaptive_gain_percent == 100);
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.adaptive_native_timestamp_events == 3);
+    CHECK(stats.adaptive_fallback_timestamp_events == 0);
+    CHECK(stats.adaptive_motion_groups == 2);
+    CHECK(stats.adaptive_same_timestamp_events == 1);
+    CHECK(stats.adaptive_clock_source_resets == 0);
+
+    reducer.pointer_remainder_y = 75;
+    reducer.pointer_direction_y = -1;
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                113,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.milliseconds == 113);
+    CHECK(!reducer.adaptive_group_uses_native_timestamp);
+    CHECK(reducer.adaptive_group_milliseconds == 113);
+    CHECK(reducer.pointer_remainder_y == 0);
+    CHECK(reducer.pointer_direction_y == 0);
+    CHECK(reducer.adaptive_gain_percent == 100);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_Y,
+                1,
+                113,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.milliseconds == 113);
+
+    CHECK(apply_with_motion_nanoseconds(
+              &reducer,
+              NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+              1,
+              114,
+              UINT64_C(1016000000),
+              &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.milliseconds == 114);
+    CHECK(reducer.adaptive_group_uses_native_timestamp);
+    CHECK(reducer.adaptive_gain_percent == 100);
+
+    /* A realtime-clock regression is distinct from a source change. */
+    reducer.adaptive_gain_percent = 150;
+    reducer.pointer_remainder_y = -50;
+    reducer.pointer_direction_y = 1;
+    CHECK(apply_with_motion_nanoseconds(
+              &reducer,
+              NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+              1,
+              115,
+              UINT64_C(1015000000),
+              &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.milliseconds == 115);
+    CHECK(reducer.adaptive_group_motion_nanoseconds ==
+          UINT64_C(1015000000));
+    CHECK(reducer.adaptive_gain_percent == 100);
+    CHECK(reducer.pointer_remainder_y == 0);
+    CHECK(reducer.pointer_direction_y == 0);
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.adaptive_native_timestamp_events == 5);
+    CHECK(stats.adaptive_fallback_timestamp_events == 2);
+    CHECK(stats.adaptive_motion_groups == 5);
+    CHECK(stats.adaptive_same_timestamp_events == 2);
+    CHECK(stats.adaptive_clock_source_resets == 2);
+    CHECK(stats.adaptive_timestamp_resets == 1);
+}
+
+static void test_adaptive_timestamp_velocity_equivalence(void)
+{
+    struct nb_wscons_input_reducer fallback;
+    struct nb_wscons_input_reducer native;
+    struct nb_host_event event;
+    struct nb_wscons_input_stats fallback_stats;
+    struct nb_wscons_input_stats native_stats;
+    unsigned int index;
+
+    CHECK(nb_wscons_input_reducer_init(&fallback, 10000, 10000));
+    CHECK(nb_wscons_input_reducer_init(&native, 10000, 10000));
+    CHECK(nb_wscons_input_reducer_set_pointer_profile(
+        &fallback,
+        NB_WSCONS_POINTER_PROFILE_ADAPTIVE));
+    CHECK(nb_wscons_input_reducer_set_pointer_profile(
+        &native,
+        NB_WSCONS_POINTER_PROFILE_ADAPTIVE));
+
+    for (index = 0; index < 12; ++index) {
+        const uint64_t milliseconds =
+            UINT64_C(200) + (uint64_t)index * UINT64_C(8);
+        const uint64_t motion_nanoseconds =
+            UINT64_C(5000000000) +
+            (uint64_t)index * UINT64_C(8000000);
+
+        CHECK(apply(&fallback,
+                    NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                    40,
+                    milliseconds,
+                    &event) == NB_WSCONS_REDUCE_EVENT);
+        CHECK(apply_with_motion_nanoseconds(
+                  &native,
+                  NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                  40,
+                  milliseconds,
+                  motion_nanoseconds,
+                  &event) == NB_WSCONS_REDUCE_EVENT);
+        CHECK(event.milliseconds == milliseconds);
+        CHECK(fallback.pointer_x == native.pointer_x);
+        CHECK(fallback.pointer_remainder_x == native.pointer_remainder_x);
+        CHECK(fallback.adaptive_filtered_velocity_counts_per_second ==
+              native.adaptive_filtered_velocity_counts_per_second);
+        CHECK(fallback.adaptive_gain_percent ==
+              native.adaptive_gain_percent);
+    }
+    CHECK(nb_wscons_input_reducer_get_stats(&fallback, &fallback_stats));
+    CHECK(nb_wscons_input_reducer_get_stats(&native, &native_stats));
+    CHECK(fallback_stats.adaptive_fallback_timestamp_events == 12);
+    CHECK(fallback_stats.adaptive_native_timestamp_events == 0);
+    CHECK(native_stats.adaptive_native_timestamp_events == 12);
+    CHECK(native_stats.adaptive_fallback_timestamp_events == 0);
+    CHECK(fallback_stats.adaptive_motion_groups ==
+          native_stats.adaptive_motion_groups);
+    CHECK(fallback_stats.adaptive_same_timestamp_events == 0);
+    CHECK(native_stats.adaptive_same_timestamp_events == 0);
+}
+
+static void test_adaptive_timestamp_boundaries_and_extremes(void)
+{
+    struct nb_wscons_input_reducer reducer;
+    struct nb_host_event event;
+    struct nb_wscons_input_stats stats;
+
+    CHECK(nb_wscons_input_reducer_init(&reducer, 10000, 10000));
+    CHECK(nb_wscons_input_reducer_set_pointer_profile(
+        &reducer,
+        NB_WSCONS_POINTER_PROFILE_ADAPTIVE));
+    CHECK(apply_with_motion_nanoseconds(
+              &reducer,
+              NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+              1,
+              0,
+              0,
+              &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply_with_motion_nanoseconds(
+              &reducer,
+              NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+              1,
+              99,
+              UINT64_C(99999999),
+              &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.milliseconds == 99);
+    CHECK(reducer.adaptive_filtered_velocity_counts_per_second == 3);
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.adaptive_idle_resets == 0);
+    CHECK(stats.adaptive_motion_groups == 2);
+
+    CHECK(nb_wscons_input_reducer_init(&reducer, 10000, 10000));
+    CHECK(nb_wscons_input_reducer_set_pointer_profile(
+        &reducer,
+        NB_WSCONS_POINTER_PROFILE_ADAPTIVE));
+    CHECK(apply_with_motion_nanoseconds(
+              &reducer,
+              NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+              40,
+              0,
+              0,
+              &event) == NB_WSCONS_REDUCE_EVENT);
+    reducer.adaptive_filtered_velocity_counts_per_second = 750;
+    reducer.adaptive_gain_percent = 150;
+    reducer.pointer_remainder_x = 50;
+    reducer.pointer_remainder_y = -50;
+    reducer.pointer_direction_x = 1;
+    reducer.pointer_direction_y = -1;
+    CHECK(apply_with_motion_nanoseconds(
+              &reducer,
+              NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+              1,
+              100,
+              UINT64_C(100000000),
+              &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.milliseconds == 100);
+    CHECK(reducer.adaptive_filtered_velocity_counts_per_second == 0);
+    CHECK(reducer.adaptive_gain_percent == 100);
+    CHECK(reducer.pointer_remainder_x == 0);
+    CHECK(reducer.pointer_remainder_y == 0);
+    CHECK(reducer.pointer_direction_x == 1);
+    CHECK(reducer.pointer_direction_y == 0);
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.adaptive_idle_resets == 1);
+    CHECK(stats.adaptive_precision_carry_resets == 0);
+    CHECK(stats.adaptive_motion_groups == 2);
+
+    /* Saturated distance cannot overflow the native counts/second math. */
+    CHECK(nb_wscons_input_reducer_init(&reducer, 10000, 10000));
+    CHECK(nb_wscons_input_reducer_set_pointer_profile(
+        &reducer,
+        NB_WSCONS_POINTER_PROFILE_ADAPTIVE));
+    CHECK(apply_with_motion_nanoseconds(
+              &reducer,
+              NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+              1,
+              1,
+              0,
+              &event) == NB_WSCONS_REDUCE_EVENT);
+    reducer.adaptive_group_distance_x = UINT64_MAX;
+    CHECK(apply_with_motion_nanoseconds(
+              &reducer,
+              NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+              1,
+              2,
+              UINT64_C(99999999),
+              &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(reducer.adaptive_filtered_velocity_counts_per_second == 625);
+    CHECK(reducer.adaptive_gain_percent == 132);
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.adaptive_idle_resets == 0);
+    CHECK(stats.adaptive_peak_filtered_velocity_counts_per_second == 625);
+
+    /* Subtraction remains defined at the top of the uint64 timestamp range. */
+    CHECK(nb_wscons_input_reducer_init(&reducer, 10000, 10000));
+    CHECK(nb_wscons_input_reducer_set_pointer_profile(
+        &reducer,
+        NB_WSCONS_POINTER_PROFILE_ADAPTIVE));
+    CHECK(apply_with_motion_nanoseconds(
+              &reducer,
+              NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+              4,
+              10,
+              UINT64_MAX - UINT64_C(8000000),
+              &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply_with_motion_nanoseconds(
+              &reducer,
+              NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+              4,
+              11,
+              UINT64_MAX,
+              &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(reducer.adaptive_filtered_velocity_counts_per_second == 125);
+    CHECK(apply_with_motion_nanoseconds(
+              &reducer,
+              NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+              1,
+              12,
+              0,
+              &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.milliseconds == 12);
+    CHECK(reducer.adaptive_gain_percent == 100);
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.adaptive_timestamp_resets == 1);
+
+    /* Every source/group timestamp diagnostic saturates without wrapping. */
+    CHECK(nb_wscons_input_reducer_init(&reducer, 10000, 10000));
+    CHECK(nb_wscons_input_reducer_set_pointer_profile(
+        &reducer,
+        NB_WSCONS_POINTER_PROFILE_ADAPTIVE));
+    reducer.stats.adaptive_native_timestamp_events = UINT64_MAX;
+    reducer.stats.adaptive_fallback_timestamp_events = UINT64_MAX;
+    reducer.stats.adaptive_motion_groups = UINT64_MAX;
+    reducer.stats.adaptive_same_timestamp_events = UINT64_MAX;
+    reducer.stats.adaptive_clock_source_resets = UINT64_MAX;
+    reducer.stats.adaptive_timestamp_resets = UINT64_MAX;
+    CHECK(apply_with_motion_nanoseconds(
+              &reducer,
+              NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+              1,
+              20,
+              20,
+              &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply_with_motion_nanoseconds(
+              &reducer,
+              NB_WSCONS_RAW_EVENT_MOUSE_DELTA_Y,
+              1,
+              21,
+              20,
+              &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                30,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                29,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.adaptive_native_timestamp_events == UINT64_MAX);
+    CHECK(stats.adaptive_fallback_timestamp_events == UINT64_MAX);
+    CHECK(stats.adaptive_motion_groups == UINT64_MAX);
+    CHECK(stats.adaptive_same_timestamp_events == UINT64_MAX);
+    CHECK(stats.adaptive_clock_source_resets == UINT64_MAX);
+    CHECK(stats.adaptive_timestamp_resets == UINT64_MAX);
+}
+
 static void test_adaptive_pointer_carry_stabilization(void)
 {
     struct nb_wscons_input_reducer reducer;
@@ -652,6 +1017,11 @@ static void test_adaptive_pointer_carry_stabilization(void)
     CHECK(stats.adaptive_direction_carry_resets == 0);
     CHECK(stats.adaptive_nonedge_suppressed_events == 0);
     CHECK(stats.adaptive_zero_relative_events == 0);
+    CHECK(stats.adaptive_native_timestamp_events == 0);
+    CHECK(stats.adaptive_fallback_timestamp_events == 1);
+    CHECK(stats.adaptive_motion_groups == 1);
+    CHECK(stats.adaptive_same_timestamp_events == 0);
+    CHECK(stats.adaptive_clock_source_resets == 0);
 
     CHECK(nb_wscons_input_reducer_init(&reducer, 1000, 1000));
     CHECK(nb_wscons_input_reducer_set_pointer_profile(
@@ -1223,6 +1593,11 @@ static void test_pointer_statistics(void)
     CHECK(stats.adaptive_direction_carry_resets == 0);
     CHECK(stats.adaptive_nonedge_suppressed_events == 0);
     CHECK(stats.adaptive_zero_relative_events == 0);
+    CHECK(stats.adaptive_native_timestamp_events == 0);
+    CHECK(stats.adaptive_fallback_timestamp_events == 0);
+    CHECK(stats.adaptive_motion_groups == 0);
+    CHECK(stats.adaptive_same_timestamp_events == 0);
+    CHECK(stats.adaptive_clock_source_resets == 0);
     saved = stats;
 
     nb_wscons_input_reducer_reset(&reducer);
@@ -1391,7 +1766,9 @@ static void test_defensive_reducer(void)
 {
     struct nb_wscons_input_reducer reducer;
     struct nb_wscons_raw_event raw = {
-        NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X, 1, 400
+        .type = NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+        .value = 1,
+        .milliseconds = 400
     };
     struct nb_host_event event;
 
@@ -1505,6 +1882,9 @@ int main(void)
     test_pointer_sensitivity_edges();
     test_adaptive_pointer_velocity();
     test_adaptive_gain_boundaries();
+    test_adaptive_native_motion_timestamps();
+    test_adaptive_timestamp_velocity_equivalence();
+    test_adaptive_timestamp_boundaries_and_extremes();
     test_adaptive_pointer_carry_stabilization();
     test_adaptive_pointer_resets();
     test_adaptive_pointer_symmetry_and_saturation();

@@ -196,18 +196,21 @@ symmetric and drift-free. The harness rejects adaptive mode combined with an
 explicit sensitivity option. The guided X220 trial selects adaptive mode.
 Neither choice changes hosted SDL input.
 
-The adaptive reducer groups native X and Y motion stamped in the same
-userspace-read millisecond. Each group is scaled from the preceding completed
-group's raw velocity, filtered with a one-quarter EWMA; using one completed
-group ensures both axes of an uninterrupted current group share a gain. An
-edge clamp intentionally resets the profile before any later axis event. The
-piecewise-linear curve is 100% at and below 400 counts/s, reaches 150% at 750
-counts/s, 200% at 1500 counts/s, and 250% at 2500 counts/s, where it saturates.
-Adaptive history is discarded after an idle interval of at least 100 ms,
-timestamp regression,
-pointer-edge clamp, profile or sensitivity configuration change, and input
-open/close or other lifecycle transition. A resumed stream therefore begins at
-identity gain instead of inheriting stale motion.
+On NetBSD, the adaptive reducer validates the full realtime `timespec`
+attached to each native wscons event. X and Y motion with matching seconds and
+nanoseconds forms one timestamp bucket. `wsevent_inject()` stamps events with
+`getnanotime(9)`, which is normally precise to one kernel clock tick despite
+the nanosecond-shaped field; a bucket therefore does not assert a device packet
+or physical-report boundary. Each bucket is scaled from the preceding completed
+bucket's raw velocity, filtered with a one-quarter EWMA, so its motion receives
+one gain. An invalid native timestamp falls back to the monotonic userspace-read
+clock. Adaptive history is discarded after at least 100 ms idle, timestamp
+regression, a native/fallback clock-source switch, pointer-edge
+clamp, profile or sensitivity configuration change, and input open/close or
+another lifecycle transition. A resumed stream therefore begins at identity
+gain instead of inheriting stale timing. The piecewise-linear curve is 100% at
+and below 400 counts/s, reaches 150% at 750 counts/s, 200% at 1500 counts/s,
+and 250% at 2500 counts/s, where it saturates.
 
 Adaptive scaling also treats fractional carry as motion-history state. When
 filtered velocity returns to identity gain, both axis carries are cleared;
@@ -216,18 +219,21 @@ delta. These transitions prevent an accelerated residual from producing a
 delayed correction during slow or reversed movement. Physical X220 validation
 of the revised identity threshold and carry rules looked and felt good.
 
-The current native adapter timestamps each event after its userspace `read`
-rather than preserving a device timestamp. The estimator therefore observes
-the userspace drain rate: queued events consumed in a burst can appear faster
-than the original physical stream. The profile and its counters remain a
-hardware-tuning checkpoint, not a claim of device-accurate velocity.
+Native realtime is used only by the acceleration estimator. The normalized
+host event's millisecond timestamp remains the `CLOCK_MONOTONIC` value captured
+after its userspace `read`, as do the input/frame latency associations. Native
+realtime values therefore never leak into host dispatch or mix with framebuffer
+completion timing. A realtime clock step safely resets history or briefly
+distorts only acceleration, never the latency measurements. Native timestamp-
+bucket grouping still awaits physical X220 validation.
 
 `--wscons-input-stats` identifies the active profile and prints raw/logical
 distance and event-shape counters, adaptive gain buckets, peak filtered
 velocity (capped at 2500 counts/s) and gain, idle/timestamp/edge reset counts,
 precision and direction carry resets, non-edge suppressed events, zero-valued
-relative packets, and userspace-read-to-framebuffer-copy-complete timing. Live
-events are stamped at read time with `CLOCK_MONOTONIC`,
+relative packets, native/fallback timestamp events, motion groups,
+same-timestamp events, clock-source resets, and userspace-read-to-framebuffer-
+copy-complete timing. Host events are stamped at read time with `CLOCK_MONOTONIC`,
 matching the wsdisplay completion clock. The metric excludes time already
 spent in the device/kernel queue and does not measure scanout or glass latency.
 An input-frame pipeline breakdown separates the wait to render, SDL software
@@ -316,7 +322,9 @@ averaged 5 ms in physical validation. A later adaptive trial retained the
 5 ms average and felt good overall, but exposed low-speed flutter. The new
 identity threshold and precision/direction carry resets eliminated non-edge
 suppression in the repeat trace, and the user reported that it looked and felt
-good. Native report timing and input-wait policy remain independent follow-ups.
+good, physically validating the carry fix. Native timestamp-bucket grouping is
+implemented but awaits physical validation; input-wait policy
+remains an independent follow-up.
 
 On 2026-07-14, the first guided `--runtime-preview` X220 trial completed as
 well. The physical console displayed the shared runtime and real NixInfo

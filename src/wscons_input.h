@@ -43,7 +43,11 @@ enum nb_wscons_raw_event_type {
 struct nb_wscons_raw_event {
     enum nb_wscons_raw_event_type type;
     int value;
+    /* Monotonic userspace-read time retained for host events and latency. */
     uint64_t milliseconds;
+    /* Optional native wscons clock used only for adaptive motion grouping. */
+    uint64_t motion_nanoseconds;
+    bool motion_nanoseconds_valid;
 };
 
 enum nb_wscons_reduce_result {
@@ -53,10 +57,11 @@ enum nb_wscons_reduce_result {
 };
 
 /*
- * Cumulative diagnostics for raw relative pointer input. Live input timestamps
- * events when userspace reads them with CLOCK_MONOTONIC; portable reducer
- * tests may supply any timestamp. Distances are unsigned path lengths rather
- * than signed displacement. Counters saturate instead of wrapping.
+ * Cumulative diagnostics for raw relative pointer input. Normalized host-event
+ * time is captured after userspace read with CLOCK_MONOTONIC; native motion
+ * time may additionally drive adaptive grouping. Portable reducer tests may
+ * supply either timestamp. Distances are unsigned path lengths rather than
+ * signed displacement. Counters saturate instead of wrapping.
  */
 struct nb_wscons_input_stats {
     uint64_t native_events_read;
@@ -88,6 +93,11 @@ struct nb_wscons_input_stats {
     uint64_t adaptive_direction_carry_resets;
     uint64_t adaptive_nonedge_suppressed_events;
     uint64_t adaptive_zero_relative_events;
+    uint64_t adaptive_native_timestamp_events;
+    uint64_t adaptive_fallback_timestamp_events;
+    uint64_t adaptive_motion_groups;
+    uint64_t adaptive_same_timestamp_events;
+    uint64_t adaptive_clock_source_resets;
 };
 
 /* Public so the portable reducer can be stack-allocated and tested directly. */
@@ -105,6 +115,7 @@ struct nb_wscons_input_reducer {
     int pointer_direction_x;
     int pointer_direction_y;
     uint64_t adaptive_group_milliseconds;
+    uint64_t adaptive_group_motion_nanoseconds;
     uint64_t adaptive_group_distance_x;
     uint64_t adaptive_group_distance_y;
     uint64_t adaptive_filtered_velocity_counts_per_second;
@@ -112,6 +123,7 @@ struct nb_wscons_input_reducer {
     struct nb_wscons_input_stats stats;
     bool escape_pressed;
     bool adaptive_group_valid;
+    bool adaptive_group_uses_native_timestamp;
 };
 
 bool nb_wscons_input_reducer_init(struct nb_wscons_input_reducer *reducer,

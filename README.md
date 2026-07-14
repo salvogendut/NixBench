@@ -236,9 +236,10 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
   slower and less fluid than the hosted desktop. Subsequent profiling and
   source-shadow damage suppression reduced the measured userspace-read-to-
   framebuffer-copy-complete average to 5 ms on this machine. Native wscons
-  report timing and input scheduling remain tuning work; the
-  successful interaction trial does not turn this research harness into a
-  production input/session path.
+  native timestamp-bucket grouping is implemented but awaits physical
+  validation; input scheduling remains tuning work. The successful interaction
+  trial does not turn this research harness into a production input/session
+  path.
 
   On 2026-07-14, the first guided `--runtime-preview` trial also completed on
   the X220. The physical console displayed the shared desktop runtime and real
@@ -378,29 +379,38 @@ fractional gain symmetric and drift-free. An explicit sensitivity cannot be
 combined with `--wscons-pointer-profile adaptive`. Neither profile is ever
 applied to hosted SDL input. The guided X220 runner selects adaptive mode.
 
-The adaptive profile combines X and Y events stamped in the same userspace-
-read millisecond into one motion group. A group uses the preceding completed
-group's velocity, smoothed with a one-quarter EWMA, so both axes receive the
-same gain while the group remains uninterrupted. A clamp deliberately resets
-the profile before any later axis event. Gain is 100% through 400 raw counts
-per second, interpolates linearly to 150% at 750, 200% at 1500, and 250% at
-2500, then remains at 250%. Its history resets after at least 100 ms idle, a
-timestamp regression, a pointer-
-edge clamp, a profile/configuration change, or an input lifecycle transition.
+On NetBSD, the adaptive profile validates each native wscons event's full
+realtime `timespec` and places X and Y events with matching seconds and
+nanoseconds in one timestamp bucket. NetBSD stamps these events with
+`getnanotime(9)`, whose expected precision is one kernel clock tick despite the
+nanosecond-shaped field, so a bucket is not necessarily one physical report.
+A bucket uses the preceding completed bucket's velocity, smoothed with a
+one-quarter EWMA, so all motion in it receives the same gain. Invalid native
+timestamps fall back to the monotonic userspace-read clock. A native/fallback
+source switch, timestamp regression, at least 100 ms idle, pointer-edge clamp,
+profile/configuration change, or input lifecycle transition safely resets the
+adaptive history. Gain is 100% through 400 raw counts per second, interpolates
+linearly to 150% at 750, 200% at 1500, and 250% at 2500, then remains at 250%.
 When filtered motion returns to identity gain, the reducer clears both
 fractional carries rather than applying an old accelerated fraction to later
 precision motion. It also clears an axis carry when that axis reverses sign,
 preventing a residual from the previous direction from delaying a correction.
-Velocity is estimated from userspace read timestamps, so a queued burst can
-temporarily look faster than the physical device stream; this remains an
-experimental profile to validate on hardware.
+The carry correction is physically validated on the X220; native timestamp-
+bucket grouping is the next hardware checkpoint.
+
+Host event timestamps and all input-to-frame timing remain the
+`CLOCK_MONOTONIC` time captured after `read`. Native realtime is used only
+inside the acceleration estimator. A realtime clock step can safely reset its
+history or briefly distort acceleration, but cannot alter host dispatch or
+latency measurements.
 
 `--wscons-input-stats` identifies the active profile and reports raw and
 logical distance, unit deltas, suppression/clamping, adaptive gain buckets,
 peak filtered velocity (capped at 2500 counts/s) and gain, idle/timestamp/edge
 reset counts, precision and direction carry resets, non-edge suppression,
-zero-valued relative packets, event gaps, and userspace-read-to-framebuffer-
-copy-complete timing. That timing excludes
+zero-valued relative packets, native/fallback timestamp usage, motion-group
+and same-timestamp event counts, clock-source resets, event gaps, and userspace-
+read-to-framebuffer-copy-complete timing. That timing excludes
 device/kernel queueing, scanout, and physical-display latency. Its input-frame
 pipeline also separates time waiting to render, SDL software rendering,
 synchronous host presentation, the framebuffer-copy-complete timestamp, and

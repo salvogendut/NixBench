@@ -290,17 +290,26 @@ compiles against the official NetBSD 10.1 amd64 headers under strict warnings.
 Raw wscons motion retains a flat 100% library/default profile, with opt-in
 25..400% fixed-point sensitivity. The harness exposes
 `--wscons-pointer-profile flat|adaptive`; adaptive rejects an explicit fixed
-sensitivity, and the guided X220 runner selects it. It groups X/Y events read
-in the same monotonic millisecond, applies the preceding group's velocity with
-a one-quarter EWMA, and ramps gain from 100% through 400 counts/s to 150% at
-750, 200% at 1500, and 250% at 2500 counts/s. History resets after 100 ms idle,
-timestamp regression, an edge clamp, configuration change, or lifecycle
-transition. Returning to identity gain clears both fractional carries, and an
-axis sign reversal clears that axis carry, so a previous accelerated fraction
-cannot cause a delayed precision correction. Diagnostics expose the selected
-profile, adaptive gain buckets, peak capped filtered velocity/gain,
-idle/timestamp/edge and carry reset counts, non-edge suppression, zero-valued
-relative packets, raw/logical motion, and input-to-copy measurements. Hosted
+sensitivity, and the guided X220 runner selects it. On NetBSD it validates the
+native wscons event `timespec`, groups X/Y events with exactly matching seconds
+and nanoseconds into one timestamp bucket, applies the preceding bucket's
+velocity with a one-quarter EWMA, and ramps gain from 100% through 400
+counts/s to 150% at 750, 200% at 1500, and 250% at 2500 counts/s. An invalid
+native timestamp falls back to the monotonic userspace-read clock. NetBSD's
+`getnanotime(9)` stamping is normally precise to one kernel clock tick, so a
+bucket is not asserted to be one physical report. History
+resets after 100 ms idle, timestamp regression, a native/fallback source switch,
+edge clamp, configuration change, or lifecycle transition. Returning to
+identity gain clears both fractional
+carries, and an axis sign reversal clears that axis carry, so a previous
+accelerated fraction cannot cause a delayed precision correction. Diagnostics
+expose the selected profile, adaptive gain buckets, peak capped filtered
+velocity/gain, idle/timestamp/edge and carry reset counts, non-edge suppression,
+zero-valued relative packets, native/fallback event and motion-group counts,
+clock-source resets, raw/logical motion, and input-to-copy measurements. Host
+and latency timestamps remain the post-read `CLOCK_MONOTONIC` value; native
+realtime is private to acceleration. A realtime step can reset history or
+briefly distort acceleration, but cannot alter latency measurements. Hosted
 SDL coordinates are never scaled.
 The first measured runtime averaged 176 ms per input-associated frame. A
 canonical 32-bit fast path and optimized hardware build reduced this to 36 ms,
@@ -358,8 +367,10 @@ flutter rather than track straight. A repeat after the revised identity
 threshold and carry clearing looked and felt good: 45 precision carries and
 20 direction carries were cleared, no non-edge suppression or raw-zero event
 was observed across 1855 relative events, and input-to-copy latency remained
-5 ms on average. Native report timing, input-wait policy, lifecycle-event
-priority, and bounded batch rules remain separate tuning work.
+5 ms on average. That carry fix is physically validated. Native timestamp-
+bucket grouping is implemented but awaits its hardware comparison;
+input-wait policy, lifecycle-event priority, and bounded batch rules remain
+separate tuning work.
 A first guided `--runtime-preview` X220 trial completed on 2026-07-14. The
 physical console displayed the shared runtime and real NixInfo application
 through `wsdisplay` and wscons without X11, Wayland publication, or SDL video;
