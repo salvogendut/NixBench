@@ -432,6 +432,35 @@ target_link_libraries(
 )
 nixbench_configure_c_target(nixbench_desktop_preview)
 
+add_library(nixbench_desktop_runtime STATIC src/desktop_runtime.c)
+target_include_directories(
+  nixbench_desktop_runtime
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(
+  nixbench_desktop_runtime
+  PUBLIC nixbench_host
+  PRIVATE
+    SDL3::SDL3
+    nixbench_model
+    nixbench_renderers
+    nixbench_software_canvas
+)
+if(NIXBENCH_WAYLAND_ENABLED)
+  target_sources(nixbench_desktop_runtime PRIVATE src/wayland_renderer.c)
+  target_link_libraries(nixbench_desktop_runtime PRIVATE nixbench_wayland)
+  target_compile_definitions(
+    nixbench_desktop_runtime
+    PRIVATE NIXBENCH_HAS_WAYLAND=1
+  )
+else()
+  target_compile_definitions(
+    nixbench_desktop_runtime
+    PRIVATE NIXBENCH_HAS_WAYLAND=0
+  )
+endif()
+nixbench_configure_c_target(nixbench_desktop_runtime)
+
 add_library(
   nixbench_framebuffer STATIC
   src/framebuffer_format.c
@@ -534,14 +563,6 @@ add_executable(
 )
 nixbench_configure_c_target(nixbench)
 
-if(NIXBENCH_WAYLAND_ENABLED)
-  target_sources(nixbench PRIVATE src/wayland_renderer.c)
-  target_link_libraries(nixbench PRIVATE nixbench_wayland)
-  target_compile_definitions(nixbench PRIVATE NIXBENCH_HAS_WAYLAND=1)
-else()
-  target_compile_definitions(nixbench PRIVATE NIXBENCH_HAS_WAYLAND=0)
-endif()
-
 target_compile_definitions(
   nixbench
   PRIVATE NIXBENCH_VERSION="${PROJECT_VERSION}"
@@ -551,10 +572,8 @@ target_link_libraries(
   nixbench
   PRIVATE
     SDL3::SDL3
+    nixbench_desktop_runtime
     nixbench_host_sdl
-    nixbench_model
-    nixbench_renderers
-    nixbench_software_canvas
 )
 
 install(
@@ -744,6 +763,16 @@ if(BUILD_TESTING)
   nixbench_configure_c_target(nixbench_desktop_preview_tests)
 
   add_executable(
+    nixbench_desktop_runtime_tests
+    tests/desktop_runtime_test.c
+  )
+  target_link_libraries(
+    nixbench_desktop_runtime_tests
+    PRIVATE SDL3::SDL3 nixbench_desktop_runtime
+  )
+  nixbench_configure_c_target(nixbench_desktop_runtime_tests)
+
+  add_executable(
     nixbench_wayland_demo_ui_tests
     tests/wayland_demo_ui_test.c
   )
@@ -833,6 +862,10 @@ if(BUILD_TESTING)
   add_test(
     NAME nixbench.desktop.preview
     COMMAND nixbench_desktop_preview_tests
+  )
+  add_test(
+    NAME nixbench.desktop.runtime
+    COMMAND nixbench_desktop_runtime_tests
   )
   add_test(
     NAME nixbench.wayland.demo-ui
