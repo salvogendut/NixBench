@@ -108,8 +108,10 @@ The privileged query-only run sees a 1366x768 at 60 Hz internal LVDS panel, a
 live i915 driver, two CRTCs, eight encoders, dumb-buffer support, and two
 legacy-visible planes. The same machine's `intelfb` console reports a
 supported 1366x768, 32-bit RGB framebuffer with a 5504-byte stride. This
-establishes both DRM/KMS and software `wsdisplay` as candidates, but does not
-yet validate takeover, presentation, VT transitions, or recovery.
+establishes both DRM/KMS and software `wsdisplay` as candidates. The bounded
+software path has since mapped and presented successfully for 2000 ms, then
+restored and verified the saved console state. DRM/KMS takeover, page flips,
+input, and VT-switch testing remain unvalidated.
 
 The CMake setting `NIXBENCH_LIBDRM=AUTO|ON|OFF` controls this detailed layer.
 `AUTO`, the default, enables it when all headers and the library are found and
@@ -173,8 +175,11 @@ a production crash watchdog. The harness still runs both parent and worker as
 root and must not be confused with the future least-privilege session helper.
 
 CTest registers only support-unit and help checks for the executable. It never
-supplies the acknowledgements and never performs a console takeover. Initial
-presentation and restoration validation on the ThinkPad X220 is pending.
+supplies the acknowledgements and never performs a console takeover. The first
+2000 ms ThinkPad X220 run completed normally: the supervisor verified the saved
+emulation, video, VT, and active-screen state; an independent SSH watcher saw
+the recovery record clear with no manual recovery needed; and the post-run
+probe matched the baseline.
 
 ### 3. Production supervised standalone sessions
 

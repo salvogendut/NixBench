@@ -111,10 +111,10 @@ bring-up path. It validates the reported RGB layout, maps only the required
 framebuffer range, converts the canonical CPU frame, participates in
 process-controlled virtual-terminal release/acquire, and restores the saved
 console state on normal teardown. An opt-in, duration-bounded supervisor
-harness now provides the first hardware presentation test, but its ThinkPad
-X220 takeover validation is still pending. The adapter is not a crash-safe
-login session: wscons input and a production privileged recovery watchdog are
-still required before it can become a standalone runtime mode. See
+harness has completed the first two-second framebuffer presentation and
+verified restoration on a ThinkPad X220. The adapter is not a crash-safe login
+session: wscons input and a production privileged recovery watchdog are still
+required before it can become a standalone runtime mode. See
 [the standalone backend architecture](docs/standalone-backend.md) for the
 staged safety and implementation boundaries.
 
@@ -177,9 +177,9 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
 - **NetBSD 10.1 (GENERIC), amd64** with SDL3 3.4.2, Wayland, libxkbcommon,
   and wayland-protocols from pkgsrc: default dependency discovery, generated
   xdg-shell bindings, native compilation of both SDL and experimental
-  `wsdisplay` hosts, and all 24 current tests were confirmed working on July
-  14, 2026. An earlier X11-hosted run also published the nested Wayland socket
-  and displayed the demo client's first rendered frame.
+  `wsdisplay` hosts, and all 24 then-current tests were confirmed working on
+  July 14, 2026. An earlier X11-hosted run also published the nested Wayland
+  socket and displayed the demo client's first rendered frame.
 
   The capability probe on the current QEMU guest reports SDL's Wayland, X11,
   offscreen, and dummy drivers but no KMSDRM driver. The guest has four static
@@ -194,15 +194,24 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
 - **NetBSD 11.0_RC6 (GENERIC), amd64 on a Lenovo ThinkPad X220** with Intel
   Sandy Bridge graphics and SDL3 3.4.2 from pkgsrc: a clean-machine setup,
   explicit `NIXBENCH_LIBDRM=ON` and `NIXBENCH_WAYLAND=ON` configuration, full
-  native build, and all 24 tests were confirmed working on July 14, 2026. The
+  native build, and all 26 tests were confirmed working on July 14, 2026. The
   kernel attaches `i915drmkms` and provides an `intelfb` console.
 
   The privileged query-only probe reports a supported 1366x768, 32-bit RGB
   `wsdisplay` layout and a live i915 DRM/KMS device. The internal LVDS panel is
   connected at 1366x768 at 60 Hz; dumb buffers, two CRTCs, eight encoders, and
   two legacy-visible planes are available. Both the software framebuffer and
-  direct KMS paths pass preflight. No console mode change, framebuffer mapping,
-  DRM buffer allocation, modeset, input read, or page flip was attempted.
+  direct KMS paths pass preflight.
+
+  The opt-in harness selected native screen index 0 (`/dev/ttyE0`), mapped the
+  software framebuffer, presented its diagnostic frame for 2000 ms, and exited
+  normally. Its parent verified restoration of emulation mode, video-on state,
+  automatic VT handling, and the original active screen. An independent SSH
+  watcher saw the root-only recovery record only while the processes were
+  alive; it disappeared on successful restoration, and a fresh preflight and
+  backend probe reported the original state. No recovery invocation was
+  needed. No DRM buffer allocation, modeset, page flip, or input read was
+  attempted.
 
 This is a manual target-system validation; automated NetBSD testing remains
 future work.
@@ -300,7 +309,7 @@ unless both risk acknowledgements are present. Keep a second SSH session
 available and retain an outer timeout during hardware bring-up:
 
 ```sh
-sudo -n /usr/bin/timeout -s TERM -k 15s 10s \
+sudo -n /usr/bin/timeout -s SIGTERM -k 15s 10s \
   ./build/nixbench-wsdisplay-smoke \
   --acknowledge-console-takeover \
   --acknowledge-no-crash-watchdog \

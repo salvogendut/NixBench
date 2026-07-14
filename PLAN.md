@@ -236,12 +236,13 @@ particular, static device nodes do not qualify by themselves: the current QEMU
 NetBSD guest has four `/dev/dri/card*` nodes whose actual opens fail with
 `ENODEV` because no DRM driver is configured for its display device.
 
-The first real-hardware preflight now passes on a NetBSD 11.0_RC6 ThinkPad X220.
-Its Intel i915 device exposes a connected 1366x768 LVDS panel, two CRTCs, eight
-encoders, dumb buffers, and two legacy-visible planes. Its `intelfb` console
-also reports a supported 1366x768 XRGB8888-compatible framebuffer layout. This
-makes the machine suitable for the first supervised framebuffer and KMS
-presentation experiments; neither output path has taken over the console yet.
+The first real-hardware preflight and bounded software-framebuffer presentation
+now pass on a NetBSD 11.0_RC6 ThinkPad X220. Its Intel i915 device exposes a
+connected 1366x768 LVDS panel, two CRTCs, eight encoders, dumb buffers, and two
+legacy-visible planes. Its `intelfb` console reports a supported 1366x768
+XRGB8888-compatible framebuffer layout. The supervised harness presented for
+2000 ms through `/dev/ttyE0`, then independently restored and verified the
+original console state. Direct KMS has not taken over the console yet.
 
 Detailed DRM inventory is controlled by `NIXBENCH_LIBDRM=AUTO|ON|OFF`. `AUTO`
 degrades to path-only inspection when libdrm is absent, `ON` fails configuration
@@ -275,9 +276,9 @@ handoff, and attempts full state restoration on every normal and partial
 startup path. Its unsupported-platform stub is covered by normal tests, and
 the NetBSD branch compiles against the official NetBSD 10.1 amd64 headers under
 strict warnings. It is intentionally not a selectable desktop runtime yet:
-hardware validation, wscons input, failure-injection tests, and a separate
-privileged watchdog that can recover after a compositor crash are the next
-safety gates. The detailed design and source references are in
+broader hardware validation, wscons input, failure-injection tests, and a
+separate privileged watchdog that can recover after a compositor crash are the
+next safety gates. The detailed design and source references are in
 [`docs/standalone-backend.md`](docs/standalone-backend.md).
 
 The harness is excluded by default behind
@@ -290,9 +291,10 @@ forking. The framebuffer worker maps and presents; an unmapped parent enforces
 the deadline, reaps the worker, and independently restores and verifies the
 saved console state. `--recover` provides a separate-session restoration path
 if the record remains. Automated tests cover support code and refusal gates,
-but CTest never performs a takeover. The first X220 presentation run remains
-pending; wscons input, failure injection, privilege separation, and a
-production crash watchdog remain later gates.
+but CTest never performs a takeover. The first 2000 ms X220 presentation run
+completed with automatic restoration and an independent SSH watch; wscons
+input, failure injection, privilege separation, broader hardware coverage, and
+a production crash watchdog remain later gates.
 
 ## Milestone 8: Add standalone X11 compatibility
 
