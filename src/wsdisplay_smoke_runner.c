@@ -634,12 +634,44 @@ struct nb_smoke_input_latency {
     bool pending_valid;
 };
 
+struct nb_smoke_duration_stats {
+    uint64_t samples;
+    uint64_t total_milliseconds;
+    uint64_t minimum_milliseconds;
+    uint64_t maximum_milliseconds;
+};
+
+struct nb_smoke_pending_frame_timing {
+    uint64_t serial;
+    uint64_t input_read_milliseconds;
+    uint64_t render_start_milliseconds;
+    uint64_t render_end_milliseconds;
+    uint64_t present_start_milliseconds;
+    uint64_t present_return_milliseconds;
+    bool valid;
+    bool input_valid;
+};
+
+struct nb_smoke_frame_pipeline {
+    struct nb_smoke_pending_frame_timing pending;
+    struct nb_smoke_duration_stats input_to_render;
+    struct nb_smoke_duration_stats render;
+    struct nb_smoke_duration_stats render_to_present;
+    struct nb_smoke_duration_stats present_call;
+    struct nb_smoke_duration_stats present_to_complete;
+    struct nb_smoke_duration_stats completion_queue;
+    uint64_t samples;
+    uint64_t abandoned;
+    uint64_t regressions;
+};
+
 struct nb_smoke_worker {
     const struct nb_wsdisplay_smoke_options *options;
     struct nb_host *host;
     struct nb_wscons_input *input;
     struct nb_smoke_frame_source source;
     struct nb_smoke_input_latency input_latency;
+    struct nb_smoke_frame_pipeline frame_pipeline;
     struct nb_host_output output;
     uint64_t next_serial;
     uint64_t pending_serial;
@@ -713,6 +745,12 @@ static void print_input_error(struct nb_wscons_input *input,
 
 static void clear_input_latency_associations(struct nb_smoke_worker *worker)
 {
+    if (worker->frame_pipeline.pending.valid &&
+        worker->frame_pipeline.pending.input_valid &&
+        worker->frame_pipeline.abandoned != UINT64_MAX) {
+        ++worker->frame_pipeline.abandoned;
+    }
+    worker->frame_pipeline.pending.valid = false;
     worker->input_latency.dirty_valid = false;
     worker->input_latency.pending_valid = false;
 }
@@ -775,6 +813,93 @@ static void add_input_latency_sample(struct nb_smoke_worker *worker,
     }
 }
 
+static void add_duration_sample(struct nb_smoke_duration_stats *stats,
+                                uint64_t elapsed)
+{
+    if (stats->samples == 0 || elapsed < stats->minimum_milliseconds) {
+        stats->minimum_milliseconds = elapsed;
+    }
+    if (elapsed > stats->maximum_milliseconds) {
+        stats->maximum_milliseconds = elapsed;
+    }
+    stats->total_milliseconds =
+        elapsed > UINT64_MAX - stats->total_milliseconds
+            ? UINT64_MAX
+            : stats->total_milliseconds + elapsed;
+    if (stats->samples != UINT64_MAX) {
+        ++stats->samples;
+    }
+}
+
+static void add_frame_pipeline_sample(
+    struct nb_smoke_worker *worker,
+    uint64_t completion_milliseconds,
+    uint64_t handled_milliseconds)
+{
+    struct nb_smoke_frame_pipeline *pipeline = &worker->frame_pipeline;
+    const struct nb_smoke_pending_frame_timing *pending = &pipeline->pending;
+
+    if (!pending->valid || !pending->input_valid) {
+        pipeline->pending.valid = false;
+        return;
+    }
+    if (pending->render_start_milliseconds <
+            pending->input_read_milliseconds ||
+        pending->render_end_milliseconds <
+            pending->render_start_milliseconds ||
+        pending->present_start_milliseconds <
+            pending->render_end_milliseconds ||
+        pending->present_return_milliseconds <
+            pending->present_start_milliseconds ||
+        completion_milliseconds < pending->present_start_milliseconds ||
+        pending->present_return_milliseconds < completion_milliseconds ||
+        handled_milliseconds < completion_milliseconds) {
+        if (pipeline->regressions != UINT64_MAX) {
+            ++pipeline->regressions;
+        }
+        pipeline->pending.valid = false;
+        return;
+    }
+
+    add_duration_sample(
+        &pipeline->input_to_render,
+        pending->render_start_milliseconds -
+            pending->input_read_milliseconds);
+    add_duration_sample(
+        &pipeline->render,
+        pending->render_end_milliseconds -
+            pending->render_start_milliseconds);
+    add_duration_sample(
+        &pipeline->render_to_present,
+        pending->present_start_milliseconds -
+            pending->render_end_milliseconds);
+    add_duration_sample(
+        &pipeline->present_call,
+        pending->present_return_milliseconds -
+            pending->present_start_milliseconds);
+    add_duration_sample(
+        &pipeline->present_to_complete,
+        completion_milliseconds - pending->present_start_milliseconds);
+    add_duration_sample(
+        &pipeline->completion_queue,
+        handled_milliseconds - completion_milliseconds);
+    if (pipeline->samples != UINT64_MAX) {
+        ++pipeline->samples;
+    }
+    pipeline->pending.valid = false;
+}
+
+static void print_duration_stats(
+    const char *label,
+    const struct nb_smoke_duration_stats *stats)
+{
+    printf("    %s: min=%llu ms average=%llu ms max=%llu ms\n",
+           label,
+           (unsigned long long)stats->minimum_milliseconds,
+           (unsigned long long)(stats->total_milliseconds / stats->samples),
+           (unsigned long long)stats->maximum_milliseconds);
+}
+
 static void print_input_stats(const struct nb_smoke_worker *worker)
 {
     struct nb_wscons_input_stats stats;
@@ -823,6 +948,25 @@ static void print_input_stats(const struct nb_smoke_worker *worker)
                    worker->input_latency.samples),
                (unsigned long long)worker->input_latency.maximum_milliseconds,
                (unsigned long long)worker->input_latency.regressions);
+    }
+    printf("  input-frame pipeline: samples=%llu abandoned=%llu "
+           "regressions=%llu\n",
+           (unsigned long long)worker->frame_pipeline.samples,
+           (unsigned long long)worker->frame_pipeline.abandoned,
+           (unsigned long long)worker->frame_pipeline.regressions);
+    if (worker->frame_pipeline.samples != 0) {
+        print_duration_stats("input-to-render",
+                             &worker->frame_pipeline.input_to_render);
+        print_duration_stats("render",
+                             &worker->frame_pipeline.render);
+        print_duration_stats("render-to-present",
+                             &worker->frame_pipeline.render_to_present);
+        print_duration_stats("present-call",
+                             &worker->frame_pipeline.present_call);
+        print_duration_stats("present-to-frame-complete",
+                             &worker->frame_pipeline.present_to_complete);
+        print_duration_stats("completion-queue",
+                             &worker->frame_pipeline.completion_queue);
     }
 }
 
@@ -978,15 +1122,34 @@ static bool try_present_content(struct nb_smoke_worker *worker)
 {
     struct nb_host_frame frame;
     enum nb_host_result result;
+    uint64_t render_start_milliseconds = 0;
+    uint64_t render_end_milliseconds = 0;
+    uint64_t present_start_milliseconds = 0;
+    uint64_t present_return_milliseconds = 0;
+    const bool measure_timing = worker->options->wscons_input_stats;
 
     if (!worker->redraw_needed || worker->pending_serial != 0 ||
         nb_host_get_state(worker->host) != NB_HOST_STATE_ACTIVE) {
         return true;
     }
+    if (measure_timing) {
+        render_start_milliseconds =
+            nb_host_monotonic_milliseconds(worker->host);
+    }
     if (!render_content(worker, &frame)) {
         return false;
     }
+    if (measure_timing) {
+        render_end_milliseconds =
+            nb_host_monotonic_milliseconds(worker->host);
+        present_start_milliseconds =
+            nb_host_monotonic_milliseconds(worker->host);
+    }
     result = nb_host_present(worker->host, &frame);
+    if (measure_timing) {
+        present_return_milliseconds =
+            nb_host_monotonic_milliseconds(worker->host);
+    }
     if (result == NB_HOST_RESULT_WOULD_BLOCK ||
         result == NB_HOST_RESULT_SUSPENDED) {
         return true;
@@ -995,8 +1158,24 @@ static bool try_present_content(struct nb_smoke_worker *worker)
         print_host_error(worker->host, "Could not present the selected frame");
         return false;
     }
-    worker->pending_serial = worker->next_serial;
+    worker->pending_serial = frame.serial;
     submit_redraw_input(worker);
+    if (measure_timing) {
+        worker->frame_pipeline.pending.serial = frame.serial;
+        worker->frame_pipeline.pending.input_read_milliseconds =
+            worker->input_latency.pending_read_milliseconds;
+        worker->frame_pipeline.pending.render_start_milliseconds =
+            render_start_milliseconds;
+        worker->frame_pipeline.pending.render_end_milliseconds =
+            render_end_milliseconds;
+        worker->frame_pipeline.pending.present_start_milliseconds =
+            present_start_milliseconds;
+        worker->frame_pipeline.pending.present_return_milliseconds =
+            present_return_milliseconds;
+        worker->frame_pipeline.pending.input_valid =
+            worker->input_latency.pending_valid;
+        worker->frame_pipeline.pending.valid = true;
+    }
     ++worker->next_serial;
     worker->redraw_needed = false;
     return true;
@@ -1058,11 +1237,26 @@ static bool process_worker_host_event(struct nb_smoke_worker *worker,
                                       const struct nb_host_event *event)
 {
     enum nb_host_result result;
+    uint64_t handled_milliseconds;
 
     switch (event->type) {
     case NB_HOST_EVENT_FRAME_COMPLETE:
+        handled_milliseconds = worker->frame_pipeline.pending.valid
+                                   ? nb_host_monotonic_milliseconds(
+                                         worker->host)
+                                   : 0;
         if (event->data.frame_complete.frame_serial ==
             worker->pending_serial) {
+            if (worker->frame_pipeline.pending.valid &&
+                worker->frame_pipeline.pending.serial ==
+                    event->data.frame_complete.frame_serial) {
+                add_frame_pipeline_sample(
+                    worker,
+                    event->milliseconds,
+                    handled_milliseconds);
+            } else {
+                worker->frame_pipeline.pending.valid = false;
+            }
             add_input_latency_sample(worker, event->milliseconds);
             worker->pending_serial = 0;
             worker->frame_completed = true;
@@ -1283,6 +1477,7 @@ static int run_worker(const struct nb_wsdisplay_smoke_options *options,
     }
 
 cleanup:
+    clear_input_latency_associations(&worker);
     print_input_stats(&worker);
     if (worker.input != NULL) {
         nb_wscons_input_destroy(worker.input);

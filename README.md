@@ -354,6 +354,11 @@ Relative pointer motion and the left button exercise menus and window dragging;
 Escape requests an orderly early exit. Absolute-only pointer devices are not
 translated by this first research provider.
 
+The guided hardware run configures `RelWithDebInfo` by default so its pointer
+measurements are not dominated by unoptimized per-pixel diagnostic code. Set
+`NIXBENCH_BUILD_TYPE=Debug` explicitly when the takeover is intended for
+debugger work instead of responsiveness measurement.
+
 Raw wscons relative motion defaults to an identity 100% sensitivity. The
 explicit `--wscons-pointer-sensitivity-percent` option accepts 25..400 and uses
 signed fixed-point carry so fractional gain does not introduce directional
@@ -361,7 +366,9 @@ drift; it is never applied to hosted SDL input. The guided X220 runner selects
 150% for the next comparison. `--wscons-input-stats` reports raw and logical
 distance, unit deltas, suppression/clamping, event gaps, and userspace-read-to-
 framebuffer-copy-complete timing. That timing excludes device/kernel queueing,
-scanout, and physical-display latency.
+scanout, and physical-display latency. Its input-frame pipeline also separates
+time waiting to render, SDL software rendering, synchronous host presentation,
+the framebuffer-copy-complete timestamp, and event delivery.
 
 Preflight reads `/dev/ttyEstat` to select the active zero-based screen node;
 it does not change display state. A presentation run changes that console to

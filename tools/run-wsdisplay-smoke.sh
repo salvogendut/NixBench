@@ -5,6 +5,7 @@ set -eu
 state_path=/var/run/nixbench-wsdisplay-smoke.state
 duration_ms=${1:-3000}
 jobs=${NIXBENCH_JOBS:-4}
+build_type=${NIXBENCH_BUILD_TYPE:-RelWithDebInfo}
 timeout_margin_seconds=10
 
 fail()
@@ -74,8 +75,9 @@ EOF
     exit 1
 fi
 
-echo "==> Configuring the opt-in harness"
+echo "==> Configuring the opt-in harness ($build_type)"
 cmake -S "$repo_dir" -B "$build_dir" \
+    -DCMAKE_BUILD_TYPE="$build_type" \
     -DNIXBENCH_BUILD_WSDISPLAY_SMOKE=ON
 
 echo "==> Building NixBench"
@@ -100,8 +102,9 @@ unavailable while the worker owns /dev/wskbd; input is closed before every
 acknowledged VT release and on exit.
 
 This trial applies 150% sensitivity only to raw wscons relative motion; hosted
-SDL input is unchanged. At exit it prints raw-motion and userspace-read-to-
-framebuffer-copy-complete statistics for comparison with later trials.
+SDL input is unchanged. At exit it prints raw-motion statistics and splits
+userspace-read-to-framebuffer-copy-complete time into render, present, and
+event-delivery stages for comparison with later trials.
 
 Keep a second SSH session open. If this script does not restore the console,
 wait for its timeout, verify no nixbench-wsdisplay-smoke process remains, then

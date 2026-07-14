@@ -196,7 +196,9 @@ small deltas symmetric and drift-free. The guided X220 trial uses 150%.
 userspace-read-to-framebuffer-copy-complete timing. Live events are stamped at
 read time with `CLOCK_MONOTONIC`, matching the wsdisplay completion clock. The
 metric excludes time already spent in the device/kernel queue and does not
-measure scanout or glass latency.
+measure scanout or glass latency. An input-frame pipeline breakdown separates
+the wait to render, SDL software rendering, the synchronous present call and
+copy-complete timestamp, and completion-event delivery.
 
 The unmapped parent applies a hard deadline of at most 30000 ms, terminates and
 reaps an unresponsive child, then independently restores and verifies every
@@ -212,6 +214,11 @@ deadline is the requested duration rounded up to seconds plus a ten-second
 restoration margin. A direct `--desktop-preview` invocation remains the
 compatible output-only shell preview, while `--interactive-preview` retains the
 previous lightweight interactive scene as a fallback.
+
+The hardware runner selects `RelWithDebInfo` unless
+`NIXBENCH_BUILD_TYPE` overrides it. Debug builds remain useful for correctness
+work, but their unoptimized full-frame software conversion is not a meaningful
+pointer-fluidity baseline.
 
 If the supervisor itself fails, a second SSH session can run
 `sudo ./build/nixbench-wsdisplay-smoke --recover` against the persisted record.
