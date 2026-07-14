@@ -225,7 +225,9 @@ after its userspace `read`, as do the input/frame latency associations. Native
 realtime values therefore never leak into host dispatch or mix with framebuffer
 completion timing. A realtime clock step safely resets history or briefly
 distorts only acceleration, never the latency measurements. Native timestamp-
-bucket grouping still awaits physical X220 validation.
+bucket grouping is physically validated on the X220: all 1738 relative events
+used native timestamps, forming 1035 buckets with 703 same-timestamp events and
+no fallback, clock-source reset, or timestamp regression.
 
 `--wscons-input-stats` identifies the active profile and prints raw/logical
 distance and event-shape counters, adaptive gain buckets, peak filtered
@@ -322,9 +324,12 @@ averaged 5 ms in physical validation. A later adaptive trial retained the
 5 ms average and felt good overall, but exposed low-speed flutter. The new
 identity threshold and precision/direction carry resets eliminated non-edge
 suppression in the repeat trace, and the user reported that it looked and felt
-good, physically validating the carry fix. Native timestamp-bucket grouping is
-implemented but awaits physical validation; input-wait policy
-remains an independent follow-up.
+good, physically validating the carry fix. A subsequent native-timestamp trial
+was also reported all good: all 1738 relative events used native timestamps,
+forming 1035 buckets with 703 same-timestamp events and no fallback or clock-
+source reset. Input-to-framebuffer-copy completion averaged 8 ms with a 22 ms
+maximum, console restoration passed, and input-wait policy remains an
+independent follow-up.
 
 On 2026-07-14, the first guided `--runtime-preview` X220 trial completed as
 well. The physical console displayed the shared runtime and real NixInfo

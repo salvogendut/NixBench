@@ -368,9 +368,11 @@ threshold and carry clearing looked and felt good: 45 precision carries and
 20 direction carries were cleared, no non-edge suppression or raw-zero event
 was observed across 1855 relative events, and input-to-copy latency remained
 5 ms on average. That carry fix is physically validated. Native timestamp-
-bucket grouping is implemented but awaits its hardware comparison;
-input-wait policy, lifecycle-event priority, and bounded batch rules remain
-separate tuning work.
+bucket grouping is also physically validated: all 1738 relative events used
+native timestamps, forming 1035 buckets with 703 same-timestamp events and no
+fallback, clock-source reset, or timestamp regression; the user reported that
+the result was all good. Input-wait policy, lifecycle-event priority, and
+bounded batch rules remain separate tuning work.
 A first guided `--runtime-preview` X220 trial completed on 2026-07-14. The
 physical console displayed the shared runtime and real NixInfo application
 through `wsdisplay` and wscons without X11, Wayland publication, or SDL video;

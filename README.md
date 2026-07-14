@@ -236,10 +236,12 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
   slower and less fluid than the hosted desktop. Subsequent profiling and
   source-shadow damage suppression reduced the measured userspace-read-to-
   framebuffer-copy-complete average to 5 ms on this machine. Native wscons
-  native timestamp-bucket grouping is implemented but awaits physical
-  validation; input scheduling remains tuning work. The successful interaction
-  trial does not turn this research harness into a production input/session
-  path.
+  timestamp-bucket grouping is now physically validated on the X220: all 1738
+  relative events used native timestamps, forming 1035 buckets with 703 same-
+  timestamp events and no fallback or clock-source reset. The user reported
+  that the result was all good; input scheduling remains tuning work. The
+  successful interaction trial does not turn this research harness into a
+  production input/session path.
 
   On 2026-07-14, the first guided `--runtime-preview` trial also completed on
   the X220. The physical console displayed the shared desktop runtime and real
@@ -395,8 +397,10 @@ When filtered motion returns to identity gain, the reducer clears both
 fractional carries rather than applying an old accelerated fraction to later
 precision motion. It also clears an axis carry when that axis reverses sign,
 preventing a residual from the previous direction from delaying a correction.
-The carry correction is physically validated on the X220; native timestamp-
-bucket grouping is the next hardware checkpoint.
+The carry correction and native timestamp-bucket grouping are physically
+validated on the X220. In the timestamp trial, all 1738 relative events used
+native timestamps, with no fallback, clock-source reset, or timestamp
+regression.
 
 Host event timestamps and all input-to-frame timing remain the
 `CLOCK_MONOTONIC` time captured after `read`. Native realtime is used only
