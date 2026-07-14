@@ -161,6 +161,13 @@ bool nb_wsdisplay_smoke_parse_options(
             }
             options->content = NB_WSDISPLAY_SMOKE_CONTENT_DESKTOP_PREVIEW;
             content_selected = true;
+        } else if (strcmp(argv[index], "--interactive-preview") == 0) {
+            if (content_selected) {
+                set_error(error, "Duplicate presentation-content option");
+                return false;
+            }
+            options->content = NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW;
+            content_selected = true;
         } else if (strcmp(argv[index], "--duration-ms") == 0) {
             const char *value;
 

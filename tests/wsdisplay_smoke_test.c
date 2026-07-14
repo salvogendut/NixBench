@@ -65,6 +65,12 @@ static void test_parser_takeover(void)
         "--screen-prefix",
         "/dev/custom"
     };
+    char *interactive[] = {
+        "smoke",
+        "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog",
+        "--interactive-preview"
+    };
 
     CHECK(parse((int)(sizeof(diagnostic) / sizeof(diagnostic[0])),
                 diagnostic,
@@ -83,6 +89,11 @@ static void test_parser_takeover(void)
     CHECK(options.duration_ms == 1250);
     CHECK(strcmp(options.status_device_path, "/dev/customstat") == 0);
     CHECK(strcmp(options.screen_device_prefix, "/dev/custom") == 0);
+    CHECK(parse((int)(sizeof(interactive) / sizeof(interactive[0])),
+                interactive,
+                &options,
+                error));
+    CHECK(options.content == NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW);
 }
 
 static void test_parser_rejections(void)
@@ -134,6 +145,14 @@ static void test_parser_rejections(void)
         "--acknowledge-no-crash-watchdog", "--desktop-preview",
         "--desktop-preview"
     };
+    char *conflicting_preview[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--desktop-preview",
+        "--interactive-preview"
+    };
+    char *unsafe_interactive[] = {
+        "smoke", "--preflight-only", "--interactive-preview"
+    };
 
     CHECK(!parse(5, low, &options, error));
     CHECK(!parse(5, high, &options, error));
@@ -149,6 +168,8 @@ static void test_parser_rejections(void)
     CHECK(!parse(4, relative_prefix, &options, error));
     CHECK(!parse(3, unsafe_preview, &options, error));
     CHECK(!parse(5, duplicate_preview, &options, error));
+    CHECK(!parse(5, conflicting_preview, &options, error));
+    CHECK(!parse(3, unsafe_interactive, &options, error));
 }
 
 static void test_vt_number_translation(void)

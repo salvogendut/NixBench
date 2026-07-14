@@ -114,9 +114,13 @@ console state on normal teardown. An opt-in, duration-bounded supervisor
 harness has completed the first two-second framebuffer presentation and
 verified restoration on a ThinkPad X220. An explicit desktop-preview frame
 source now renders the real menu bar, clock, and managed-window chrome into the
-same canonical CPU frame without initializing SDL video. The adapter is not a
-crash-safe login session: wscons input and a production privileged recovery
-watchdog are still required before it can become a standalone runtime mode. See
+same canonical CPU frame without initializing SDL video. A separate,
+explicit `--interactive-preview` research mode temporarily owns the fixed
+`/dev/wskbd` and `/dev/wsmouse` mux aliases, adds a software cursor, routes the
+left button to menus and window dragging, and accepts Escape as an orderly
+early exit. The adapter and harness are not a crash-safe login session: a
+production wscons input/session layer and privileged recovery watchdog are
+still required before this can become a standalone runtime mode. See
 [the standalone backend architecture](docs/standalone-backend.md) for the
 staged safety and implementation boundaries.
 
@@ -212,13 +216,14 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
   watcher saw the root-only recovery record only while the processes were
   alive; it disappeared on successful restoration, and a fresh preflight and
   backend probe reported the original state. A later 5000 ms run selected
-  `--desktop-preview` and completed
-  through the same supervised software-framebuffer path. The parent again
+  `--desktop-preview` and completed through the same supervised,
+  output-only software-framebuffer path. The parent again
   verified restoration, the guided postflight and a separate SSH preflight
   found screen 0 in emulation mode with automatic VT handling and video on,
   and the recovery record and harness processes were absent. Manual recovery
-  was not needed for either run. No DRM buffer allocation, modeset, page flip,
-  or input read was attempted.
+  was not needed for either run. Those recorded trials predate the explicit
+  interactive mode: no DRM buffer allocation, modeset, page flip, or input
+  read was attempted.
 
 This is a manual target-system validation; automated NetBSD testing remains
 future work.
@@ -317,29 +322,43 @@ one guided command. Run it over SSH while watching the physical console:
 ```
 
 It defaults to 3000 ms; an alternate safe duration can be passed as its sole
-argument, up to `./tools/run-wsdisplay-smoke.sh 30000`. The script derives its
-outer timeout from that duration and still requires typing `TAKEOVER` before it
-supplies the harness acknowledgements. It selects the NixBench desktop preview:
-the real global menu bar and clock, desktop background, and managed-window
-chrome are rendered into an SDL software surface without initializing SDL video
-or opening X11, Wayland, or input devices.
+argument, up to `./tools/run-wsdisplay-smoke.sh 30000`. Thirty seconds is the
+hard harness maximum. The script derives its outer timeout from that duration
+and still requires typing `TAKEOVER` before it supplies the harness
+acknowledgements. It explicitly selects `--interactive-preview`: the real
+global menu bar and clock, desktop background, managed-window chrome, and a
+software cursor are rendered into an SDL software surface without initializing
+SDL video or opening X11 or Wayland. The worker temporarily opens only the
+fixed `/dev/wskbd` and `/dev/wsmouse` mux aliases. Relative pointer motion and
+the left button exercise menus and window dragging; Escape requests an orderly
+early exit. Absolute-only pointer devices are not translated by this first
+research provider.
 
 Preflight reads `/dev/ttyEstat` to select the active zero-based screen node;
 it does not change display state. A presentation run changes that console to
 framebuffer mode briefly and accepts only durations from 250 through 30000
 milliseconds (default 3000). Direct harness runs draw the diagnostic pattern
-by default; `--desktop-preview` selects the shell scene. It refuses to run
-unless both risk acknowledgements are present. Keep a second SSH session
-available and retain an outer timeout during hardware bring-up:
+by default. `--desktop-preview` selects the same shell scene while remaining
+output-only, and `--interactive-preview` explicitly adds the bounded wscons
+input experiment. It refuses to run unless both risk acknowledgements are
+present. Keep a second SSH session available and retain an outer timeout during
+hardware bring-up:
 
 ```sh
 sudo -n /usr/bin/timeout -s SIGTERM -k 15s 10s \
   ./build/nixbench-wsdisplay-smoke \
   --acknowledge-console-takeover \
   --acknowledge-no-crash-watchdog \
-  --desktop-preview \
+  --interactive-preview \
   --duration-ms 3000
 ```
+
+Interactive input is acquired only by the framebuffer worker. Both mux
+descriptors are closed and held button/keyboard state is discarded before an
+acknowledged VT release and again during every cleanup path. The display
+adapter itself remains output-only. While `/dev/wskbd` is owned by the worker,
+normal console key translation, including the usual keyboard VT-switch
+shortcuts, is unavailable; this is another reason to keep SSH recovery open.
 
 Before forking the framebuffer worker, the parent records the console state in
 the root-only `/var/run/nixbench-wsdisplay-smoke.state`. The parent stays
@@ -353,10 +372,12 @@ sudo ./build/nixbench-wsdisplay-smoke --recover
 ```
 
 This supervisor is a development safeguard, not the production privileged
-helper/watchdog. The worker still runs privileged, there is no wscons input,
-and the second acknowledgement recognizes that supervisor failure still needs
-manual recovery. CTest exercises support code, help, and refusal without the
-acknowledgements; no CTest entry performs a console takeover.
+helper/watchdog. The worker still runs privileged, and its fixed-mux input is a
+short-lived research path rather than production seat, keymap, hotplug, repeat,
+or session support. The second acknowledgement recognizes that supervisor
+failure still needs manual recovery. CTest exercises parsers, reducers,
+rendering, help, and refusal with synthetic input only; automated tests never
+open wscons devices or perform a console takeover.
 
 Open the desktop in a development window:
 

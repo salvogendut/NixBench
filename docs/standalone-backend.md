@@ -7,9 +7,11 @@ are replaceable platform adapters, not part of application or shell policy.
 
 > **Current prototype limits:** the supported development path is still the SDL
 > hosted window. The `wsdisplay` adapter is an experimental, output-only
-> bring-up path: it has no wscons input provider, no production privileged
-> helper/watchdog, no acceleration, and no broad hardware coverage. It must not
-> yet be treated as a production login session or crash-safe console owner.
+> bring-up path. An explicitly selected research harness can compose it with a
+> narrow wscons input provider, but there is no production privileged
+> helper/watchdog, complete seat/input support, acceleration, or broad hardware
+> coverage. It must not yet be treated as a production login session or
+> crash-safe console owner.
 
 ## Process and backend boundaries
 
@@ -166,18 +168,31 @@ diagnostic pattern remains the default. An explicit `--desktop-preview` mode
 uses the real NixBench shell and chrome renderers to draw a global menu bar,
 clock, desktop, and managed window into an SDL software surface. It does not
 initialize SDL video, create an SDL window, start X11 or Wayland, or read input;
-the same output-only `wsdisplay` host submits the resulting XRGB frame. The
-unmapped parent applies a hard deadline, terminates and reaps an unresponsive
-child, then independently restores and verifies every saved console property.
-Job-control stop signals also request supervised shutdown rather than pausing
-the parent indefinitely. The state file is removed only after restoration is
-verified.
+the same output-only `wsdisplay` host submits the resulting XRGB frame.
+
+`--interactive-preview` is a separate, explicit research mode. It renders the
+same shell scene plus a software cursor and temporarily owns NetBSD's fixed
+`/dev/wskbd` and `/dev/wsmouse` mux aliases. Pointer motion and the left button
+exercise menus and managed-window dragging; Escape requests an orderly early
+exit. The provider closes both device descriptors and clears held input before
+every acknowledged VT release and on all cleanup paths. It does not turn SDL
+into the display or input backend: rendering remains an in-memory SDL software
+surface, `wsdisplay` remains the sole display owner, and no X11, Wayland, or SDL
+video subsystem is started. The display adapter itself stays output-only.
+
+The unmapped parent applies a hard deadline of at most 30000 ms, terminates and
+reaps an unresponsive child, then independently restores and verifies every
+saved console property. Job-control stop signals also request supervised
+shutdown rather than pausing the parent indefinitely. The state file is
+removed only after restoration is verified.
 
 `tools/run-wsdisplay-smoke.sh` configures, builds, tests, performs preflight,
-explicitly selects the desktop preview, and verifies postflight state. It still
-requires an SSH session, passwordless recovery access, a typed `TAKEOVER`, both
-harness acknowledgements, and the outer timeout. That outer deadline is the
-requested duration rounded up to seconds plus a ten-second restoration margin.
+explicitly selects `--interactive-preview`, and verifies postflight state. It
+still requires an SSH session, passwordless recovery access, a typed
+`TAKEOVER`, both harness acknowledgements, and the outer timeout. That outer
+deadline is the requested duration rounded up to seconds plus a ten-second
+restoration margin. A direct `--desktop-preview` invocation remains the
+compatible output-only shell preview.
 
 If the supervisor itself fails, a second SSH session can run
 `sudo ./build/nixbench-wsdisplay-smoke --recover` against the persisted record.
@@ -185,8 +200,9 @@ This manual fallback is why the command explicitly acknowledges the absence of
 a production crash watchdog. The harness still runs both parent and worker as
 root and must not be confused with the future least-privilege session helper.
 
-CTest registers only support-unit and help checks for the executable. It never
-supplies the acknowledgements and never performs a console takeover. The first
+CTest registers only device-free parser, reducer, rendering, interaction, and
+help checks for the executable. It never opens `/dev/wskbd` or `/dev/wsmouse`,
+supplies the acknowledgements, or performs a console takeover. The first
 2000 ms ThinkPad X220 diagnostic run completed normally: the supervisor
 verified the saved emulation, video, VT, and active-screen state; an independent
 SSH watcher saw the recovery record clear with no manual recovery needed; and
@@ -226,11 +242,15 @@ rather than silently depending on SDL's KMSDRM driver.
 ### 5. Input as a separate seam
 
 The current `nb_host_event` API normalizes SDL pointer and XKB physical-key
-events. For standalone operation, wscons acquisition and translation should be
-a separate input provider which feeds the same normalized event stream; the
-display adapter must not open `/dev/wskbd*` or `/dev/wsmouse*`. This separation
-allows independent keymap, hotplug, repeat, pointer, and seat testing and later
-lets the aggregate host facade compose display, session, and input providers.
+events. The interactive smoke mode now exercises the intended separation with
+a narrow provider that translates the fixed `/dev/wskbd` and `/dev/wsmouse`
+mux streams into normalized events. The `wsdisplay` adapter never opens those
+devices. The research provider covers a software pointer driven by relative
+motion, the left button, and Escape only; absolute-device calibration is
+deliberately deferred. It is not a general keymap, repeat, hotplug,
+multi-device, or seat implementation. This separation permits device-free
+reducer tests and later lets the aggregate host facade compose production
+display, session, and input providers.
 Consult [`wskbd(4)`][wskbd], [`wsmouse(4)`][wsmouse], and the versioned event
 definitions in [`wsconsio.h`][wsconsio] before stabilizing that API.
 

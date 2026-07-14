@@ -41,6 +41,7 @@ int nb_wsdisplay_smoke_run(
 
 #include "desktop_preview.h"
 #include "host_wsdisplay.h"
+#include "wscons_input.h"
 
 enum {
     NB_SMOKE_PATH_CAPACITY = 256,
@@ -49,6 +50,9 @@ enum {
     NB_SMOKE_ACTIVE_RESTORE_MS = 1000,
     NB_SMOKE_WAIT_SLICE_MS = 20,
     NB_SMOKE_EVENT_SLICE_MS = 50,
+    NB_SMOKE_INTERACTIVE_EVENT_SLICE_MS = 10,
+    NB_SMOKE_HOST_EVENT_BATCH = 128,
+    NB_SMOKE_INPUT_EVENT_BATCH = 64,
     NB_SMOKE_STATE_VERSION = 1
 };
 
@@ -616,9 +620,36 @@ struct nb_smoke_frame_source {
     struct nb_desktop_preview *desktop;
 };
 
+struct nb_smoke_worker {
+    const struct nb_wsdisplay_smoke_options *options;
+    struct nb_host *host;
+    struct nb_wscons_input *input;
+    struct nb_smoke_frame_source source;
+    struct nb_host_output output;
+    uint64_t next_serial;
+    uint64_t pending_serial;
+    bool frame_completed;
+    bool redraw_needed;
+    bool user_exit_requested;
+};
+
+static bool desktop_content(enum nb_wsdisplay_smoke_content content)
+{
+    return content == NB_WSDISPLAY_SMOKE_CONTENT_DESKTOP_PREVIEW ||
+           content == NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW;
+}
+
+static bool interactive_content(enum nb_wsdisplay_smoke_content content)
+{
+    return content == NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW;
+}
+
 static const char *content_description(
     enum nb_wsdisplay_smoke_content content)
 {
+    if (content == NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW) {
+        return "interactive NixBench desktop preview";
+    }
     return content == NB_WSDISPLAY_SMOKE_CONTENT_DESKTOP_PREVIEW
                ? "NixBench desktop preview"
                : "diagnostic pattern";
@@ -635,54 +666,254 @@ static void current_clock_text(char clock_text[6])
     }
 }
 
-static bool present_content(
-    struct nb_host *host,
-    const struct nb_wsdisplay_smoke_options *options,
-    struct nb_smoke_frame_source *source,
-    uint64_t *serial)
+static void print_input_error(struct nb_wscons_input *input,
+                              const char *operation)
 {
-    struct nb_host_output output;
-    struct nb_host_frame frame;
-    char clock_text[6];
+    char message[256];
+    int system_error;
 
-    if (!nb_host_get_output(host, &output)) {
-        print_host_error(host, "Could not query wsdisplay output");
+    if (nb_wscons_input_get_last_error(input,
+                                       &system_error,
+                                       message,
+                                       sizeof(message))) {
+        if (system_error != 0) {
+            fprintf(stderr, "%s: %s (%s)\n",
+                    operation, message, strerror(system_error));
+        } else {
+            fprintf(stderr, "%s: %s\n", operation, message);
+        }
+    } else {
+        fprintf(stderr, "%s\n", operation);
+    }
+}
+
+static bool configure_content(struct nb_smoke_worker *worker)
+{
+    int pointer_x;
+    int pointer_y;
+
+    if (!nb_host_get_output(worker->host, &worker->output)) {
+        print_host_error(worker->host, "Could not query wsdisplay output");
         return false;
     }
-    if (*serial == UINT64_MAX) {
-        fputs("Frame serial exhausted\n", stderr);
-        return false;
-    }
-    ++*serial;
-
-    if (options->content == NB_WSDISPLAY_SMOKE_CONTENT_DESKTOP_PREVIEW) {
-        current_clock_text(clock_text);
-        if (!nb_desktop_preview_set_output(source->desktop, &output) ||
-            !nb_desktop_preview_render(source->desktop,
-                                       clock_text,
-                                       *serial,
-                                       &frame)) {
-            fputs("Could not render the NixBench desktop preview\n", stderr);
+    if (desktop_content(worker->options->content)) {
+        if (!nb_desktop_preview_set_output(worker->source.desktop,
+                                           &worker->output)) {
+            fputs("Could not configure the NixBench desktop preview\n",
+                  stderr);
             return false;
         }
     } else {
-        nb_wsdisplay_smoke_image_destroy(&source->diagnostic);
-        if (!nb_wsdisplay_smoke_image_create(&source->diagnostic,
-                                             output.pixel_width,
-                                             output.pixel_height)) {
+        nb_wsdisplay_smoke_image_destroy(&worker->source.diagnostic);
+        if (!nb_wsdisplay_smoke_image_create(
+                &worker->source.diagnostic,
+                worker->output.pixel_width,
+                worker->output.pixel_height)) {
             fputs("Could not allocate the diagnostic frame\n", stderr);
             return false;
         }
-        if (!nb_wsdisplay_smoke_image_frame(&source->diagnostic,
-                                            *serial,
-                                            &frame)) {
-            fputs("Could not render the diagnostic frame\n", stderr);
+    }
+    if (worker->input != NULL) {
+        if (!nb_wscons_input_set_bounds(worker->input,
+                                        worker->output.logical_width,
+                                        worker->output.logical_height) ||
+            !nb_wscons_input_get_position(worker->input,
+                                           &pointer_x,
+                                           &pointer_y) ||
+            !nb_desktop_preview_set_pointer(worker->source.desktop,
+                                             pointer_x,
+                                             pointer_y,
+                                             true)) {
+            fputs("Could not update interactive preview coordinates\n",
+                  stderr);
             return false;
         }
     }
-    if (nb_host_present(host, &frame) != NB_HOST_RESULT_OK) {
-        print_host_error(host, "Could not present the selected frame");
+    worker->pending_serial = 0;
+    worker->redraw_needed = true;
+    return true;
+}
+
+static bool render_content(struct nb_smoke_worker *worker,
+                           struct nb_host_frame *frame)
+{
+    char clock_text[6];
+
+    if (worker->next_serial == 0 || worker->next_serial == UINT64_MAX) {
+        fputs("Frame serial exhausted\n", stderr);
         return false;
+    }
+    if (desktop_content(worker->options->content)) {
+        current_clock_text(clock_text);
+        if (!nb_desktop_preview_render(worker->source.desktop,
+                                       clock_text,
+                                       worker->next_serial,
+                                       frame)) {
+            fputs("Could not render the NixBench desktop preview\n", stderr);
+            return false;
+        }
+    } else if (!nb_wsdisplay_smoke_image_frame(
+                   &worker->source.diagnostic,
+                   worker->next_serial,
+                   frame)) {
+        fputs("Could not render the diagnostic frame\n", stderr);
+        return false;
+    }
+    return true;
+}
+
+static bool try_present_content(struct nb_smoke_worker *worker)
+{
+    struct nb_host_frame frame;
+    enum nb_host_result result;
+
+    if (!worker->redraw_needed || worker->pending_serial != 0 ||
+        nb_host_get_state(worker->host) != NB_HOST_STATE_ACTIVE) {
+        return true;
+    }
+    if (!render_content(worker, &frame)) {
+        return false;
+    }
+    result = nb_host_present(worker->host, &frame);
+    if (result == NB_HOST_RESULT_WOULD_BLOCK ||
+        result == NB_HOST_RESULT_SUSPENDED) {
+        return true;
+    }
+    if (result != NB_HOST_RESULT_OK) {
+        print_host_error(worker->host, "Could not present the selected frame");
+        return false;
+    }
+    worker->pending_serial = worker->next_serial;
+    ++worker->next_serial;
+    worker->redraw_needed = false;
+    return true;
+}
+
+static bool process_input_event(struct nb_smoke_worker *worker,
+                                const struct nb_host_event *event)
+{
+    struct nb_desktop_preview_update update;
+
+    if (!nb_desktop_preview_handle_input(worker->source.desktop,
+                                         event,
+                                         &update)) {
+        fputs("Could not route a wscons input event\n", stderr);
+        return false;
+    }
+    worker->redraw_needed = worker->redraw_needed || update.redraw;
+    worker->user_exit_requested =
+        worker->user_exit_requested || update.exit_requested;
+    return true;
+}
+
+static bool process_worker_host_event(struct nb_smoke_worker *worker,
+                                      const struct nb_host_event *event)
+{
+    enum nb_host_result result;
+
+    switch (event->type) {
+    case NB_HOST_EVENT_FRAME_COMPLETE:
+        if (event->data.frame_complete.frame_serial ==
+            worker->pending_serial) {
+            worker->pending_serial = 0;
+            worker->frame_completed = true;
+        }
+        return true;
+    case NB_HOST_EVENT_CONSOLE_RELEASE_REQUESTED:
+        if (worker->input != NULL) {
+            (void)nb_desktop_preview_cancel_input(worker->source.desktop);
+            nb_wscons_input_suspend(worker->input);
+        }
+        worker->pending_serial = 0;
+        worker->redraw_needed = true;
+        result = nb_host_complete_console_release(worker->host);
+        if (result != NB_HOST_RESULT_OK) {
+            print_host_error(worker->host, "Could not release the console");
+            return false;
+        }
+        return true;
+    case NB_HOST_EVENT_CONSOLE_ACQUIRE_REQUESTED:
+        result = nb_host_complete_console_acquire(worker->host);
+        if (result != NB_HOST_RESULT_OK) {
+            print_host_error(worker->host, "Could not reacquire the console");
+            return false;
+        }
+        if (!configure_content(worker)) {
+            return false;
+        }
+        if (worker->input != NULL &&
+            !nb_wscons_input_resume(worker->input)) {
+            print_input_error(worker->input,
+                              "Could not reacquire wscons input");
+            return false;
+        }
+        return true;
+    case NB_HOST_EVENT_OUTPUT_CHANGED:
+        return nb_host_get_state(worker->host) != NB_HOST_STATE_ACTIVE ||
+               configure_content(worker);
+    case NB_HOST_EVENT_QUIT:
+        fputs("Smoke worker received a termination request\n", stderr);
+        return false;
+    case NB_HOST_EVENT_FAILED:
+        print_host_error(worker->host, "wsdisplay host reported failure");
+        return false;
+    case NB_HOST_EVENT_NONE:
+        return false;
+    default:
+        return true;
+    }
+}
+
+static bool drain_host_events(struct nb_smoke_worker *worker)
+{
+    size_t count;
+
+    for (count = 0; count < NB_SMOKE_HOST_EVENT_BATCH; ++count) {
+        struct nb_host_event event;
+        const enum nb_host_event_status status =
+            nb_host_poll_event(worker->host, &event);
+
+        if (status == NB_HOST_EVENT_STATUS_EMPTY) {
+            return true;
+        }
+        if (status == NB_HOST_EVENT_STATUS_ERROR) {
+            print_host_error(worker->host, "wsdisplay event loop failed");
+            return false;
+        }
+        if (!process_worker_host_event(worker, &event)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool drain_input_events(struct nb_smoke_worker *worker)
+{
+    size_t count;
+
+    if (worker->input == NULL ||
+        !nb_wscons_input_is_active(worker->input) ||
+        worker->user_exit_requested) {
+        return true;
+    }
+    for (count = 0; count < NB_SMOKE_INPUT_EVENT_BATCH; ++count) {
+        struct nb_host_event event;
+        const enum nb_host_event_status status =
+            nb_wscons_input_poll(worker->input, &event);
+
+        if (status == NB_HOST_EVENT_STATUS_EMPTY) {
+            return true;
+        }
+        if (status == NB_HOST_EVENT_STATUS_ERROR) {
+            print_input_error(worker->input, "wscons input failed");
+            return false;
+        }
+        if (!process_input_event(worker, &event)) {
+            return false;
+        }
+        if (worker->user_exit_requested) {
+            return true;
+        }
     }
     return true;
 }
@@ -692,17 +923,16 @@ static int run_worker(const struct nb_wsdisplay_smoke_options *options,
                       int expected_active_vt)
 {
     struct nb_host_wsdisplay_options host_options;
-    struct nb_smoke_frame_source source;
-    struct nb_host *host = NULL;
-    uint64_t serial = 0;
+    struct nb_smoke_worker worker;
     uint64_t deadline;
-    bool frame_completed = false;
     bool success = false;
 
-    memset(&source, 0, sizeof(source));
-    if (options->content == NB_WSDISPLAY_SMOKE_CONTENT_DESKTOP_PREVIEW) {
-        source.desktop = nb_desktop_preview_create();
-        if (source.desktop == NULL) {
+    memset(&worker, 0, sizeof(worker));
+    worker.options = options;
+    worker.next_serial = 1;
+    if (desktop_content(options->content)) {
+        worker.source.desktop = nb_desktop_preview_create();
+        if (worker.source.desktop == NULL) {
             fputs("Could not create the NixBench desktop preview\n", stderr);
             goto cleanup;
         }
@@ -710,88 +940,93 @@ static int run_worker(const struct nb_wsdisplay_smoke_options *options,
     nb_host_wsdisplay_options_init(&host_options);
     host_options.device_path = screen_device;
     host_options.expected_active_vt = expected_active_vt;
-    host = nb_host_wsdisplay_create(&host_options);
-    if (host == NULL) {
+    worker.host = nb_host_wsdisplay_create(&host_options);
+    if (worker.host == NULL) {
         fprintf(stderr, "Could not take over %s: %s\n",
                 screen_device,
                 nb_host_wsdisplay_creation_error());
         goto cleanup;
     }
-    deadline = add_milliseconds(nb_host_monotonic_milliseconds(host),
+    if (!configure_content(&worker)) {
+        goto cleanup;
+    }
+    if (interactive_content(options->content)) {
+        int pointer_x;
+        int pointer_y;
+
+        worker.input = nb_wscons_input_create(worker.output.logical_width,
+                                               worker.output.logical_height);
+        if (worker.input == NULL ||
+            !nb_wscons_input_resume(worker.input)) {
+            print_input_error(worker.input, "Could not acquire wscons input");
+            goto cleanup;
+        }
+        if (!nb_wscons_input_get_position(worker.input,
+                                          &pointer_x,
+                                          &pointer_y) ||
+            !nb_desktop_preview_set_pointer(worker.source.desktop,
+                                             pointer_x,
+                                             pointer_y,
+                                             true)) {
+            fputs("Could not initialize the interactive cursor\n", stderr);
+            goto cleanup;
+        }
+    }
+    deadline = add_milliseconds(nb_host_monotonic_milliseconds(worker.host),
                                 options->duration_ms);
-    if (!present_content(host, options, &source, &serial)) {
+    if (!try_present_content(&worker)) {
         goto cleanup;
     }
 
-    while (nb_host_monotonic_milliseconds(host) < deadline) {
+    while (nb_host_monotonic_milliseconds(worker.host) < deadline &&
+           (!worker.user_exit_requested || !worker.frame_completed)) {
         struct nb_host_event event;
-        const uint64_t now = nb_host_monotonic_milliseconds(host);
+        const uint64_t now = nb_host_monotonic_milliseconds(worker.host);
         const uint64_t remaining = deadline > now ? deadline - now : 0;
-        const uint32_t wait = remaining > NB_SMOKE_EVENT_SLICE_MS
-                                  ? NB_SMOKE_EVENT_SLICE_MS
+        const uint32_t event_slice =
+            interactive_content(options->content)
+                ? NB_SMOKE_INTERACTIVE_EVENT_SLICE_MS
+                : NB_SMOKE_EVENT_SLICE_MS;
+        const uint32_t wait = remaining > event_slice
+                                  ? event_slice
                                   : (uint32_t)remaining;
-        const enum nb_host_event_status status =
-            nb_host_wait_event(host, wait, &event);
+        enum nb_host_event_status status;
 
+        if (!drain_host_events(&worker) ||
+            !drain_input_events(&worker) ||
+            !drain_host_events(&worker) ||
+            !try_present_content(&worker)) {
+            goto cleanup;
+        }
+        if (worker.user_exit_requested && worker.frame_completed) {
+            break;
+        }
+        status = nb_host_wait_event(worker.host, wait, &event);
         if (status == NB_HOST_EVENT_STATUS_ERROR) {
-            print_host_error(host, "wsdisplay event loop failed");
+            print_host_error(worker.host, "wsdisplay event loop failed");
             goto cleanup;
         }
-        if (status == NB_HOST_EVENT_STATUS_EMPTY) {
-            continue;
-        }
-        switch (event.type) {
-        case NB_HOST_EVENT_FRAME_COMPLETE:
-            if (event.data.frame_complete.frame_serial == serial) {
-                frame_completed = true;
-            }
-            break;
-        case NB_HOST_EVENT_CONSOLE_RELEASE_REQUESTED:
-            if (nb_host_complete_console_release(host) !=
-                NB_HOST_RESULT_OK) {
-                print_host_error(host, "Could not release the console");
-                goto cleanup;
-            }
-            break;
-        case NB_HOST_EVENT_CONSOLE_ACQUIRE_REQUESTED:
-            if (nb_host_complete_console_acquire(host) !=
-                NB_HOST_RESULT_OK) {
-                print_host_error(host, "Could not reacquire the console");
-                goto cleanup;
-            }
-            if (!present_content(host, options, &source, &serial)) {
-                goto cleanup;
-            }
-            break;
-        case NB_HOST_EVENT_OUTPUT_CHANGED:
-            if (nb_host_get_state(host) == NB_HOST_STATE_ACTIVE &&
-                !present_content(host, options, &source, &serial)) {
-                goto cleanup;
-            }
-            break;
-        case NB_HOST_EVENT_QUIT:
-            fputs("Smoke worker received a termination request\n", stderr);
+        if (status == NB_HOST_EVENT_STATUS_AVAILABLE &&
+            !process_worker_host_event(&worker, &event)) {
             goto cleanup;
-        case NB_HOST_EVENT_FAILED:
-            print_host_error(host, "wsdisplay host reported failure");
-            goto cleanup;
-        default:
-            break;
         }
     }
-    success = frame_completed;
-    if (!frame_completed) {
+    success = worker.frame_completed;
+    if (!worker.frame_completed) {
         fprintf(stderr,
                 "No %s frame completion was observed\n",
                 content_description(options->content));
     }
 
 cleanup:
-    if (host != NULL) {
-        nb_host_destroy(host);
+    if (worker.input != NULL) {
+        nb_wscons_input_destroy(worker.input);
     }
-    nb_desktop_preview_destroy(source.desktop);
-    nb_wsdisplay_smoke_image_destroy(&source.diagnostic);
+    if (worker.host != NULL) {
+        nb_host_destroy(worker.host);
+    }
+    nb_desktop_preview_destroy(worker.source.desktop);
+    nb_wsdisplay_smoke_image_destroy(&worker.source.diagnostic);
     return success ? 0 : 1;
 }
 
@@ -1015,7 +1250,8 @@ int nb_wsdisplay_smoke_run(
         return 2;
     }
     if (options->content != NB_WSDISPLAY_SMOKE_CONTENT_DIAGNOSTIC &&
-        options->content != NB_WSDISPLAY_SMOKE_CONTENT_DESKTOP_PREVIEW) {
+        options->content != NB_WSDISPLAY_SMOKE_CONTENT_DESKTOP_PREVIEW &&
+        options->content != NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW) {
         fputs("Invalid wsdisplay smoke content selection\n", stderr);
         return 2;
     }

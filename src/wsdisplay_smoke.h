@@ -23,7 +23,8 @@ enum nb_wsdisplay_smoke_action {
 
 enum nb_wsdisplay_smoke_content {
     NB_WSDISPLAY_SMOKE_CONTENT_DIAGNOSTIC,
-    NB_WSDISPLAY_SMOKE_CONTENT_DESKTOP_PREVIEW
+    NB_WSDISPLAY_SMOKE_CONTENT_DESKTOP_PREVIEW,
+    NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW
 };
 
 struct nb_wsdisplay_smoke_options {

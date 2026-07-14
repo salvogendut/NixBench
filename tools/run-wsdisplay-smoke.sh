@@ -89,8 +89,14 @@ sudo -n "$smoke" --preflight-only
 
 cat <<EOF
 
-Ready to show the NixBench desktop preview on the active wsdisplay console
-for $duration_ms ms.
+Ready to show the interactive NixBench desktop preview on the active wsdisplay
+console for at most $duration_ms ms.
+
+The supervised worker will temporarily open /dev/wskbd and /dev/wsmouse.
+Move the software cursor, drag the window by its title bar, or use its menus.
+Press Escape to finish early. Console keyboard translation, including the
+usual keyboard VT-switch shortcuts, is unavailable while the worker owns
+/dev/wskbd; input is closed before every acknowledged VT release and on exit.
 
 Keep a second SSH session open. If this script does not restore the console,
 wait for its timeout, verify no nixbench-wsdisplay-smoke process remains, then
@@ -108,13 +114,13 @@ if ! IFS= read -r answer || [ "$answer" != TAKEOVER ]; then
     fail "cancelled without changing display state"
 fi
 
-echo "==> Presenting the NixBench desktop preview"
+echo "==> Presenting the interactive NixBench desktop preview"
 set +e
 sudo -n /usr/bin/timeout -s SIGTERM -k 15s "${outer_timeout_seconds}s" \
     "$smoke" \
     --acknowledge-console-takeover \
     --acknowledge-no-crash-watchdog \
-    --desktop-preview \
+    --interactive-preview \
     --duration-ms "$duration_ms"
 run_status=$?
 set -e
@@ -143,4 +149,4 @@ if [ "$run_status" -ne 0 ]; then
     fail "the harness returned status $run_status, but no recovery record remains"
 fi
 
-echo "==> Success: desktop preview completed and console restoration was verified"
+echo "==> Success: interactive preview completed and console restoration was verified"
