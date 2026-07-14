@@ -213,8 +213,8 @@ Adaptive scaling also treats fractional carry as motion-history state. When
 filtered velocity returns to identity gain, both axis carries are cleared;
 when one axis reverses sign, that axis carry is cleared before scaling the new
 delta. These transitions prevent an accelerated residual from producing a
-delayed correction during slow or reversed movement. The revised identity
-threshold and carry rules await physical hardware validation.
+delayed correction during slow or reversed movement. Physical X220 validation
+of the revised identity threshold and carry rules looked and felt good.
 
 The current native adapter timestamps each event after its userspace `read`
 rather than preserving a device timestamp. The estimator therefore observes
@@ -270,7 +270,11 @@ events, 888 used 100% gain, 626 used 101..149%, 186 used 150..199%, 9 used
 200..249%, and none reached 250%. The user judged the overall feel good but
 reported flutter during small movements instead of a straight course. That
 observation motivated the 400-count/s identity region and carry-clearing
-checkpoint above; its effect has not yet been validated on the physical X220.
+checkpoint above. The repeat trial processed 1855 relative events, clearing
+45 precision-boundary and 20 direction-boundary carries. It reported no
+non-edge suppression and no raw-zero packet, kept the 5 ms input-to-copy
+average, and looked and felt good to the user. Presentation peaked at 20 ms,
+and the supervisor again verified complete console restoration.
 
 To avoid rewriting roughly 4.0 MiB for every cursor update, the `wsdisplay`
 host now owns a tightly packed copy of the last accepted 32-bit source
@@ -310,8 +314,9 @@ full-frame conversion and mapped-framebuffer writes; the optimized conversion
 felt substantially better. Damage-suppressed mapped writes subsequently
 averaged 5 ms in physical validation. A later adaptive trial retained the
 5 ms average and felt good overall, but exposed low-speed flutter. The new
-identity threshold and precision/direction carry resets await a repeat
-pointer-feel comparison; input-wait policy remains an independent follow-up.
+identity threshold and precision/direction carry resets eliminated non-edge
+suppression in the repeat trace, and the user reported that it looked and felt
+good. Native report timing and input-wait policy remain independent follow-ups.
 
 On 2026-07-14, the first guided `--runtime-preview` X220 trial completed as
 well. The physical console displayed the shared runtime and real NixInfo

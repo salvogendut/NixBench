@@ -354,9 +354,12 @@ backend's source-shadow damage suppression has been physically validated at a
 events as 888 at 100% gain, 626 at 101..149%, 186 at 150..199%, 9 at
 200..249%, and none at 250%, while input-to-copy latency remained 5 ms on
 average. The overall feel was good, but low-speed movement was reported to
-flutter rather than track straight. The revised identity threshold and carry
-clearing await physical validation; input-wait policy and the current
-lifecycle-event priority and bounded batch rules remain separate tuning work.
+flutter rather than track straight. A repeat after the revised identity
+threshold and carry clearing looked and felt good: 45 precision carries and
+20 direction carries were cleared, no non-edge suppression or raw-zero event
+was observed across 1855 relative events, and input-to-copy latency remained
+5 ms on average. Native report timing, input-wait policy, lifecycle-event
+priority, and bounded batch rules remain separate tuning work.
 A first guided `--runtime-preview` X220 trial completed on 2026-07-14. The
 physical console displayed the shared runtime and real NixInfo application
 through `wsdisplay` and wscons without X11, Wayland publication, or SDL video;

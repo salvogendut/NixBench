@@ -235,8 +235,8 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
   could be operated with the physical pointer. Motion was usable but felt
   slower and less fluid than the hosted desktop. Subsequent profiling and
   source-shadow damage suppression reduced the measured userspace-read-to-
-  framebuffer-copy-complete average to 5 ms on this machine. Raw-wscons
-  adaptive pointer gain and input scheduling remain tuning work; the
+  framebuffer-copy-complete average to 5 ms on this machine. Native wscons
+  report timing and input scheduling remain tuning work; the
   successful interaction trial does not turn this research harness into a
   production input/session path.
 
@@ -250,9 +250,11 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
   100% gain, put 626 at 101..149%, 186 at 150..199%, and 9 at 200..249%; it
   never reached 250%. Userspace input read through framebuffer-copy completion
   still averaged 5 ms. The overall feel was good, but the user reported that
-  small movements fluttered instead of holding a straight course. The carry-
-  hygiene revision described below is intended to address that report and is
-  awaiting physical validation.
+  small movements fluttered instead of holding a straight course. A repeat
+  trial after the carry-hygiene revision looked and felt good. It cleared 45
+  precision-boundary and 20 direction-boundary carries, reported zero non-edge
+  suppressions and zero raw-zero packets across 1855 relative events, and
+  retained the 5 ms input-to-copy average. Console restoration again passed.
 
 This is a manual target-system validation; automated NetBSD testing remains
 future work.
