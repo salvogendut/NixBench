@@ -9,6 +9,7 @@
 
 enum {
     NB_WSCONS_INPUT_ERROR_CAPACITY = 256,
+    NB_WSCONS_INPUT_WAIT_DESCRIPTOR_COUNT = 2,
     NB_WSCONS_POINTER_SENSITIVITY_MIN_PERCENT = 25,
     NB_WSCONS_POINTER_SENSITIVITY_DEFAULT_PERCENT = 100,
     NB_WSCONS_POINTER_SENSITIVITY_MAX_PERCENT = 400,
@@ -171,6 +172,15 @@ struct nb_wscons_input *nb_wscons_input_create(int logical_width,
 bool nb_wscons_input_resume(struct nb_wscons_input *input);
 void nb_wscons_input_suspend(struct nb_wscons_input *input);
 bool nb_wscons_input_is_active(const struct nb_wscons_input *input);
+/*
+ * Copies borrowed readiness descriptors for the active keyboard and mouse.
+ * They remain valid only until suspend(), destroy(), or a polling failure.
+ * Read events through nb_wscons_input_poll(); readiness never transfers
+ * descriptor ownership to the caller.
+ */
+bool nb_wscons_input_get_wait_descriptors(
+    const struct nb_wscons_input *input,
+    int descriptors[NB_WSCONS_INPUT_WAIT_DESCRIPTOR_COUNT]);
 bool nb_wscons_input_set_bounds(struct nb_wscons_input *input,
                                 int logical_width,
                                 int logical_height);

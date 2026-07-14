@@ -102,9 +102,12 @@ unavailable while the worker owns /dev/wskbd; input is closed before every
 acknowledged VT release and on exit.
 
 This trial enables the adaptive profile only for raw wscons relative motion;
-hosted SDL input is unchanged. At exit it prints raw-motion and adaptive-gain
-statistics and splits userspace-read-to-framebuffer-copy-complete time into
-render, present, and event-delivery stages for comparison with later trials.
+hosted SDL input is unchanged. It also uses the readiness-driven blocking input
+wait. At exit it prints wait calls, input and signal-pipe readiness,
+simultaneous readiness, host events, timeouts, and interruptions alongside raw-
+motion and adaptive-gain statistics, then splits userspace-read-to-framebuffer-
+copy-complete time into render, present, and event-delivery stages for
+comparison with later trials.
 
 Keep a second SSH session open. If this script does not restore the console,
 wait for its timeout, verify no nixbench-wsdisplay-smoke process remains, then

@@ -1798,6 +1798,7 @@ static void test_live_provider_without_devices(void)
     struct nb_host_event event;
     struct nb_wscons_input_stats stats;
     char message[NB_WSCONS_INPUT_ERROR_CAPACITY];
+    int wait_descriptors[NB_WSCONS_INPUT_WAIT_DESCRIPTOR_COUNT] = {7, 8};
     int system_error = 0;
     int x = -1;
     int y = -1;
@@ -1809,6 +1810,15 @@ static void test_live_provider_without_devices(void)
         return;
     }
     CHECK(!nb_wscons_input_is_active(input));
+    CHECK(!nb_wscons_input_get_wait_descriptors(NULL, wait_descriptors));
+    CHECK(wait_descriptors[0] == -1);
+    CHECK(wait_descriptors[1] == -1);
+    wait_descriptors[0] = 7;
+    wait_descriptors[1] = 8;
+    CHECK(!nb_wscons_input_get_wait_descriptors(input, wait_descriptors));
+    CHECK(wait_descriptors[0] == -1);
+    CHECK(wait_descriptors[1] == -1);
+    CHECK(!nb_wscons_input_get_wait_descriptors(input, NULL));
     CHECK(!nb_wscons_input_set_pointer_sensitivity(
         NULL,
         NB_WSCONS_POINTER_SENSITIVITY_DEFAULT_PERCENT));

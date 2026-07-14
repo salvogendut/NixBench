@@ -29,7 +29,7 @@ static void print_usage(const char *program_name)
     puts("  --wscons-pointer-profile PROFILE   flat or adaptive (default flat)");
     puts("  --wscons-pointer-sensitivity-percent N");
     puts("                                      25..400 (flat profile only; default 100)");
-    puts("  --wscons-input-stats               report input and frame diagnostics");
+    puts("  --wscons-input-stats               report input, wait, and frame diagnostics");
     puts("  wscons options require --interactive-preview or --runtime-preview.");
     puts("  The default content is the framebuffer diagnostic pattern.");
     puts("\nPath options:");

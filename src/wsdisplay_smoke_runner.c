@@ -51,7 +51,6 @@ enum {
     NB_SMOKE_ACTIVE_RESTORE_MS = 1000,
     NB_SMOKE_WAIT_SLICE_MS = 20,
     NB_SMOKE_EVENT_SLICE_MS = 50,
-    NB_SMOKE_INTERACTIVE_EVENT_SLICE_MS = 10,
     NB_SMOKE_HOST_EVENT_BATCH = 128,
     NB_SMOKE_INPUT_EVENT_BATCH = 64,
     NB_SMOKE_STATE_VERSION = 1
@@ -665,6 +664,16 @@ struct nb_smoke_frame_pipeline {
     uint64_t regressions;
 };
 
+struct nb_smoke_event_wait_stats {
+    uint64_t calls;
+    uint64_t input_ready;
+    uint64_t signal_pipe_ready;
+    uint64_t simultaneous_ready;
+    uint64_t host_events;
+    uint64_t timeouts;
+    uint64_t interruptions;
+};
+
 struct nb_smoke_worker {
     const struct nb_wsdisplay_smoke_options *options;
     struct nb_host *host;
@@ -672,6 +681,7 @@ struct nb_smoke_worker {
     struct nb_smoke_frame_source source;
     struct nb_smoke_input_latency input_latency;
     struct nb_smoke_frame_pipeline frame_pipeline;
+    struct nb_smoke_event_wait_stats event_wait;
     struct nb_host_output output;
     uint64_t next_serial;
     uint64_t pending_serial;
@@ -985,6 +995,16 @@ static void print_input_stats(const struct nb_smoke_worker *worker)
            (unsigned long long)span,
            (unsigned long long)stats.maximum_motion_gap_milliseconds,
            (unsigned long long)stats.timestamp_regressions);
+    printf("  blocking wait: calls=%llu input-ready=%llu "
+           "signal-pipe-ready=%llu simultaneous=%llu host-events=%llu "
+           "timeouts=%llu interruptions=%llu\n",
+           (unsigned long long)worker->event_wait.calls,
+           (unsigned long long)worker->event_wait.input_ready,
+           (unsigned long long)worker->event_wait.signal_pipe_ready,
+           (unsigned long long)worker->event_wait.simultaneous_ready,
+           (unsigned long long)worker->event_wait.host_events,
+           (unsigned long long)worker->event_wait.timeouts,
+           (unsigned long long)worker->event_wait.interruptions);
     if (worker->input_latency.samples == 0) {
         puts("  read-to-frame-complete: samples=0");
     } else {
@@ -1421,6 +1441,82 @@ static bool drain_input_events(struct nb_smoke_worker *worker)
     return true;
 }
 
+static void increment_counter(uint64_t *counter)
+{
+    if (*counter != UINT64_MAX) {
+        ++*counter;
+    }
+}
+
+static void add_counter(uint64_t *counter, uint64_t amount)
+{
+    *counter = amount > UINT64_MAX - *counter
+                   ? UINT64_MAX
+                   : *counter + amount;
+}
+
+static bool wait_for_worker_activity(struct nb_smoke_worker *worker,
+                                     uint32_t timeout_milliseconds)
+{
+    int input_descriptors[NB_WSCONS_INPUT_WAIT_DESCRIPTOR_COUNT];
+    const int *external_descriptors = NULL;
+    size_t external_descriptor_count = 0;
+    struct nb_host_event event;
+    struct nb_host_fd_wait_result wait_result;
+    enum nb_host_event_status status;
+    bool input_ready = false;
+    size_t index;
+
+    if (worker->input != NULL &&
+        nb_wscons_input_is_active(worker->input)) {
+        if (!nb_wscons_input_get_wait_descriptors(
+                worker->input,
+                input_descriptors)) {
+            fputs("Could not query active wscons wait descriptors\n",
+                  stderr);
+            return false;
+        }
+        external_descriptors = input_descriptors;
+        external_descriptor_count =
+            NB_WSCONS_INPUT_WAIT_DESCRIPTOR_COUNT;
+    }
+    status = nb_host_wsdisplay_wait_event_with_descriptors(
+        worker->host,
+        external_descriptors,
+        external_descriptor_count,
+        timeout_milliseconds,
+        &event,
+        &wait_result);
+    increment_counter(&worker->event_wait.calls);
+    for (index = 0; index < external_descriptor_count; ++index) {
+        input_ready = input_ready || wait_result.external_ready[index];
+    }
+    if (input_ready) {
+        increment_counter(&worker->event_wait.input_ready);
+    }
+    if (wait_result.primary_ready) {
+        increment_counter(&worker->event_wait.signal_pipe_ready);
+    }
+    if (input_ready && wait_result.primary_ready) {
+        increment_counter(&worker->event_wait.simultaneous_ready);
+    }
+    if (wait_result.timed_out) {
+        increment_counter(&worker->event_wait.timeouts);
+    }
+    add_counter(&worker->event_wait.interruptions,
+                (uint64_t)wait_result.interruptions);
+
+    if (status == NB_HOST_EVENT_STATUS_ERROR) {
+        print_host_error(worker->host, "wsdisplay event wait failed");
+        return false;
+    }
+    if (status == NB_HOST_EVENT_STATUS_AVAILABLE) {
+        increment_counter(&worker->event_wait.host_events);
+        return process_worker_host_event(worker, &event);
+    }
+    return true;
+}
+
 static int run_worker(const struct nb_wsdisplay_smoke_options *options,
                       const char *screen_device,
                       int expected_active_vt)
@@ -1489,35 +1585,33 @@ static int run_worker(const struct nb_wsdisplay_smoke_options *options,
 
     while (nb_host_monotonic_milliseconds(worker.host) < deadline &&
            (!worker.user_exit_requested || !worker.frame_completed)) {
-        struct nb_host_event event;
-        const uint64_t now = nb_host_monotonic_milliseconds(worker.host);
-        const uint64_t remaining = deadline > now ? deadline - now : 0;
-        const uint32_t event_slice =
-            interactive_content(options->content)
-                ? NB_SMOKE_INTERACTIVE_EVENT_SLICE_MS
-                : NB_SMOKE_EVENT_SLICE_MS;
-        const uint32_t wait = remaining > event_slice
-                                  ? event_slice
-                                  : (uint32_t)remaining;
-        enum nb_host_event_status status;
+        uint64_t now;
+        uint64_t remaining;
+        uint32_t wait;
 
-        if (!dispatch_runtime_content(&worker) ||
-            !drain_host_events(&worker) ||
+        if (!drain_host_events(&worker) ||
+            !dispatch_runtime_content(&worker) ||
             !drain_input_events(&worker) ||
             !drain_host_events(&worker) ||
-            !try_present_content(&worker)) {
+            !try_present_content(&worker) ||
+            !drain_host_events(&worker)) {
             goto cleanup;
         }
         if (worker.user_exit_requested && worker.frame_completed) {
             break;
         }
-        status = nb_host_wait_event(worker.host, wait, &event);
-        if (status == NB_HOST_EVENT_STATUS_ERROR) {
-            print_host_error(worker.host, "wsdisplay event loop failed");
-            goto cleanup;
+        now = nb_host_monotonic_milliseconds(worker.host);
+        if (now >= deadline) {
+            break;
         }
-        if (status == NB_HOST_EVENT_STATUS_AVAILABLE &&
-            !process_worker_host_event(&worker, &event)) {
+        remaining = deadline - now;
+        if (interactive_content(options->content) ||
+            remaining <= NB_SMOKE_EVENT_SLICE_MS) {
+            wait = (uint32_t)remaining;
+        } else {
+            wait = NB_SMOKE_EVENT_SLICE_MS;
+        }
+        if (!wait_for_worker_activity(&worker, wait)) {
             goto cleanup;
         }
     }

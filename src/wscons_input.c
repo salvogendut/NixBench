@@ -1264,6 +1264,24 @@ bool nb_wscons_input_is_active(const struct nb_wscons_input *input)
     return input != NULL && input->active;
 }
 
+bool nb_wscons_input_get_wait_descriptors(
+    const struct nb_wscons_input *input,
+    int descriptors[NB_WSCONS_INPUT_WAIT_DESCRIPTOR_COUNT])
+{
+    if (descriptors == NULL) {
+        return false;
+    }
+    descriptors[0] = -1;
+    descriptors[1] = -1;
+    if (input == NULL || !input->active || input->keyboard_fd < 0 ||
+        input->mouse_fd < 0) {
+        return false;
+    }
+    descriptors[0] = input->keyboard_fd;
+    descriptors[1] = input->mouse_fd;
+    return true;
+}
+
 bool nb_wscons_input_set_bounds(struct nb_wscons_input *input,
                                 int logical_width,
                                 int logical_height)

@@ -371,8 +371,11 @@ was observed across 1855 relative events, and input-to-copy latency remained
 bucket grouping is also physically validated: all 1738 relative events used
 native timestamps, forming 1035 buckets with 703 same-timestamp events and no
 fallback, clock-source reset, or timestamp regression; the user reported that
-the result was all good. Input-wait policy, lifecycle-event priority, and
-bounded batch rules remain separate tuning work.
+the result was all good. A readiness-driven blocking wait now covers the
+wsdisplay self-pipe and both wscons descriptors, gives lifecycle events
+simultaneous-readiness priority, and retains bounded 128-event host and
+64-event input phases. Its wait counters are exposed, portable tests pass, and
+physical NetBSD validation is the remaining gate.
 A first guided `--runtime-preview` X220 trial completed on 2026-07-14. The
 physical console displayed the shared runtime and real NixInfo application
 through `wsdisplay` and wscons without X11, Wayland publication, or SDL video;

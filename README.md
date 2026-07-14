@@ -239,9 +239,9 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
   timestamp-bucket grouping is now physically validated on the X220: all 1738
   relative events used native timestamps, forming 1035 buckets with 703 same-
   timestamp events and no fallback or clock-source reset. The user reported
-  that the result was all good; input scheduling remains tuning work. The
-  successful interaction trial does not turn this research harness into a
-  production input/session path.
+  that the result was all good. A subsequent readiness-driven blocking wait is
+  implemented but awaits its hardware trial. The successful interaction trial
+  does not turn this research harness into a production input/session path.
 
   On 2026-07-14, the first guided `--runtime-preview` trial also completed on
   the X220. The physical console displayed the shared desktop runtime and real
@@ -408,6 +408,16 @@ inside the acceleration estimator. A realtime clock step can safely reset its
 history or briefly distort acceleration, but cannot alter host dispatch or
 latency measurements.
 
+The interactive worker no longer wakes on a fixed 10 ms input slice. It blocks
+in `poll(2)` on the wsdisplay lifecycle self-pipe and active keyboard/mouse
+descriptors until lifecycle activity, input readiness, or the remaining trial
+deadline. Lifecycle events are checked before blocking and after every wake,
+timeout, or interruption, and take priority when lifecycle and input become
+ready together. Each loop phase drains at most 128 host events and 64 input
+events, with host events rechecked around input handling and presentation so an
+input flood cannot starve VT release or termination. This path is covered by
+device-free tests but still awaits physical NetBSD validation.
+
 `--wscons-input-stats` identifies the active profile and reports raw and
 logical distance, unit deltas, suppression/clamping, adaptive gain buckets,
 peak filtered velocity (capped at 2500 counts/s) and gain, idle/timestamp/edge
@@ -418,7 +428,9 @@ read-to-framebuffer-copy-complete timing. That timing excludes
 device/kernel queueing, scanout, and physical-display latency. Its input-frame
 pipeline also separates time waiting to render, SDL software rendering,
 synchronous host presentation, the framebuffer-copy-complete timestamp, and
-event delivery.
+event delivery. Blocking-wait calls, input and signal-pipe readiness,
+simultaneous readiness, host events, timeouts, and interruptions are reported
+alongside that pipeline.
 
 The first measured X220 runtime averaged 176 ms from input read through the
 framebuffer copy. A canonical 32-bit conversion fast path reduced that to

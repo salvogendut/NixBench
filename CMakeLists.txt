@@ -374,6 +374,13 @@ target_include_directories(
 )
 nixbench_configure_c_target(nixbench_host)
 
+add_library(nixbench_host_fd_wait STATIC src/host_fd_wait.c)
+target_include_directories(
+  nixbench_host_fd_wait
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+nixbench_configure_c_target(nixbench_host_fd_wait)
+
 add_library(nixbench_host_sdl STATIC src/host_sdl.c)
 target_include_directories(
   nixbench_host_sdl
@@ -480,7 +487,7 @@ target_include_directories(
 target_link_libraries(
   nixbench_host_wsdisplay
   PUBLIC nixbench_host
-  PRIVATE nixbench_framebuffer
+  PRIVATE nixbench_framebuffer nixbench_host_fd_wait
 )
 nixbench_configure_c_target(nixbench_host_wsdisplay)
 
@@ -657,6 +664,16 @@ if(BUILD_TESTING)
   target_link_libraries(nixbench_host_tests PRIVATE nixbench_host)
   nixbench_configure_c_target(nixbench_host_tests)
 
+  add_executable(
+    nixbench_host_fd_wait_tests
+    tests/host_fd_wait_test.c
+  )
+  target_link_libraries(
+    nixbench_host_fd_wait_tests
+    PRIVATE nixbench_host_fd_wait
+  )
+  nixbench_configure_c_target(nixbench_host_fd_wait_tests)
+
   add_executable(nixbench_host_sdl_tests tests/host_sdl_test.c)
   target_link_libraries(
     nixbench_host_sdl_tests
@@ -817,6 +834,7 @@ if(BUILD_TESTING)
 
   add_test(NAME nixbench.desktop.model COMMAND nixbench_desktop_tests)
   add_test(NAME nixbench.host.contract COMMAND nixbench_host_tests)
+  add_test(NAME nixbench.host.fd-wait COMMAND nixbench_host_fd_wait_tests)
   add_test(NAME nixbench.host.sdl COMMAND nixbench_host_sdl_tests)
   set_tests_properties(
     nixbench.host.sdl

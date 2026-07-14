@@ -242,6 +242,20 @@ An input-frame pipeline breakdown separates the wait to render, SDL software
 rendering, the synchronous present call and copy-complete timestamp, and
 completion-event delivery.
 
+The interactive worker no longer wakes on a fixed 10 ms input slice. It blocks
+in `poll(2)` on the wsdisplay lifecycle self-pipe and active keyboard/mouse
+descriptors until lifecycle activity, input readiness, or the remaining trial
+deadline. Lifecycle events are checked before blocking and after every wake,
+timeout, or interruption, and take priority when lifecycle and input become
+ready together. Each loop phase drains at most 128 host events and 64 input
+events, with host events rechecked around input handling and presentation so an
+input flood cannot starve VT release or termination. The input descriptors are
+borrowed only for one wait call, so suspension cannot leave stale descriptors
+registered in the host. `--wscons-input-stats` reports wait calls, input and
+signal-pipe readiness, simultaneous readiness, host events, timeouts, and
+interruptions. This path is covered by device-free tests but still awaits
+physical NetBSD validation.
+
 The unmapped parent applies a hard deadline of at most 30000 ms, terminates and
 reaps an unresponsive child, then independently restores and verifies every
 saved console property. Job-control stop signals also request supervised
@@ -328,8 +342,9 @@ good, physically validating the carry fix. A subsequent native-timestamp trial
 was also reported all good: all 1738 relative events used native timestamps,
 forming 1035 buckets with 703 same-timestamp events and no fallback or clock-
 source reset. Input-to-framebuffer-copy completion averaged 8 ms with a 22 ms
-maximum, console restoration passed, and input-wait policy remains an
-independent follow-up.
+maximum, and console restoration passed. The subsequent readiness-driven wait
+is implemented with lifecycle priority and bounded input batches but awaits a
+physical comparison.
 
 On 2026-07-14, the first guided `--runtime-preview` X220 trial completed as
 well. The physical console displayed the shared runtime and real NixInfo
@@ -387,9 +402,10 @@ safe notification (a `sig_atomic_t` flag and nonblocking self-pipe write); all
 ioctls, allocation, logging, and state changes happen in the event loop.
 The experimental adapter also turns `SIGINT`, `SIGTERM`, `SIGHUP`, and
 `SIGQUIT` into a normal host quit event so the event loop can restore the
-console. This depends on the caller continuing to poll and is not a substitute
-for the future external watchdog. Its process-global signal handling also makes
-this first adapter single-threaded-only from creation through destruction.
+console. This depends on the caller continuing to service the event loop and is
+not a substitute for the future external watchdog. Its process-global signal
+handling also makes this first adapter single-threaded-only from creation
+through destruction.
 
 On release request, NixBench stops accepting frames, cancels focus, held input,
 and pointer capture, then acknowledges through

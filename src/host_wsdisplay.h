@@ -2,6 +2,7 @@
 #define NIXBENCH_HOST_WSDISPLAY_H
 
 #include "host.h"
+#include "host_fd_wait.h"
 
 struct nb_host_wsdisplay_options {
     const char *device_path;
@@ -28,6 +29,22 @@ void nb_host_wsdisplay_options_init(
  */
 struct nb_host *nb_host_wsdisplay_create(
     const struct nb_host_wsdisplay_options *options);
+
+/*
+ * Backend-specific integration seam for the standalone event loop. The
+ * descriptors are borrowed for this call and used only as wake sources; the
+ * caller remains responsible for reading them. Queued wsdisplay events are
+ * checked before blocking and take priority when lifecycle and external
+ * readiness occur together.
+ */
+enum nb_host_event_status
+nb_host_wsdisplay_wait_event_with_descriptors(
+    struct nb_host *host,
+    const int *external_descriptors,
+    size_t external_descriptor_count,
+    uint32_t timeout_milliseconds,
+    struct nb_host_event *event,
+    struct nb_host_fd_wait_result *wait_result);
 
 /* Borrowed creation error text; invalidated by the next create attempt. */
 const char *nb_host_wsdisplay_creation_error(void);

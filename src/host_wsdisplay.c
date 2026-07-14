@@ -90,6 +90,33 @@ struct nb_host *nb_host_wsdisplay_create(
     return NULL;
 }
 
+enum nb_host_event_status
+nb_host_wsdisplay_wait_event_with_descriptors(
+    struct nb_host *host,
+    const int *external_descriptors,
+    size_t external_descriptor_count,
+    uint32_t timeout_milliseconds,
+    struct nb_host_event *event,
+    struct nb_host_fd_wait_result *wait_result)
+{
+    (void)host;
+    (void)external_descriptors;
+    (void)external_descriptor_count;
+    (void)timeout_milliseconds;
+    if (event != NULL) {
+        memset(event, 0, sizeof(*event));
+    }
+    if (wait_result != NULL) {
+        memset(wait_result, 0, sizeof(*wait_result));
+#ifdef ENOTSUP
+        wait_result->system_error = ENOTSUP;
+#else
+        wait_result->system_error = ENOSYS;
+#endif
+    }
+    return NB_HOST_EVENT_STATUS_ERROR;
+}
+
 #else
 
 #include <sys/ioctl.h>
@@ -102,7 +129,6 @@ struct nb_host *nb_host_wsdisplay_create(
 
 #include <fcntl.h>
 #include <limits.h>
-#include <poll.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -1022,68 +1048,113 @@ static enum nb_host_event_status wsdisplay_poll_event(
     return pop_event(context, event);
 }
 
+static enum nb_host_event_status wsdisplay_wait_event_with_descriptors(
+    struct nb_host_wsdisplay_context *context,
+    const int *external_descriptors,
+    size_t external_descriptor_count,
+    uint32_t timeout_milliseconds,
+    struct nb_host_event *event,
+    struct nb_host_fd_wait_result *wait_result)
+{
+    enum nb_host_event_status status;
+
+    status = nb_host_fd_wait_event(
+        context->signal_pipe[0],
+        external_descriptors,
+        external_descriptor_count,
+        timeout_milliseconds,
+        wsdisplay_poll_event,
+        context,
+        event,
+        wait_result);
+    if (status == NB_HOST_EVENT_STATUS_ERROR &&
+        wait_result->system_error != 0) {
+        fail_host(context,
+                  "Could not wait for wsdisplay activity",
+                  wait_result->system_error,
+                  NULL);
+        return pop_event(context, event);
+    }
+    return status;
+}
+
 static enum nb_host_event_status wsdisplay_wait_event(
     void *opaque,
     uint32_t timeout_milliseconds,
     struct nb_host_event *event)
 {
     struct nb_host_wsdisplay_context *context = opaque;
-    struct pollfd descriptor;
-    enum nb_host_event_status status;
-    uint64_t start;
-    uint64_t deadline;
+    struct nb_host_fd_wait_result wait_result;
 
-    status = wsdisplay_poll_event(context, event);
-    if (status != NB_HOST_EVENT_STATUS_EMPTY || timeout_milliseconds == 0) {
-        return status;
+    return wsdisplay_wait_event_with_descriptors(context,
+                                                 NULL,
+                                                 0,
+                                                 timeout_milliseconds,
+                                                 event,
+                                                 &wait_result);
+}
+
+enum nb_host_event_status
+nb_host_wsdisplay_wait_event_with_descriptors(
+    struct nb_host *host,
+    const int *external_descriptors,
+    size_t external_descriptor_count,
+    uint32_t timeout_milliseconds,
+    struct nb_host_event *event,
+    struct nb_host_fd_wait_result *wait_result)
+{
+    struct nb_host_wsdisplay_context *context;
+    size_t index;
+    size_t second;
+
+    if (event != NULL) {
+        memset(event, 0, sizeof(*event));
     }
-    start = monotonic_milliseconds();
-    deadline = UINT64_MAX - start < (uint64_t)timeout_milliseconds
-                   ? UINT64_MAX
-                   : start + (uint64_t)timeout_milliseconds;
-    descriptor.fd = context->signal_pipe[0];
-    descriptor.events = POLLIN;
-    descriptor.revents = 0;
-
-    for (;;) {
-        const uint64_t now = monotonic_milliseconds();
-        const uint64_t remaining = now >= deadline ? 0 : deadline - now;
-        const int poll_timeout = remaining > (uint64_t)INT_MAX
-                                     ? INT_MAX
-                                     : (int)remaining;
-        int result;
-
-        if (remaining == 0) {
-            return wsdisplay_poll_event(context, event);
+    if (wait_result != NULL) {
+        memset(wait_result, 0, sizeof(*wait_result));
+    }
+    if (host == NULL || event == NULL || wait_result == NULL ||
+        external_descriptor_count > NB_HOST_FD_WAIT_MAX_EXTERNAL ||
+        (external_descriptor_count != 0 &&
+         external_descriptors == NULL)) {
+        if (wait_result != NULL) {
+            wait_result->system_error = EINVAL;
         }
-        descriptor.revents = 0;
-        result = poll(&descriptor, 1, poll_timeout);
-        if (result > 0) {
-            if ((descriptor.revents & POLLIN) == 0) {
-                fail_host(context,
-                          "wsdisplay signal pipe poll failed",
-                          EIO,
-                          NULL);
+        return NB_HOST_EVENT_STATUS_ERROR;
+    }
+    for (index = 0; index < external_descriptor_count; ++index) {
+        if (external_descriptors[index] < 0) {
+            wait_result->system_error = EINVAL;
+            return NB_HOST_EVENT_STATUS_ERROR;
+        }
+        for (second = index + 1;
+             second < external_descriptor_count;
+             ++second) {
+            if (external_descriptors[index] ==
+                external_descriptors[second]) {
+                wait_result->system_error = EINVAL;
+                return NB_HOST_EVENT_STATUS_ERROR;
             }
-            return wsdisplay_poll_event(context, event);
-        }
-        if (result == 0) {
-            status = wsdisplay_poll_event(context, event);
-            if (status != NB_HOST_EVENT_STATUS_EMPTY) {
-                return status;
-            }
-            continue;
-        }
-        if (errno != EINTR) {
-            fail_host(context, "Could not poll wsdisplay signal pipe",
-                      errno, NULL);
-            return pop_event(context, event);
-        }
-        status = wsdisplay_poll_event(context, event);
-        if (status != NB_HOST_EVENT_STATUS_EMPTY) {
-            return status;
         }
     }
+    context = nb_host_backend_context(host, &wsdisplay_operations);
+    if (context == NULL) {
+        wait_result->system_error = EINVAL;
+        return NB_HOST_EVENT_STATUS_ERROR;
+    }
+    for (index = 0; index < external_descriptor_count; ++index) {
+        if (external_descriptors[index] == context->signal_pipe[0]) {
+            wait_result->system_error = EINVAL;
+            return NB_HOST_EVENT_STATUS_ERROR;
+        }
+    }
+    return wsdisplay_wait_event_with_descriptors(
+        context,
+        external_descriptors,
+        external_descriptor_count,
+        timeout_milliseconds,
+        event,
+        wait_result);
 }
 
 static bool wsdisplay_set_pointer_capture(void *opaque, bool captured)
