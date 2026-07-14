@@ -180,10 +180,15 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
   13, 2026. An earlier X11-hosted run also published the nested Wayland socket
   and displayed the demo client's first rendered frame.
 
-  The unprivileged capability probe on that host reports SDL's Wayland, X11,
-  offscreen, and dummy drivers but no KMSDRM driver. It can access four DRM card
-  nodes, while `wsdisplay`, keyboard, and mouse access is denied to the test
-  user. No console mode change or framebuffer mapping was attempted.
+  The capability probe on the current QEMU guest reports SDL's Wayland, X11,
+  offscreen, and dummy drivers but no KMSDRM driver. The guest has four static
+  `/dev/dri/card*` character-device nodes, but actual libdrm opens return
+  `ENODEV`: its QEMU VGA device has no configured DRM driver. Those nodes are
+  therefore not usable KMS devices, regardless of their ownership or mode
+  bits. The PCIVGA `wsdisplay` console also does not provide framebuffer
+  information through the interface required by the software adapter. No
+  console mode change, framebuffer mapping, DRM buffer allocation, modeset, or
+  page flip was attempted.
 
 This is a manual target-system validation; automated NetBSD testing remains
 future work.
@@ -208,6 +213,15 @@ Use `-DNIXBENCH_WAYLAND=ON` to require it, or `OFF` to omit it explicitly.
 `wayland`, `libxkbcommon`, and `wayland-protocols` packages provide these
 components; no `pkg-config` executable is required by this build.
 
+Detailed NetBSD DRM/KMS inventory is an optional libdrm feature controlled by
+`-DNIXBENCH_LIBDRM=AUTO`, the default. `AUTO` enables it when `xf86drm.h`,
+`xf86drmMode.h`, `libdrm/drm.h`, and the libdrm library are found, and otherwise
+keeps the path-only probe available. `ON` makes any missing libdrm component a
+configuration error; `OFF` omits all libdrm calls explicitly. Discovery checks
+normal CMake search locations and NetBSD's base-system `/usr/X11R7/include`,
+`/usr/X11R7/include/libdrm`, and `/usr/X11R7/lib` layout directly, so it does
+not require `pkg-config`.
+
 SDL3 is available from NetBSD pkgsrc as `devel/SDL3`. Configure, build, and test
 with:
 
@@ -225,12 +239,32 @@ Inspect the backends available on the current machine with:
 
 The probe lists SDL video drivers and, on NetBSD, checks the default
 `wsdisplay`, wscons input, and DRM device paths. It opens `wsdisplay` read-only
-only long enough to query its type, current mode, and framebuffer layout. It
-does not switch modes, map framebuffer memory, consume input events, or claim
-DRM master status. Alternate device paths can be supplied with `--wsdisplay`,
-`--keyboard`, `--mouse`, and `--drm-directory`; use `--help` for details.
-Results describe whether the next takeover experiment has the required pieces,
-not whether a DRM modeset or framebuffer presentation has already succeeded.
+only long enough to query its type, current mode, and framebuffer layout. When
+libdrm support was built, it also tries each DRM primary node read-write and
+then read-only, and reports the live driver version, dumb-buffer capabilities,
+KMS resources, CRTC state, cached connectors and modes, and legacy-visible
+planes. It uses the cached connector query so the diagnostic does not request a
+fresh display probe, and it does not enable additional DRM client capabilities.
+
+The command never explicitly requests DRM master, changes a display mode, maps
+device memory, allocates a DRM buffer, issues a page flip, or consumes input
+events. Opening an idle primary DRM node may nevertheless grant DRM master
+implicitly. The probe detects that state and drops it before collecting the
+driver and KMS inventory; it aborts all further queries for that card if it
+cannot establish the master state or drop an implicitly granted master.
+On NetBSD 10, dropping DRM master is privileged, so an unprivileged probe of an
+otherwise idle, working primary node will abort safely at this point. Use a
+controlled privileged diagnostic session when a full idle-console inventory is
+needed; the probe never treats the failed partial result as usable.
+
+A card is reported as a direct KMS candidate only when the detailed query is
+available, the card opens read-write, the master-safety check succeeds, any
+implicit grant is dropped, a live driver version and KMS resources can be read,
+at least one CRTC and encoder exist, dumb buffers are supported, and at least
+one connected connector has a cached mode. This is a conservative preflight,
+not proof that modesetting or ordinary page flips will work. Alternate device
+paths can be supplied with `--wsdisplay`, `--keyboard`, `--mouse`, and
+`--drm-directory`; use `--help` for details.
 
 Open the desktop in a development window:
 

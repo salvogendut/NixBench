@@ -4,6 +4,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "backend_probe.h"
+#include "backend_probe_drm_internal.h"
 
 #include <SDL3/SDL.h>
 
@@ -238,10 +239,25 @@ static bool drm_card_name(const char *name)
 
 static int compare_devices(const void *left, const void *right)
 {
-    const struct nb_backend_probe_device *left_device = left;
-    const struct nb_backend_probe_device *right_device = right;
+    const struct nb_backend_probe_drm_card *left_card = left;
+    const struct nb_backend_probe_drm_card *right_card = right;
 
-    return strcmp(left_device->path, right_device->path);
+    return strcmp(left_card->device.path, right_card->device.path);
+}
+
+static size_t largest_drm_card_path_index(
+    const struct nb_backend_probe_snapshot *snapshot)
+{
+    size_t largest = 0;
+    size_t index;
+
+    for (index = 1; index < snapshot->drm_card_count; ++index) {
+        if (strcmp(snapshot->drm_cards[index].device.path,
+                   snapshot->drm_cards[largest].device.path) > 0) {
+            largest = index;
+        }
+    }
+    return largest;
 }
 
 static void probe_drm_directory(const char *path,
@@ -259,7 +275,7 @@ static void probe_drm_directory(const char *path,
     snapshot->drm_directory_opened = true;
 
     while ((entry = readdir(directory)) != NULL) {
-        struct nb_backend_probe_device *card;
+        struct nb_backend_probe_drm_card *card;
         char card_path[NB_BACKEND_PROBE_PATH_CAPACITY];
         const int length = snprintf(card_path,
                                     sizeof(card_path),
@@ -274,13 +290,20 @@ static void probe_drm_directory(const char *path,
             snapshot->drm_cards_truncated = true;
             continue;
         }
-        if (snapshot->drm_card_count >= NB_BACKEND_PROBE_DRM_CARD_CAPACITY) {
+        if (snapshot->drm_card_count < NB_BACKEND_PROBE_DRM_CARD_CAPACITY) {
+            card = &snapshot->drm_cards[snapshot->drm_card_count++];
+        } else {
+            const size_t largest = largest_drm_card_path_index(snapshot);
+
             snapshot->drm_cards_truncated = true;
-            continue;
+            card = &snapshot->drm_cards[largest];
+            if (strcmp(card_path, card->device.path) >= 0) {
+                continue;
+            }
         }
 
-        card = &snapshot->drm_cards[snapshot->drm_card_count++];
-        probe_device(card_path, card);
+        memset(card, 0, sizeof(*card));
+        copy_path(card->device.path, card_path);
     }
 
     (void)closedir(directory);
@@ -288,6 +311,24 @@ static void probe_drm_directory(const char *path,
           snapshot->drm_card_count,
           sizeof(snapshot->drm_cards[0]),
           compare_devices);
+
+    {
+        size_t index;
+
+        for (index = 0; index < snapshot->drm_card_count; ++index) {
+            struct nb_backend_probe_drm_card *card =
+                &snapshot->drm_cards[index];
+            char card_path[NB_BACKEND_PROBE_PATH_CAPACITY];
+
+            copy_path(card_path, card->device.path);
+            memset(card, 0, sizeof(*card));
+            probe_device(card_path, &card->device);
+            card->query_supported = snapshot->drm_query_compiled;
+            if (card->device.exists && card->device.character_device) {
+                nb_backend_probe_drm_collect_card(card);
+            }
+        }
+    }
 }
 #endif
 
@@ -321,6 +362,8 @@ void nb_backend_probe_collect(struct nb_backend_probe_snapshot *snapshot,
                                      : defaults.drm_directory;
 
         snapshot->netbsd = true;
+        snapshot->drm_query_compiled =
+            nb_backend_probe_drm_query_supported();
         probe_wsdisplay(selected.wsdisplay, &snapshot->wsdisplay);
         probe_device(selected.keyboard, &snapshot->keyboard);
         probe_device(selected.mouse, &snapshot->mouse);
@@ -385,7 +428,44 @@ bool nb_backend_probe_wsdisplay_software_ready(
            display->software_layout_supported;
 }
 
-bool nb_backend_probe_has_accessible_drm_card(
+bool nb_backend_probe_drm_card_has_connected_output(
+    const struct nb_backend_probe_drm_card *card)
+{
+    size_t index;
+
+    if (card == NULL || !card->resources_available) {
+        return false;
+    }
+    for (index = 0; index < card->connector_count; ++index) {
+        const struct nb_backend_probe_drm_connector *connector =
+            &card->connectors[index];
+
+        if (connector->query_available &&
+            connector->connection ==
+                NB_BACKEND_PROBE_DRM_CONNECTION_CONNECTED &&
+            connector->mode_count != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool nb_backend_probe_drm_card_is_kms_candidate(
+    const struct nb_backend_probe_drm_card *card)
+{
+    return card != NULL && card->query_supported &&
+           card->open_mode == NB_BACKEND_PROBE_DRM_OPEN_READ_WRITE &&
+           card->master_checked &&
+           (!card->implicit_master || card->master_dropped) &&
+           card->close_error == 0 &&
+           card->version.available && card->resources_available &&
+           card->crtc_count != 0 && card->encoder_count != 0 &&
+           card->dumb_buffer.available &&
+           card->dumb_buffer.value != 0 &&
+           nb_backend_probe_drm_card_has_connected_output(card);
+}
+
+bool nb_backend_probe_has_kms_candidate(
     const struct nb_backend_probe_snapshot *snapshot)
 {
     size_t index;
@@ -394,11 +474,8 @@ bool nb_backend_probe_has_accessible_drm_card(
         return false;
     }
     for (index = 0; index < snapshot->drm_card_count; ++index) {
-        const struct nb_backend_probe_device *card =
-            &snapshot->drm_cards[index];
-
-        if (card->exists && card->character_device && card->readable &&
-            card->writable) {
+        if (nb_backend_probe_drm_card_is_kms_candidate(
+                &snapshot->drm_cards[index])) {
             return true;
         }
     }

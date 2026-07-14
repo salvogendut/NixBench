@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -70,7 +71,7 @@ static void test_readiness_classification(void)
 
     memset(&snapshot, 0, sizeof(snapshot));
     CHECK(!nb_backend_probe_wsdisplay_software_ready(&snapshot));
-    CHECK(!nb_backend_probe_has_accessible_drm_card(&snapshot));
+    CHECK(!nb_backend_probe_has_kms_candidate(&snapshot));
 
     snapshot.netbsd = true;
     snapshot.wsdisplay.device.exists = true;
@@ -87,13 +88,64 @@ static void test_readiness_classification(void)
     CHECK(!nb_backend_probe_wsdisplay_software_ready(&snapshot));
 
     snapshot.drm_card_count = 1;
-    snapshot.drm_cards[0].exists = true;
-    snapshot.drm_cards[0].character_device = true;
-    snapshot.drm_cards[0].readable = true;
-    snapshot.drm_cards[0].writable = true;
-    CHECK(nb_backend_probe_has_accessible_drm_card(&snapshot));
-    snapshot.drm_cards[0].writable = false;
-    CHECK(!nb_backend_probe_has_accessible_drm_card(&snapshot));
+    snapshot.drm_cards[0].device.exists = true;
+    snapshot.drm_cards[0].device.character_device = true;
+    snapshot.drm_cards[0].device.readable = true;
+    snapshot.drm_cards[0].device.writable = true;
+    CHECK(!nb_backend_probe_has_kms_candidate(&snapshot));
+
+    snapshot.drm_cards[0].query_supported = true;
+    snapshot.drm_cards[0].open_mode =
+        NB_BACKEND_PROBE_DRM_OPEN_READ_WRITE;
+    snapshot.drm_cards[0].master_checked = true;
+    snapshot.drm_cards[0].version.available = true;
+    snapshot.drm_cards[0].resources_available = true;
+    snapshot.drm_cards[0].crtc_count = 1;
+    snapshot.drm_cards[0].encoder_count = 1;
+    snapshot.drm_cards[0].dumb_buffer.attempted = true;
+    snapshot.drm_cards[0].dumb_buffer.available = true;
+    snapshot.drm_cards[0].dumb_buffer.value = 1;
+    snapshot.drm_cards[0].connector_count = 1;
+    snapshot.drm_cards[0].connectors[0].query_available = true;
+    snapshot.drm_cards[0].connectors[0].connection =
+        NB_BACKEND_PROBE_DRM_CONNECTION_CONNECTED;
+    snapshot.drm_cards[0].connectors[0].mode_count = 1;
+    CHECK(nb_backend_probe_drm_card_has_connected_output(
+        &snapshot.drm_cards[0]));
+    CHECK(nb_backend_probe_drm_card_is_kms_candidate(
+        &snapshot.drm_cards[0]));
+    CHECK(nb_backend_probe_has_kms_candidate(&snapshot));
+
+    snapshot.drm_cards[0].open_mode =
+        NB_BACKEND_PROBE_DRM_OPEN_READ_ONLY;
+    CHECK(!nb_backend_probe_drm_card_is_kms_candidate(
+        &snapshot.drm_cards[0]));
+    snapshot.drm_cards[0].open_mode =
+        NB_BACKEND_PROBE_DRM_OPEN_READ_WRITE;
+    snapshot.drm_cards[0].dumb_buffer.value = 0;
+    CHECK(!nb_backend_probe_has_kms_candidate(&snapshot));
+    snapshot.drm_cards[0].dumb_buffer.value = 1;
+    snapshot.drm_cards[0].connectors[0].connection =
+        NB_BACKEND_PROBE_DRM_CONNECTION_DISCONNECTED;
+    CHECK(!nb_backend_probe_drm_card_has_connected_output(
+        &snapshot.drm_cards[0]));
+    CHECK(!nb_backend_probe_has_kms_candidate(&snapshot));
+    snapshot.drm_cards[0].connectors[0].connection =
+        NB_BACKEND_PROBE_DRM_CONNECTION_CONNECTED;
+    snapshot.drm_cards[0].master_checked = false;
+    CHECK(!nb_backend_probe_has_kms_candidate(&snapshot));
+    snapshot.drm_cards[0].master_checked = true;
+    snapshot.drm_cards[0].implicit_master = true;
+    CHECK(!nb_backend_probe_has_kms_candidate(&snapshot));
+    snapshot.drm_cards[0].master_dropped = true;
+    CHECK(nb_backend_probe_has_kms_candidate(&snapshot));
+    snapshot.drm_cards[0].encoder_count = 0;
+    CHECK(!nb_backend_probe_has_kms_candidate(&snapshot));
+    snapshot.drm_cards[0].encoder_count = 1;
+    snapshot.drm_cards[0].close_error = EIO;
+    CHECK(!nb_backend_probe_has_kms_candidate(&snapshot));
+    CHECK(!nb_backend_probe_drm_card_has_connected_output(NULL));
+    CHECK(!nb_backend_probe_drm_card_is_kms_candidate(NULL));
 }
 
 static void test_native_collection_smoke(void)

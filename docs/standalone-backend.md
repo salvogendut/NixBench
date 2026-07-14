@@ -61,12 +61,61 @@ a hosted SDL window. The deterministic headless host and framebuffer-format
 tests exercise this seam without a display server. Standalone backends must not
 reach back into shell rendering, focus, stacking, or Wayland surface policy.
 
+## Capability-probe boundary
+
+`nixbench-backend-probe` is a preflight diagnostic, not a display takeover
+test. It always reports SDL video drivers and NetBSD device-path metadata. When
+configured with optional libdrm support, it also attempts a read-write open of
+each DRM primary node, falls back to read-only for diagnosis, and inventories:
+
+- the live DRM driver name and version;
+- dumb-buffer, preferred-depth, shadow-preference, and asynchronous-page-flip
+  capabilities;
+- KMS resource counts and size limits, CRTC query and active-state results;
+- connector state and the modes already cached by the kernel; and
+- planes visible through the legacy client capability set.
+
+Connector inspection deliberately uses the cached-current query rather than
+requesting a fresh connector probe. The diagnostic does not enable atomic or
+universal-plane client capabilities, so its plane count is intentionally only
+the legacy-visible set. An asynchronous-page-flip capability result is not
+treated as evidence that ordinary page presentation works.
+
+Opening an idle DRM primary node can grant DRM master as a side effect even
+though the process never explicitly requests it. The probe checks immediately
+after opening, drops an implicitly granted master before collecting the
+inventory, and abandons that card if it cannot establish the master state or
+drop it. It never explicitly requests master, changes a mode, creates or maps a
+buffer, changes connector or plane state, or submits a page flip.
+NetBSD 10 restricts the drop-master operation to privileged processes. As a
+result, an unprivileged probe of an otherwise idle, working primary node aborts
+safely before inventory collection; a complete idle-console inventory currently
+requires a controlled privileged diagnostic session.
+
+The direct-KMS candidate result is deliberately conservative. It requires a
+read-write open, a completed master-safety check with any implicit grant
+dropped, a live driver version, readable KMS resources with at least one CRTC
+and encoder, dumb-buffer support, and a connected connector with at least one
+cached mode. It does not require an active CRTC or legacy-visible plane, and it
+does not prove that a future master acquisition, modeset, buffer creation, or
+page flip will succeed. Likewise, a `/dev/dri/card*` entry and permissive access
+bits do not establish that a DRM driver is attached. The current QEMU NetBSD
+guest contains four such static nodes, but opens return `ENODEV` because its
+display device has no configured DRM driver.
+
+The CMake setting `NIXBENCH_LIBDRM=AUTO|ON|OFF` controls this detailed layer.
+`AUTO`, the default, enables it when all headers and the library are found and
+otherwise retains path-only inspection. `ON` makes a missing libdrm component a
+configuration error, while `OFF` suppresses libdrm discovery and calls. In
+addition to normal CMake locations, discovery handles NetBSD's base-system
+headers and library under `/usr/X11R7` directly; `pkg-config` is not required.
+
 ## Staged implementation
 
 ### 1. Software `wsdisplay` bring-up
 
-Run `nixbench-backend-probe` first; it only inventories device access and
-framebuffer metadata. The experimental `nb_host_wsdisplay_create()` then:
+Run `nixbench-backend-probe` first; its query-only boundary is described above.
+The experimental `nb_host_wsdisplay_create()` then:
 
 1. requires NetBSD, one active console screen, an initial emulation mode, and a
    true-colour RGB framebuffer it can validate;
@@ -98,11 +147,14 @@ cleanup handlers.
 
 ### 3. DRM/KMS, then GBM/EGL
 
-Add a separate host which discovers connectors, CRTCs, planes, and modes,
-performs modesets, and completes frames from page-flip events. Start with CPU
-composition into dumb or GBM-backed buffers so the existing frame contract
-survives unchanged. Add EGL/GPU composition only after modesetting and recovery
-are reliable; keep a software path for diagnosis and unsupported hardware.
+The preflight inventory now discovers the queryable live driver, connectors,
+CRTCs, legacy-visible planes, and cached modes without taking over the display.
+The next step is a separate host which selects among that inventory, acquires
+the session's DRM authority, performs modesets, and completes frames from
+page-flip events. Start with CPU composition into dumb or GBM-backed buffers so
+the existing frame contract survives unchanged. Add EGL/GPU composition only
+after modesetting and recovery are reliable; keep a software path for diagnosis
+and unsupported hardware.
 
 Availability must be detected, not assumed. SDL currently documents KMSDRM on
 NetBSD as unsupported, while its wscons support is input-only

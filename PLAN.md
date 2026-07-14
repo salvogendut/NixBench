@@ -212,12 +212,35 @@ Exit criteria:
 Current checkpoint: `nixbench-backend-probe` performs a non-destructive
 capability inventory before any console takeover code is introduced. It lists
 the video drivers compiled into SDL and, on NetBSD, queries `wsdisplay`
-framebuffer metadata plus wscons and DRM device accessibility. It never changes
-the display mode, maps device memory, consumes input events, or claims DRM
-master status. It is the mandatory preflight for the narrow host-output
-abstraction and software `wsdisplay` experiment described below; actual
-presentation still requires a console driver that exposes a supported RGB
-framebuffer.
+framebuffer metadata plus wscons device accessibility. With optional libdrm
+support, it opens each primary DRM node and inventories the live driver,
+dumb-buffer capabilities, KMS resources, CRTCs, cached connectors and modes,
+and legacy-visible planes. Cached connector queries avoid forcing a display
+reprobe, and the command does not modeset, map memory, allocate buffers, flip a
+page, consume input, or explicitly request DRM master.
+
+An idle primary-node open can grant DRM master implicitly. The probe detects
+and drops that state before the inventory, and aborts the card if either safety
+operation fails. Because NetBSD 10 restricts the drop operation to privileged
+processes, an unprivileged probe of an otherwise idle live primary node aborts
+safely and a complete idle-console inventory requires a controlled privileged
+diagnostic session. The direct-KMS candidate classification requires a
+read-write open, a completed master-safety check with any implicit grant
+dropped, a live driver version, KMS resources with at least one CRTC and
+encoder, dumb-buffer support, and a connected output with at least one cached
+mode. This is only a preflight for later takeover and presentation tests. In
+particular, static device nodes do not qualify by themselves: the current QEMU
+NetBSD guest has four `/dev/dri/card*` nodes whose actual opens fail with
+`ENODEV` because no DRM driver is configured for its display device.
+
+Detailed DRM inventory is controlled by `NIXBENCH_LIBDRM=AUTO|ON|OFF`. `AUTO`
+degrades to path-only inspection when libdrm is absent, `ON` fails configuration
+when any required header or library is missing, and `OFF` deliberately omits
+the feature. Direct discovery includes NetBSD's `/usr/X11R7` base-system layout
+and does not depend on a `pkg-config` executable. The probe is the mandatory
+preflight for the narrow host-output abstraction and software `wsdisplay`
+experiment described below; actual presentation still requires a usable DRM
+driver or a console driver that exposes a supported RGB framebuffer.
 
 The SDL-free host contract now describes logical and pixel output geometry,
 normalized input, pointer capture, monotonic timing, software frame submission,

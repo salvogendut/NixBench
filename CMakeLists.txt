@@ -19,6 +19,119 @@ option(
 )
 
 set(
+  NIXBENCH_LIBDRM "AUTO"
+  CACHE STRING "Build detailed DRM/KMS capability queries (AUTO, ON, or OFF)"
+)
+set_property(CACHE NIXBENCH_LIBDRM PROPERTY STRINGS AUTO ON OFF)
+string(TOUPPER "${NIXBENCH_LIBDRM}" NIXBENCH_LIBDRM)
+set(
+  NIXBENCH_LIBDRM "${NIXBENCH_LIBDRM}"
+  CACHE STRING "Build detailed DRM/KMS capability queries (AUTO, ON, or OFF)"
+  FORCE
+)
+
+if(
+  NOT NIXBENCH_LIBDRM STREQUAL "AUTO"
+  AND NOT NIXBENCH_LIBDRM STREQUAL "ON"
+  AND NOT NIXBENCH_LIBDRM STREQUAL "OFF"
+)
+  message(
+    FATAL_ERROR
+    "NIXBENCH_LIBDRM must be one of AUTO, ON, or OFF "
+    "(received '${NIXBENCH_LIBDRM}')"
+  )
+endif()
+
+set(NIXBENCH_LIBDRM_ENABLED FALSE)
+if(
+  NOT NIXBENCH_LIBDRM STREQUAL "OFF"
+  AND CMAKE_SYSTEM_NAME STREQUAL "NetBSD"
+)
+  find_path(
+    NIXBENCH_LIBDRM_INCLUDE_DIR
+    NAMES xf86drm.h
+    PATHS /usr/X11R7
+    PATH_SUFFIXES include
+  )
+  find_path(
+    NIXBENCH_LIBDRM_MODE_INCLUDE_DIR
+    NAMES xf86drmMode.h
+    PATHS /usr/X11R7
+    PATH_SUFFIXES include
+  )
+  find_path(
+    NIXBENCH_LIBDRM_KERNEL_INCLUDE_DIR
+    NAMES drm.h
+    PATHS /usr/X11R7
+    PATH_SUFFIXES include/libdrm libdrm
+  )
+  find_library(
+    NIXBENCH_LIBDRM_LIBRARY
+    NAMES drm
+    PATHS /usr/X11R7
+    PATH_SUFFIXES lib
+  )
+
+  set(_nixbench_libdrm_missing)
+  if(NOT NIXBENCH_LIBDRM_INCLUDE_DIR)
+    list(APPEND _nixbench_libdrm_missing "xf86drm.h")
+  endif()
+  if(NOT NIXBENCH_LIBDRM_MODE_INCLUDE_DIR)
+    list(APPEND _nixbench_libdrm_missing "xf86drmMode.h")
+  endif()
+  if(NOT NIXBENCH_LIBDRM_KERNEL_INCLUDE_DIR)
+    list(APPEND _nixbench_libdrm_missing "libdrm/drm.h")
+  endif()
+  if(NOT NIXBENCH_LIBDRM_LIBRARY)
+    list(APPEND _nixbench_libdrm_missing "libdrm")
+  endif()
+
+  if(_nixbench_libdrm_missing)
+    string(JOIN ", " _nixbench_libdrm_missing_text
+           ${_nixbench_libdrm_missing})
+    if(NIXBENCH_LIBDRM STREQUAL "ON")
+      message(
+        FATAL_ERROR
+        "Detailed DRM probing was requested, but these components were not "
+        "found: ${_nixbench_libdrm_missing_text}"
+      )
+    else()
+      message(
+        STATUS
+        "Detailed DRM probing is unavailable: "
+        "${_nixbench_libdrm_missing_text}"
+      )
+    endif()
+  else()
+    set(NIXBENCH_LIBDRM_ENABLED TRUE)
+    add_library(nixbench_libdrm INTERFACE)
+    add_library(NixBench::Libdrm ALIAS nixbench_libdrm)
+    target_include_directories(
+      nixbench_libdrm
+      INTERFACE
+        "${NIXBENCH_LIBDRM_INCLUDE_DIR}"
+        "${NIXBENCH_LIBDRM_MODE_INCLUDE_DIR}"
+        "${NIXBENCH_LIBDRM_KERNEL_INCLUDE_DIR}"
+    )
+    target_link_libraries(
+      nixbench_libdrm
+      INTERFACE "${NIXBENCH_LIBDRM_LIBRARY}"
+    )
+    message(STATUS "Detailed DRM probing enabled (${NIXBENCH_LIBDRM_LIBRARY})")
+  endif()
+elseif(NIXBENCH_LIBDRM STREQUAL "ON")
+  message(
+    FATAL_ERROR
+    "Detailed DRM probing is currently supported only on NetBSD"
+  )
+elseif(NOT NIXBENCH_LIBDRM STREQUAL "OFF")
+  message(
+    STATUS
+    "Detailed DRM probing is unavailable: currently supported only on NetBSD"
+  )
+endif()
+
+set(
   NIXBENCH_WAYLAND "AUTO"
   CACHE STRING "Build the experimental Wayland server (AUTO, ON, or OFF)"
 )
@@ -305,12 +418,26 @@ if(NIXBENCH_WAYLAND_ENABLED)
   target_link_libraries(nixbench_wayland PUBLIC nixbench_model)
 endif()
 
-add_library(nixbench_backend_probe STATIC src/backend_probe.c)
+add_library(
+  nixbench_backend_probe STATIC
+  src/backend_probe.c
+  src/backend_probe_drm.c
+)
 target_include_directories(
   nixbench_backend_probe
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 target_link_libraries(nixbench_backend_probe PRIVATE SDL3::SDL3)
+if(NIXBENCH_LIBDRM_ENABLED)
+  target_compile_definitions(
+    nixbench_backend_probe PRIVATE NIXBENCH_HAS_LIBDRM=1
+  )
+  target_link_libraries(nixbench_backend_probe PRIVATE NixBench::Libdrm)
+else()
+  target_compile_definitions(
+    nixbench_backend_probe PRIVATE NIXBENCH_HAS_LIBDRM=0
+  )
+endif()
 nixbench_configure_c_target(nixbench_backend_probe)
 
 add_executable(
@@ -416,6 +543,16 @@ if(BUILD_TESTING)
     PRIVATE nixbench_backend_probe
   )
   nixbench_configure_c_target(nixbench_backend_probe_tests)
+
+  add_executable(
+    nixbench_backend_probe_drm_tests
+    tests/backend_probe_drm_test.c
+  )
+  target_link_libraries(
+    nixbench_backend_probe_drm_tests
+    PRIVATE nixbench_backend_probe
+  )
+  nixbench_configure_c_target(nixbench_backend_probe_drm_tests)
 
   add_executable(nixbench_desktop_tests tests/desktop_test.c)
   target_link_libraries(nixbench_desktop_tests PRIVATE nixbench_model)
@@ -557,6 +694,10 @@ if(BUILD_TESTING)
   add_test(
     NAME nixbench.backend-probe.unit
     COMMAND nixbench_backend_probe_tests
+  )
+  add_test(
+    NAME nixbench.backend-probe.drm
+    COMMAND nixbench_backend_probe_drm_tests
   )
   add_test(
     NAME nixbench.backend-probe.help

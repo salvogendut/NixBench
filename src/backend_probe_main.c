@@ -193,6 +193,14 @@ static void print_wsdisplay(
            display->software_layout_supported ? "yes" : "no");
 }
 
+static void print_drm_close_error(
+    const struct nb_backend_probe_drm_card *card)
+{
+    if (card->close_error != 0) {
+        printf("  close: failed (%s)\n", error_text(card->close_error));
+    }
+}
+
 static void print_drm(const struct nb_backend_probe_snapshot *snapshot)
 {
     size_t index;
@@ -203,11 +211,184 @@ static void print_drm(const struct nb_backend_probe_snapshot *snapshot)
                error_text(snapshot->drm_directory_error));
         return;
     }
+    printf("Detailed DRM queries: %s\n",
+           snapshot->drm_query_compiled
+               ? "enabled (libdrm)"
+               : "unavailable (built without NetBSD libdrm support)");
     if (snapshot->drm_card_count == 0) {
         puts("  no card nodes found");
     }
     for (index = 0; index < snapshot->drm_card_count; ++index) {
-        print_access("DRM card", &snapshot->drm_cards[index]);
+        const struct nb_backend_probe_drm_card *card =
+            &snapshot->drm_cards[index];
+        size_t connector_index;
+
+        print_access("DRM card", &card->device);
+        if (!card->device.exists || !card->device.character_device) {
+            puts("  detailed query: skipped (not an existing character "
+                 "device)");
+            continue;
+        }
+        if (!card->query_supported) {
+            puts("  detailed query: unavailable (built without libdrm)");
+            continue;
+        }
+        if (card->open_mode == NB_BACKEND_PROBE_DRM_OPEN_NONE) {
+            printf("  query open: failed (read-write: %s; read-only: %s)\n",
+                   error_text(card->read_write_open_error),
+                   error_text(card->read_only_open_error));
+            continue;
+        }
+        printf("  query open: yes (%s)\n",
+               card->open_mode == NB_BACKEND_PROBE_DRM_OPEN_READ_WRITE
+                   ? "read-write"
+                   : "read-only");
+        if (!card->master_checked) {
+            printf("  master safety check: failed (%s); queries aborted\n",
+                   error_text(card->master_check_error));
+            print_drm_close_error(card);
+            continue;
+        }
+        if (card->implicit_master) {
+            if (!card->master_dropped) {
+                printf("  implicit DRM master: could not drop (%s); "
+                       "queries aborted\n",
+                       error_text(card->master_drop_error));
+                print_drm_close_error(card);
+                continue;
+            }
+            puts("  implicit DRM master: granted by open and dropped before "
+                 "queries");
+        } else {
+            puts("  DRM master: held by another client or not granted");
+        }
+        if (card->version.available) {
+            printf("  driver: %s %d.%d.%d",
+                   card->version.name,
+                   card->version.major,
+                   card->version.minor,
+                   card->version.patch);
+            if (card->version.date[0] != '\0') {
+                printf(" (%s)", card->version.date);
+            }
+            putchar('\n');
+            if (card->version.description[0] != '\0') {
+                printf("  description: %s\n", card->version.description);
+            }
+        } else {
+            printf("  driver version: unavailable (%s)\n",
+                   error_text(card->version.error));
+        }
+        if (card->dumb_buffer.attempted) {
+            if (card->dumb_buffer.available) {
+                printf("  dumb buffers: %s\n",
+                       card->dumb_buffer.value != 0 ? "yes" : "no");
+            } else {
+                printf("  dumb buffers: unavailable (%s)\n",
+                       error_text(card->dumb_buffer.error));
+            }
+        }
+        if (card->dumb_preferred_depth.available) {
+            printf("  preferred dumb-buffer depth: %llu\n",
+                   (unsigned long long)card->dumb_preferred_depth.value);
+        }
+        if (card->dumb_prefer_shadow.available) {
+            printf("  dumb-buffer shadow preferred: %s\n",
+                   card->dumb_prefer_shadow.value != 0 ? "yes" : "no");
+        }
+        if (card->async_page_flip.attempted) {
+            if (card->async_page_flip.available) {
+                printf("  asynchronous page flips: %s\n",
+                       card->async_page_flip.value != 0 ? "yes" : "no");
+            } else {
+                printf("  asynchronous page flips: unavailable (%s)\n",
+                       error_text(card->async_page_flip.error));
+            }
+        }
+        if (!card->resources_available) {
+            printf("  KMS resources: unavailable (%s)\n",
+                   error_text(card->resources_error));
+        } else {
+            printf("  KMS resources: %zu CRTC%s (%zu active, %zu query "
+                   "error%s), %zu encoder%s, %zu connector%s\n",
+                   card->crtc_count,
+                   card->crtc_count == 1 ? "" : "s",
+                   card->active_crtc_count,
+                   card->crtc_query_error_count,
+                   card->crtc_query_error_count == 1 ? "" : "s",
+                   card->encoder_count,
+                   card->encoder_count == 1 ? "" : "s",
+                   card->reported_connector_count,
+                   card->reported_connector_count == 1 ? "" : "s");
+            printf("  KMS size range: %ux%u to %ux%u\n",
+                   card->min_width,
+                   card->min_height,
+                   card->max_width,
+                   card->max_height);
+        }
+        for (connector_index = 0;
+             connector_index < card->connector_count;
+             ++connector_index) {
+            const struct nb_backend_probe_drm_connector *connector =
+                &card->connectors[connector_index];
+            const char *connection = "unknown";
+            size_t mode_index;
+
+            if (connector->connection ==
+                NB_BACKEND_PROBE_DRM_CONNECTION_CONNECTED) {
+                connection = "connected";
+            } else if (connector->connection ==
+                       NB_BACKEND_PROBE_DRM_CONNECTION_DISCONNECTED) {
+                connection = "disconnected";
+            }
+            printf("  connector %s (id %u): ",
+                   connector->name,
+                   connector->id);
+            if (!connector->query_available) {
+                printf("query failed (%s)\n",
+                       error_text(connector->query_error));
+                continue;
+            }
+            printf("%s, %ux%u mm, %zu cached mode%s%s\n",
+                   connection,
+                   connector->width_mm,
+                   connector->height_mm,
+                   connector->reported_mode_count,
+                   connector->reported_mode_count == 1 ? "" : "s",
+                   connector->modes_truncated ? " (truncated)" : "");
+            for (mode_index = 0;
+                 mode_index < connector->mode_count;
+                 ++mode_index) {
+                const struct nb_backend_probe_drm_mode *mode =
+                    &connector->modes[mode_index];
+
+                printf("    %s: %ux%u@%u Hz%s%s\n",
+                       mode->name,
+                       mode->width,
+                       mode->height,
+                       mode->refresh_hz,
+                       mode->preferred ? " preferred" : "",
+                       mode->interlaced ? " interlaced" : "");
+            }
+        }
+        if (card->connectors_truncated) {
+            puts("  additional connectors were omitted");
+        }
+        if (card->planes_available) {
+            printf("  legacy-visible planes: %zu (%zu query error%s)\n",
+                   card->plane_count,
+                   card->plane_query_error_count,
+                   card->plane_query_error_count == 1 ? "" : "s");
+        } else {
+            printf("  legacy-visible planes: unavailable (%s)\n",
+                   error_text(card->planes_error));
+        }
+        puts("  ordinary page flips: not exercised by this probe");
+        printf("  direct KMS candidate: %s\n",
+               nb_backend_probe_drm_card_is_kms_candidate(card)
+                   ? "yes"
+                   : "no");
+        print_drm_close_error(card);
     }
     if (snapshot->drm_cards_truncated) {
         puts("  additional card nodes were omitted");
@@ -219,7 +400,7 @@ static void print_netbsd_probe(
 {
     bool keyboard_ready;
     bool mouse_ready;
-    bool kmsdrm_ready;
+    bool kms_candidate;
 
     if (!snapshot->netbsd) {
         puts("NetBSD console probe: not applicable on this platform");
@@ -240,9 +421,7 @@ static void print_netbsd_probe(
                   snapshot->mouse.character_device &&
                   snapshot->mouse.readable &&
                   snapshot->mouse.writable;
-    kmsdrm_ready =
-        nb_backend_probe_has_sdl_driver(snapshot, "kmsdrm") &&
-        nb_backend_probe_has_accessible_drm_card(snapshot);
+    kms_candidate = nb_backend_probe_has_kms_candidate(snapshot);
 
     printf("wsdisplay software output: %s\n",
            nb_backend_probe_wsdisplay_software_ready(snapshot)
@@ -253,9 +432,14 @@ static void print_netbsd_probe(
     printf("wscons pointer input: %s\n",
            mouse_ready ? "accessible" : "unavailable or inaccessible");
     printf("SDL KMSDRM path: %s\n",
-           kmsdrm_ready
+           nb_backend_probe_has_sdl_driver(snapshot, "kmsdrm") &&
+                   kms_candidate
                ? "probe-ready (functional KMS still requires a takeover test)"
                : "unavailable or incomplete");
+    printf("Direct DRM/KMS output: %s\n",
+           kms_candidate
+               ? "candidate found (modesetting and page flips not exercised)"
+               : "no usable candidate found");
 }
 
 int main(int argc, char *argv[])
@@ -275,7 +459,10 @@ int main(int argc, char *argv[])
 
     puts("NixBench backend capability probe");
     puts("This command does not change display modes, map framebuffers, read "
-         "input events, or claim DRM master.\n");
+         "input events, allocate DRM buffers, or explicitly request DRM "
+         "master. An idle primary DRM node may grant master implicitly when "
+         "opened; the probe drops it before querying and aborts that card if "
+         "the drop fails.\n");
     nb_backend_probe_collect(&snapshot, &paths);
     print_sdl_drivers(&snapshot);
     putchar('\n');
