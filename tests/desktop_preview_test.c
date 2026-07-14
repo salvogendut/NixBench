@@ -168,13 +168,13 @@ static void test_preview_input(void)
 
     event = left_button(initial.x + 40, initial.y + 8, true);
     CHECK(nb_desktop_preview_handle_input(preview, &event, &update));
-    event = pointer_motion(initial.x + 90, initial.y + 38);
+    event = pointer_motion(initial.x + 52, initial.y + 18);
     CHECK(nb_desktop_preview_handle_input(preview, &event, &update));
-    event = left_button(initial.x + 90, initial.y + 38, false);
+    event = left_button(initial.x + 52, initial.y + 18, false);
     CHECK(nb_desktop_preview_handle_input(preview, &event, &update));
     CHECK(nb_desktop_preview_window_frame(preview, &moved));
-    CHECK(moved.x == initial.x + 50);
-    CHECK(moved.y == initial.y + 30);
+    CHECK(moved.x == initial.x + 12);
+    CHECK(moved.y == initial.y + 10);
 
     CHECK(nb_desktop_preview_set_output(preview, &output));
     CHECK(nb_desktop_preview_window_frame(preview, &preserved));
