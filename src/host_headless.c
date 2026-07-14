@@ -141,7 +141,7 @@ static enum nb_host_event_status headless_wait_event(
 {
     struct nb_host_headless_context *context = opaque;
 
-    if (context->event_count > 0) {
+    if (context->lifecycle_event_pending || context->event_count > 0) {
         return pop_event(context, event);
     }
     if (UINT64_MAX - context->milliseconds < timeout_milliseconds) {

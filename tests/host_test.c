@@ -326,10 +326,11 @@ static void test_console_release_acquire_and_retry(void)
     CHECK(nb_host_headless_request_console_release(host, 50));
     CHECK(nb_host_get_state(host) == NB_HOST_STATE_RELEASE_PENDING);
     CHECK(nb_host_headless_pointer_is_captured(host));
-    CHECK(nb_host_poll_event(host, &event) ==
+    CHECK(nb_host_wait_event(host, 250, &event) ==
           NB_HOST_EVENT_STATUS_AVAILABLE);
     CHECK(event.type == NB_HOST_EVENT_CONSOLE_RELEASE_REQUESTED);
     CHECK(event.milliseconds == 50);
+    CHECK(nb_host_monotonic_milliseconds(host) == 50);
     CHECK(nb_host_poll_event(host, &event) == NB_HOST_EVENT_STATUS_EMPTY);
 
     CHECK(nb_host_present(host, &frame) ==
@@ -347,10 +348,11 @@ static void test_console_release_acquire_and_retry(void)
     CHECK(nb_host_headless_advance_time(host, 25));
     CHECK(nb_host_headless_request_console_acquire(host, 75));
     CHECK(nb_host_get_state(host) == NB_HOST_STATE_ACQUIRE_PENDING);
-    CHECK(nb_host_poll_event(host, &event) ==
+    CHECK(nb_host_wait_event(host, 250, &event) ==
           NB_HOST_EVENT_STATUS_AVAILABLE);
     CHECK(event.type == NB_HOST_EVENT_CONSOLE_ACQUIRE_REQUESTED);
     CHECK(event.milliseconds == 75);
+    CHECK(nb_host_monotonic_milliseconds(host) == 75);
     CHECK(nb_host_complete_console_acquire(host) == NB_HOST_RESULT_OK);
     CHECK(nb_host_get_state(host) == NB_HOST_STATE_ACTIVE);
     CHECK(nb_host_complete_console_acquire(host) ==
