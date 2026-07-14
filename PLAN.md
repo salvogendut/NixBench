@@ -289,7 +289,7 @@ The harness is excluded by default behind
 `NIXBENCH_BUILD_WSDISPLAY_SMOKE=ON`. Its query-only `--preflight-only` action
 does not alter display state. A run requires both
 `--acknowledge-console-takeover` and
-`--acknowledge-no-crash-watchdog`, is limited to 250..5000 ms, and writes a
+`--acknowledge-no-crash-watchdog`, is limited to 250..30000 ms, and writes a
 root-only recovery record at `/var/run/nixbench-wsdisplay-smoke.state` before
 forking. The diagnostic pattern remains the default; `--desktop-preview`
 selects the bounded shell scene, and the guided hardware script selects that

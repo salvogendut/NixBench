@@ -5,6 +5,7 @@ set -eu
 state_path=/var/run/nixbench-wsdisplay-smoke.state
 duration_ms=${1:-3000}
 jobs=${NIXBENCH_JOBS:-4}
+timeout_margin_seconds=10
 
 fail()
 {
@@ -17,14 +18,16 @@ if [ "$#" -gt 1 ]; then
 fi
 
 case "$duration_ms" in
-    ''|*[!0-9]*)
-        fail "duration must be an integer from 250 through 5000 ms"
+    ''|0*|*[!0-9]*)
+        fail "duration must be an integer from 250 through 30000 ms"
         ;;
 esac
-if [ "${#duration_ms}" -gt 4 ] ||
-   [ "$duration_ms" -lt 250 ] || [ "$duration_ms" -gt 5000 ]; then
-    fail "duration must be from 250 through 5000 ms"
+if [ "${#duration_ms}" -gt 5 ] ||
+   [ "$duration_ms" -lt 250 ] || [ "$duration_ms" -gt 30000 ]; then
+    fail "duration must be from 250 through 30000 ms"
 fi
+duration_seconds=$(( (duration_ms + 999) / 1000 ))
+outer_timeout_seconds=$((duration_seconds + timeout_margin_seconds))
 
 script_path=$0
 case "$script_path" in
@@ -107,7 +110,7 @@ fi
 
 echo "==> Presenting the NixBench desktop preview"
 set +e
-sudo -n /usr/bin/timeout -s SIGTERM -k 15s 10s \
+sudo -n /usr/bin/timeout -s SIGTERM -k 15s "${outer_timeout_seconds}s" \
     "$smoke" \
     --acknowledge-console-takeover \
     --acknowledge-no-crash-watchdog \

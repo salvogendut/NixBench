@@ -157,7 +157,7 @@ while its USL-compatible `VT_*` ioctl numbers are one-based; the harness
 translates and checks that boundary explicitly.
 
 A presentation run requires both `--acknowledge-console-takeover` and
-`--acknowledge-no-crash-watchdog`. `--duration-ms` accepts only 250..5000 ms
+`--acknowledge-no-crash-watchdog`. `--duration-ms` accepts only 250..30000 ms
 and defaults to 3000 ms. Before forking, the root parent persists the original
 display mode, video state, VT mode, and active screen in the root-only
 `/var/run/nixbench-wsdisplay-smoke.state`. The child alone creates the
@@ -176,7 +176,8 @@ verified.
 `tools/run-wsdisplay-smoke.sh` configures, builds, tests, performs preflight,
 explicitly selects the desktop preview, and verifies postflight state. It still
 requires an SSH session, passwordless recovery access, a typed `TAKEOVER`, both
-harness acknowledgements, and the outer timeout.
+harness acknowledgements, and the outer timeout. That outer deadline is the
+requested duration rounded up to seconds plus a ten-second restoration margin.
 
 If the supervisor itself fails, a second SSH session can run
 `sudo ./build/nixbench-wsdisplay-smoke --recover` against the persisted record.

@@ -56,7 +56,7 @@ static bool parse_duration(
     }
     if (value < NB_WSDISPLAY_SMOKE_MIN_DURATION_MS ||
         value > NB_WSDISPLAY_SMOKE_MAX_DURATION_MS) {
-        set_error(error, "Duration is outside the 250..5000 ms safety range");
+        set_error(error, "Duration is outside the 250..30000 ms safety range");
         return false;
     }
     *duration = (uint32_t)value;

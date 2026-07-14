@@ -95,7 +95,11 @@ static void test_parser_rejections(void)
     };
     char *high[] = {
         "smoke", "--acknowledge-console-takeover",
-        "--acknowledge-no-crash-watchdog", "--duration-ms", "5001"
+        "--acknowledge-no-crash-watchdog", "--duration-ms", "30001"
+    };
+    char *maximum[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--duration-ms", "30000"
     };
     char *signed_value[] = {
         "smoke", "--acknowledge-console-takeover",
@@ -133,6 +137,8 @@ static void test_parser_rejections(void)
 
     CHECK(!parse(5, low, &options, error));
     CHECK(!parse(5, high, &options, error));
+    CHECK(parse(5, maximum, &options, error));
+    CHECK(options.duration_ms == NB_WSDISPLAY_SMOKE_MAX_DURATION_MS);
     CHECK(!parse(5, signed_value, &options, error));
     CHECK(!parse(4, duplicate, &options, error));
     CHECK(!parse(3, conflict, &options, error));

@@ -317,16 +317,16 @@ one guided command. Run it over SSH while watching the physical console:
 ```
 
 It defaults to 3000 ms; an alternate safe duration can be passed as its sole
-argument, for example `./tools/run-wsdisplay-smoke.sh 2000`. The script still
-requires typing `TAKEOVER` before it supplies the harness acknowledgements. It
-selects the NixBench desktop preview: the real global menu bar and clock,
-desktop background, and managed-window chrome are rendered into an SDL
-software surface without initializing SDL video or opening X11, Wayland, or
-input devices.
+argument, up to `./tools/run-wsdisplay-smoke.sh 30000`. The script derives its
+outer timeout from that duration and still requires typing `TAKEOVER` before it
+supplies the harness acknowledgements. It selects the NixBench desktop preview:
+the real global menu bar and clock, desktop background, and managed-window
+chrome are rendered into an SDL software surface without initializing SDL video
+or opening X11, Wayland, or input devices.
 
 Preflight reads `/dev/ttyEstat` to select the active zero-based screen node;
 it does not change display state. A presentation run changes that console to
-framebuffer mode briefly and accepts only durations from 250 through 5000
+framebuffer mode briefly and accepts only durations from 250 through 30000
 milliseconds (default 3000). Direct harness runs draw the diagnostic pattern
 by default; `--desktop-preview` selects the shell scene. It refuses to run
 unless both risk acknowledgements are present. Keep a second SSH session
