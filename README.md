@@ -200,7 +200,7 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
 - **NetBSD 11.0_RC6 (GENERIC), amd64 on a Lenovo ThinkPad X220** with Intel
   Sandy Bridge graphics and SDL3 3.4.2 from pkgsrc: a clean-machine setup,
   explicit `NIXBENCH_LIBDRM=ON` and `NIXBENCH_WAYLAND=ON` configuration, full
-  native build, and all 27 tests were confirmed working on July 14, 2026. The
+  native build, and all 28 tests were confirmed working on July 14, 2026. The
   kernel attaches `i915drmkms` and provides an `intelfb` console.
 
   The privileged query-only probe reports a supported 1366x768, 32-bit RGB
@@ -224,6 +224,15 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
   was not needed for either run. Those recorded trials predate the explicit
   interactive mode: no DRM buffer allocation, modeset, page flip, or input
   read was attempted.
+
+  A subsequent bounded `--interactive-preview` trial also completed on the
+  X220. The software cursor responded, and the global menus and managed window
+  could be operated with the physical pointer. Motion was usable but felt
+  slower and less fluid than the hosted desktop. Pointer acceleration, input
+  scheduling, and the cost of full software-rendered framebuffer updates are
+  therefore explicit follow-up profiling and tuning work; the successful
+  interaction trial does not turn this research harness into a production
+  input/session path.
 
 This is a manual target-system validation; automated NetBSD testing remains
 future work.

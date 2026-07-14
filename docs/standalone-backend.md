@@ -212,6 +212,13 @@ The supervisor again verified restoration; the guided postflight and a
 separate SSH preflight found the original console state, no recovery record,
 and no harness process. Manual recovery was not needed.
 
+A later bounded `--interactive-preview` X220 trial rendered the software
+cursor and allowed the physical pointer to operate the global menus and
+managed window. Motion was functional but felt slower and less fluid than the
+hosted path. Follow-up work should measure raw-delta scaling and acceleration,
+input-to-frame latency, and full-frame software render/copy cost before changing
+the provider's safety-oriented batching or lifecycle priority.
+
 ### 3. Production supervised standalone sessions
 
 Move device ownership and final restoration from the compositor process into

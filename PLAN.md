@@ -317,6 +317,13 @@ A subsequent 5000 ms `--desktop-preview` run completed through the same X220
 software-framebuffer path. The supervisor verified restoration, and separate
 postflight checks found the original console state with no recovery record or
 harness process remaining; manual recovery was not needed.
+A later bounded `--interactive-preview` trial displayed the software cursor
+and allowed the physical pointer to operate the global menus and managed
+window. Motion was functional but noticeably slower and less fluid than the
+hosted path. Before broadening standalone input, profile raw-delta scaling and
+acceleration, input-to-frame scheduling, and full-frame software rendering and
+copy costs while preserving the current lifecycle-event priority and bounded
+batch rules.
 
 ## Milestone 8: Add standalone X11 compatibility
 
