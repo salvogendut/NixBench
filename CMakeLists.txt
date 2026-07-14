@@ -18,6 +18,12 @@ option(
   ON
 )
 
+option(
+  NIXBENCH_BUILD_WSDISPLAY_SMOKE
+  "Build the supervised, console-taking wsdisplay smoke harness"
+  OFF
+)
+
 set(
   NIXBENCH_LIBDRM "AUTO"
   CACHE STRING "Build detailed DRM/KMS capability queries (AUTO, ON, or OFF)"
@@ -414,6 +420,32 @@ target_link_libraries(
 )
 nixbench_configure_c_target(nixbench_host_wsdisplay)
 
+if(BUILD_TESTING OR NIXBENCH_BUILD_WSDISPLAY_SMOKE)
+  add_library(nixbench_wsdisplay_smoke_support STATIC src/wsdisplay_smoke.c)
+  target_include_directories(
+    nixbench_wsdisplay_smoke_support
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  )
+  target_link_libraries(
+    nixbench_wsdisplay_smoke_support
+    PUBLIC nixbench_host
+  )
+  nixbench_configure_c_target(nixbench_wsdisplay_smoke_support)
+endif()
+
+if(NIXBENCH_BUILD_WSDISPLAY_SMOKE)
+  add_executable(
+    nixbench-wsdisplay-smoke
+    src/wsdisplay_smoke_main.c
+    src/wsdisplay_smoke_runner.c
+  )
+  target_link_libraries(
+    nixbench-wsdisplay-smoke
+    PRIVATE nixbench_host_wsdisplay nixbench_wsdisplay_smoke_support
+  )
+  nixbench_configure_c_target(nixbench-wsdisplay-smoke)
+endif()
+
 if(NIXBENCH_WAYLAND_ENABLED)
   target_link_libraries(nixbench_wayland PUBLIC nixbench_model)
 endif()
@@ -599,6 +631,16 @@ if(BUILD_TESTING)
   )
   nixbench_configure_c_target(nixbench_host_wsdisplay_tests)
 
+  add_executable(
+    nixbench_wsdisplay_smoke_tests
+    tests/wsdisplay_smoke_test.c
+  )
+  target_link_libraries(
+    nixbench_wsdisplay_smoke_tests
+    PRIVATE nixbench_wsdisplay_smoke_support
+  )
+  nixbench_configure_c_target(nixbench_wsdisplay_smoke_tests)
+
   add_executable(nixbench_window_tests tests/window_test.c)
   target_link_libraries(nixbench_window_tests PRIVATE nixbench_model)
   nixbench_configure_c_target(nixbench_window_tests)
@@ -691,6 +733,16 @@ if(BUILD_TESTING)
     NAME nixbench.host.wsdisplay
     COMMAND nixbench_host_wsdisplay_tests
   )
+  add_test(
+    NAME nixbench.wsdisplay.smoke-support
+    COMMAND nixbench_wsdisplay_smoke_tests
+  )
+  if(NIXBENCH_BUILD_WSDISPLAY_SMOKE)
+    add_test(
+      NAME nixbench.wsdisplay.smoke-help
+      COMMAND nixbench-wsdisplay-smoke --help
+    )
+  endif()
   add_test(
     NAME nixbench.backend-probe.unit
     COMMAND nixbench_backend_probe_tests

@@ -34,8 +34,14 @@ int main(void)
     nb_host_wsdisplay_options_init(&options);
     CHECK(options.device_path != NULL);
     CHECK(options.device_path[0] != '\0');
+    CHECK(options.expected_active_vt == 0);
 
     options.device_path = "";
+    CHECK(nb_host_wsdisplay_create(&options) == NULL);
+    check_creation_failure(EINVAL);
+
+    nb_host_wsdisplay_options_init(&options);
+    options.expected_active_vt = -1;
     CHECK(nb_host_wsdisplay_create(&options) == NULL);
     check_creation_failure(EINVAL);
 

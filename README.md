@@ -110,10 +110,11 @@ hardware must therefore be detected rather than assumed. A software
 bring-up path. It validates the reported RGB layout, maps only the required
 framebuffer range, converts the canonical CPU frame, participates in
 process-controlled virtual-terminal release/acquire, and restores the saved
-console state on normal teardown. It has not been exercised on supported
-framebuffer hardware yet and is not a crash-safe login session: wscons input
-and a privileged recovery watchdog are still required before it can be exposed
-as a standalone runtime mode. See
+console state on normal teardown. An opt-in, duration-bounded supervisor
+harness now provides the first hardware presentation test, but its ThinkPad
+X220 takeover validation is still pending. The adapter is not a crash-safe
+login session: wscons input and a production privileged recovery watchdog are
+still required before it can become a standalone runtime mode. See
 [the standalone backend architecture](docs/standalone-backend.md) for the
 staged safety and implementation boundaries.
 
@@ -235,6 +236,10 @@ normal CMake search locations and NetBSD's base-system `/usr/X11R7/include`,
 `/usr/X11R7/include/libdrm`, and `/usr/X11R7/lib` layout directly, so it does
 not require `pkg-config`.
 
+`nixbench-wsdisplay-smoke` is an explicitly opt-in hardware harness and is not
+built by default. Enable it with `-DNIXBENCH_BUILD_WSDISPLAY_SMOKE=ON`. This
+does not make `wsdisplay` a supported desktop runtime.
+
 SDL3 is available from NetBSD pkgsrc as `devel/SDL3`. Configure, build, and test
 with:
 
@@ -279,6 +284,45 @@ one connected connector has a cached mode. This is a conservative preflight,
 not proof that modesetting or ordinary page flips will work. Alternate device
 paths can be supplied with `--wsdisplay`, `--keyboard`, `--mouse`, and
 `--drm-directory`; use `--help` for details.
+
+The opt-in `wsdisplay` presentation harness must run as root. Start with its
+query-only preflight:
+
+```sh
+sudo ./build/nixbench-wsdisplay-smoke --preflight-only
+```
+
+Preflight reads `/dev/ttyEstat` to select the active zero-based screen node;
+it does not change display state. A presentation run changes that console to
+framebuffer mode briefly, draws a diagnostic pattern, and accepts only
+durations from 250 through 5000 milliseconds (default 3000). It refuses to run
+unless both risk acknowledgements are present. Keep a second SSH session
+available and retain an outer timeout during hardware bring-up:
+
+```sh
+sudo -n /usr/bin/timeout -s TERM -k 15s 10s \
+  ./build/nixbench-wsdisplay-smoke \
+  --acknowledge-console-takeover \
+  --acknowledge-no-crash-watchdog \
+  --duration-ms 3000
+```
+
+Before forking the framebuffer worker, the parent records the console state in
+the root-only `/var/run/nixbench-wsdisplay-smoke.state`. The parent stays
+unmapped, enforces the deadline, reaps the worker, and independently restores
+and verifies display mode, video state, VT mode, and active screen. It removes
+the recovery record only after successful verification. If restoration is not
+verified, or the supervisor itself dies, recover from another session with:
+
+```sh
+sudo ./build/nixbench-wsdisplay-smoke --recover
+```
+
+This supervisor is a development safeguard, not the production privileged
+helper/watchdog. The worker still runs privileged, there is no wscons input,
+and the second acknowledgement recognizes that supervisor failure still needs
+manual recovery. CTest exercises support code, help, and refusal without the
+acknowledgements; no CTest entry performs a console takeover.
 
 Open the desktop in a development window:
 

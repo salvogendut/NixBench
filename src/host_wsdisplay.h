@@ -5,6 +5,9 @@
 
 struct nb_host_wsdisplay_options {
     const char *device_path;
+    /* Optional one-based USL VT number which must still be active immediately
+     * after VT_PROCESS is installed. Zero disables this takeover guard. */
+    int expected_active_vt;
 };
 
 void nb_host_wsdisplay_options_init(
@@ -18,8 +21,6 @@ void nb_host_wsdisplay_options_init(
  * wscons input is opened yet. The caller must keep polling the host for both VT
  * and termination events, and the process must remain single-threaded from
  * creation through destruction. Only one instance may exist in a process.
- * The experimental signal handoff currently requires the process to remain
- * single-threaded from creation through destruction.
  * Graceful shutdown restores the console, but there is not yet an external
  * watchdog to recover it after SIGKILL or a fatal process crash.
  *

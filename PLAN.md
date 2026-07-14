@@ -209,11 +209,13 @@ Exit criteria:
 - The same shell behavior tests pass under the hosted-window and standalone
   backends.
 
-Current checkpoint: `nixbench-backend-probe` performs a non-destructive
-capability inventory before any console takeover code is introduced. It lists
-the video drivers compiled into SDL and, on NetBSD, queries `wsdisplay`
-framebuffer metadata plus wscons device accessibility. With optional libdrm
-support, it opens each primary DRM node and inventories the live driver,
+Current checkpoint: `nixbench-backend-probe` remains the mandatory
+non-destructive capability inventory before any console takeover. Actual
+presentation is isolated in the separately built, explicitly acknowledged
+`nixbench-wsdisplay-smoke` harness. The probe lists the video drivers compiled
+into SDL and, on NetBSD, queries `wsdisplay` framebuffer metadata plus wscons
+device accessibility. With optional libdrm support, it opens each primary DRM
+node and inventories the live driver,
 dumb-buffer capabilities, KMS resources, CRTCs, cached connectors and modes,
 and legacy-visible planes. Cached connector queries avoid forcing a display
 reprobe, and the command does not modeset, map memory, allocate buffers, flip a
@@ -254,7 +256,7 @@ The SDL-free host contract now describes logical and pixel output geometry,
 normalized input, pointer capture, monotonic timing, software frame submission,
 asynchronous presentation completion, and suspend/resume transitions. Its
 deterministic headless implementation exercises the contract without a display
-server and provides the test seam for the upcoming SDL and NetBSD adapters.
+server and provides the test seam for the current SDL and NetBSD adapters.
 The framebuffer conversion layer validates channel masks, stride, and buffer
 arithmetic before converting canonical software frames into native-endian RGB
 16-, 24-, or 32-bit layouts while preserving device row padding.
@@ -277,6 +279,20 @@ hardware validation, wscons input, failure-injection tests, and a separate
 privileged watchdog that can recover after a compositor crash are the next
 safety gates. The detailed design and source references are in
 [`docs/standalone-backend.md`](docs/standalone-backend.md).
+
+The harness is excluded by default behind
+`NIXBENCH_BUILD_WSDISPLAY_SMOKE=ON`. Its query-only `--preflight-only` action
+does not alter display state. A run requires both
+`--acknowledge-console-takeover` and
+`--acknowledge-no-crash-watchdog`, is limited to 250..5000 ms, and writes a
+root-only recovery record at `/var/run/nixbench-wsdisplay-smoke.state` before
+forking. The framebuffer worker maps and presents; an unmapped parent enforces
+the deadline, reaps the worker, and independently restores and verifies the
+saved console state. `--recover` provides a separate-session restoration path
+if the record remains. Automated tests cover support code and refusal gates,
+but CTest never performs a takeover. The first X220 presentation run remains
+pending; wscons input, failure injection, privilege separation, and a
+production crash watchdog remain later gates.
 
 ## Milestone 8: Add standalone X11 compatibility
 

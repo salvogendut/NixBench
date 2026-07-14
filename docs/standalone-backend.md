@@ -7,9 +7,9 @@ are replaceable platform adapters, not part of application or shell policy.
 
 > **Current prototype limits:** the supported development path is still the SDL
 > hosted window. The `wsdisplay` adapter is an experimental, output-only
-> bring-up path: it has no wscons input provider, no privileged helper/watchdog,
-> no acceleration, and no broad hardware coverage. It must not yet be treated
-> as a production login session or crash-safe console owner.
+> bring-up path: it has no wscons input provider, no production privileged
+> helper/watchdog, no acceleration, and no broad hardware coverage. It must not
+> yet be treated as a production login session or crash-safe console owner.
 
 ## Process and backend boundaries
 
@@ -143,7 +143,40 @@ NetBSD [`wsdisplay(4)` manual][wsdisplay] is the authoritative ioctl contract;
 [Hands-on graphics without X11][graphics-article] is a useful worked example,
 not an API specification.
 
-### 2. Supervised standalone sessions
+### 2. Bounded `wsdisplay` smoke harness
+
+`nixbench-wsdisplay-smoke` is a privileged hardware-validation tool, not a
+desktop session. Its executable is excluded from normal builds; configure with
+`-DNIXBENCH_BUILD_WSDISPLAY_SMOKE=ON` to build it. Run
+`sudo ./build/nixbench-wsdisplay-smoke --preflight-only` first. Preflight uses
+the `ttyEstat` status node to select and snapshot the active console but does
+not change display state. NetBSD's native active-screen index is zero-based,
+while its USL-compatible `VT_*` ioctl numbers are one-based; the harness
+translates and checks that boundary explicitly.
+
+A presentation run requires both `--acknowledge-console-takeover` and
+`--acknowledge-no-crash-watchdog`. `--duration-ms` accepts only 250..5000 ms
+and defaults to 3000 ms. Before forking, the root parent persists the original
+display mode, video state, VT mode, and active screen in the root-only
+`/var/run/nixbench-wsdisplay-smoke.state`. The child alone creates the
+`wsdisplay` host, maps the framebuffer, and presents the diagnostic image. The
+unmapped parent applies a hard deadline, terminates and reaps an unresponsive
+child, then independently restores and verifies every saved console property.
+Job-control stop signals also request supervised shutdown rather than pausing
+the parent indefinitely. The state file is removed only after restoration is
+verified.
+
+If the supervisor itself fails, a second SSH session can run
+`sudo ./build/nixbench-wsdisplay-smoke --recover` against the persisted record.
+This manual fallback is why the command explicitly acknowledges the absence of
+a production crash watchdog. The harness still runs both parent and worker as
+root and must not be confused with the future least-privilege session helper.
+
+CTest registers only support-unit and help checks for the executable. It never
+supplies the acknowledgements and never performs a console takeover. Initial
+presentation and restoration validation on the ThinkPad X220 is pending.
+
+### 3. Production supervised standalone sessions
 
 Move device ownership and final restoration from the compositor process into
 the helper/watchdog. Use a private, inherited local channel with peer and
@@ -153,7 +186,7 @@ needed for console/session recovery. Closing the core or killing it with a
 fatal signal must return the display to text mode without relying on core
 cleanup handlers.
 
-### 3. DRM/KMS, then GBM/EGL
+### 4. DRM/KMS, then GBM/EGL
 
 The preflight inventory now discovers the queryable live driver, connectors,
 CRTCs, legacy-visible planes, and cached modes without taking over the display.
@@ -170,7 +203,7 @@ NetBSD as unsupported, while its wscons support is input-only
 libdrm/GBM/EGL interfaces directly or contribute a verified fix upstream,
 rather than silently depending on SDL's KMSDRM driver.
 
-### 4. Input as a separate seam
+### 5. Input as a separate seam
 
 The current `nb_host_event` API normalizes SDL pointer and XKB physical-key
 events. For standalone operation, wscons acquisition and translation should be

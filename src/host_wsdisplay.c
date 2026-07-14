@@ -55,6 +55,7 @@ void nb_host_wsdisplay_options_init(
 {
     if (options != NULL) {
         options->device_path = default_device_path;
+        options->expected_active_vt = 0;
     }
 }
 
@@ -76,7 +77,8 @@ struct nb_host *nb_host_wsdisplay_create(
     creation_error[0] = '\0';
     creation_system_error = 0;
     if (options == NULL || options->device_path == NULL ||
-        options->device_path[0] == '\0') {
+        options->device_path[0] == '\0' ||
+        options->expected_active_vt < 0) {
         set_creation_error("Invalid wsdisplay host options", EINVAL, NULL);
         return NULL;
     }
@@ -1347,12 +1349,14 @@ struct nb_host *nb_host_wsdisplay_create(
     struct stat status;
     unsigned int display_mode;
     struct vt_mode process_mode;
+    int active_vt = -1;
     int open_flags = O_RDWR | O_NONBLOCK | O_EXCL | O_NOCTTY | O_CLOEXEC;
 
     creation_error[0] = '\0';
     creation_system_error = 0;
     if (options == NULL || options->device_path == NULL ||
-        options->device_path[0] == '\0') {
+        options->device_path[0] == '\0' ||
+        options->expected_active_vt < 0) {
         set_creation_error("Invalid wsdisplay host options", EINVAL, NULL);
         return NULL;
     }
@@ -1448,6 +1452,22 @@ struct nb_host *nb_host_wsdisplay_create(
         goto failure;
     }
     context->vt_process_set = true;
+    if (options->expected_active_vt > 0) {
+        if (ioctl(context->display_fd, VT_GETACTIVE, &active_vt) != 0) {
+            remember_error(context,
+                           "Could not verify the active wsdisplay VT",
+                           errno,
+                           NULL);
+            goto failure;
+        }
+        if (active_vt != options->expected_active_vt) {
+            remember_error(context,
+                           "Target wsdisplay VT is no longer active",
+                           EBUSY,
+                           NULL);
+            goto failure;
+        }
+    }
     if (!enter_graphics(context)) {
         goto failure;
     }

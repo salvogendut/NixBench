@@ -1,0 +1,67 @@
+#ifndef NIXBENCH_WSDISPLAY_SMOKE_H
+#define NIXBENCH_WSDISPLAY_SMOKE_H
+
+#include "host.h"
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+enum {
+    NB_WSDISPLAY_SMOKE_MIN_DURATION_MS = 250,
+    NB_WSDISPLAY_SMOKE_DEFAULT_DURATION_MS = 3000,
+    NB_WSDISPLAY_SMOKE_MAX_DURATION_MS = 5000,
+    NB_WSDISPLAY_SMOKE_ERROR_CAPACITY = 256
+};
+
+enum nb_wsdisplay_smoke_action {
+    NB_WSDISPLAY_SMOKE_ACTION_RUN,
+    NB_WSDISPLAY_SMOKE_ACTION_HELP,
+    NB_WSDISPLAY_SMOKE_ACTION_PREFLIGHT,
+    NB_WSDISPLAY_SMOKE_ACTION_RECOVER
+};
+
+struct nb_wsdisplay_smoke_options {
+    enum nb_wsdisplay_smoke_action action;
+    const char *program_path;
+    const char *status_device_path;
+    const char *screen_device_prefix;
+    uint32_t duration_ms;
+    bool acknowledge_console_takeover;
+    bool acknowledge_no_crash_watchdog;
+};
+
+struct nb_wsdisplay_smoke_image {
+    uint32_t *pixels;
+    int width;
+    int height;
+    size_t stride;
+};
+
+void nb_wsdisplay_smoke_options_init(
+    struct nb_wsdisplay_smoke_options *options);
+
+bool nb_wsdisplay_smoke_parse_options(
+    int argc,
+    char *argv[],
+    struct nb_wsdisplay_smoke_options *options,
+    char error[NB_WSDISPLAY_SMOKE_ERROR_CAPACITY]);
+
+/* NetBSD's native active-screen ioctl is zero-based, while the USL VT
+ * compatibility ioctls use one-based VT numbers. */
+bool nb_wsdisplay_screen_index_to_vt_number(
+    int screen_index,
+    int *vt_number);
+
+bool nb_wsdisplay_smoke_image_create(
+    struct nb_wsdisplay_smoke_image *image,
+    int width,
+    int height);
+void nb_wsdisplay_smoke_image_destroy(
+    struct nb_wsdisplay_smoke_image *image);
+bool nb_wsdisplay_smoke_image_frame(
+    const struct nb_wsdisplay_smoke_image *image,
+    uint64_t serial,
+    struct nb_host_frame *frame);
+
+#endif
