@@ -291,6 +291,13 @@ Raw wscons motion now has opt-in 25..400% fixed-point sensitivity with an
 identity 100% library default; the guided X220 comparison selects 150% and
 prints raw/logical counters plus monotonic userspace-read-to-framebuffer-copy-
 complete measurements. Hosted SDL coordinates are never scaled.
+The first measured runtime averaged 176 ms per input-associated frame. A
+canonical 32-bit fast path and optimized hardware build reduced this to 36 ms,
+with 2 ms in rendering and 34 ms in full mapped-framebuffer presentation. The
+`wsdisplay` host now retains a 32-bit source shadow and converts only each
+changed row's first-through-last changed-pixel span. It invalidates on every
+map/unmap and falls back to full conversion if the optional shadow cannot be
+allocated; physical latency validation of this damage-suppressed path is next.
 This is still a bounded hardware-validation mode rather than a desktop session:
 broader hardware validation, complete wscons keymap/seat/hotplug support,
 failure-injection tests, privilege separation, and a separate privileged
@@ -328,10 +335,11 @@ harness process remaining; manual recovery was not needed.
 A later bounded `--interactive-preview` trial displayed the software cursor
 and allowed the physical pointer to operate the global menus and managed
 window. Motion was functional but noticeably slower and less fluid than the
-hosted path. Before broadening standalone input, profile raw-delta scaling and
-acceleration, input-to-frame scheduling, and full-frame software rendering and
-copy costs while preserving the current lifecycle-event priority and bounded
-batch rules.
+hosted path. Subsequent pipeline profiling isolated the dominant cost to the
+full-frame mapped-framebuffer write. Canonical conversion is now fast and the
+backend has source-shadow damage suppression; remeasure that path before tuning
+acceleration or changing the current lifecycle-event priority and bounded batch
+rules.
 A first guided `--runtime-preview` X220 trial completed on 2026-07-14. The
 physical console displayed the shared runtime and real NixInfo application
 through `wsdisplay` and wscons without X11, Wayland publication, or SDL video;

@@ -464,6 +464,7 @@ nixbench_configure_c_target(nixbench_desktop_runtime)
 add_library(
   nixbench_framebuffer STATIC
   src/framebuffer_format.c
+  src/framebuffer_shadow.c
 )
 target_include_directories(
   nixbench_framebuffer
@@ -684,6 +685,16 @@ if(BUILD_TESTING)
   nixbench_configure_c_target(nixbench_framebuffer_format_tests)
 
   add_executable(
+    nixbench_framebuffer_shadow_tests
+    tests/framebuffer_shadow_test.c
+  )
+  target_link_libraries(
+    nixbench_framebuffer_shadow_tests
+    PRIVATE nixbench_framebuffer
+  )
+  nixbench_configure_c_target(nixbench_framebuffer_shadow_tests)
+
+  add_executable(
     nixbench_host_wsdisplay_tests
     tests/host_wsdisplay_test.c
   )
@@ -818,6 +829,10 @@ if(BUILD_TESTING)
   add_test(
     NAME nixbench.framebuffer.format
     COMMAND nixbench_framebuffer_format_tests
+  )
+  add_test(
+    NAME nixbench.framebuffer.shadow
+    COMMAND nixbench_framebuffer_shadow_tests
   )
   add_test(
     NAME nixbench.host.wsdisplay

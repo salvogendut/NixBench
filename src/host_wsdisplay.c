@@ -111,6 +111,7 @@ struct nb_host *nb_host_wsdisplay_create(
 #include <unistd.h>
 
 #include "framebuffer_format.h"
+#include "framebuffer_shadow.h"
 #include "host_backend.h"
 
 enum {
@@ -136,6 +137,9 @@ struct nb_host_wsdisplay_context {
     size_t framebuffer_size;
     size_t framebuffer_stride;
     struct nb_framebuffer_format framebuffer_format;
+    struct nb_framebuffer_shadow *framebuffer_shadow;
+    size_t framebuffer_shadow_width;
+    size_t framebuffer_shadow_height;
     struct nb_host_output output;
     struct nb_host_event events[NB_HOST_WSDISPLAY_EVENT_CAPACITY];
     size_t event_head;
@@ -848,12 +852,35 @@ static bool map_layout(struct nb_host_wsdisplay_context *context,
     context->framebuffer_format = layout->format;
     context->output = layout->output;
     context->has_output = true;
+    if (context->framebuffer_shadow != NULL &&
+        (context->framebuffer_shadow_width !=
+             (size_t)layout->output.pixel_width ||
+         context->framebuffer_shadow_height !=
+             (size_t)layout->output.pixel_height)) {
+        nb_framebuffer_shadow_destroy(context->framebuffer_shadow);
+        context->framebuffer_shadow = NULL;
+        context->framebuffer_shadow_width = 0;
+        context->framebuffer_shadow_height = 0;
+    }
+    if (context->framebuffer_shadow == NULL) {
+        context->framebuffer_shadow = nb_framebuffer_shadow_create(
+            (size_t)layout->output.pixel_width,
+            (size_t)layout->output.pixel_height);
+        if (context->framebuffer_shadow != NULL) {
+            context->framebuffer_shadow_width =
+                (size_t)layout->output.pixel_width;
+            context->framebuffer_shadow_height =
+                (size_t)layout->output.pixel_height;
+        }
+    }
+    nb_framebuffer_shadow_invalidate(context->framebuffer_shadow);
     return true;
 }
 
 static bool unmap_framebuffer(struct nb_host_wsdisplay_context *context,
                               bool remember_failure)
 {
+    nb_framebuffer_shadow_invalidate(context->framebuffer_shadow);
     if (context->mapping == NULL) {
         return true;
     }
@@ -1100,17 +1127,31 @@ static enum nb_host_result wsdisplay_present(
         frame->format == NB_HOST_PIXEL_FORMAT_XRGB8888
             ? NB_FRAMEBUFFER_SOURCE_XRGB8888
             : NB_FRAMEBUFFER_SOURCE_ARGB8888;
-    conversion_status = nb_framebuffer_convert(
-        frame->pixels,
-        source_size,
-        frame->stride,
-        source_format,
-        context->visible_framebuffer,
-        context->framebuffer_size,
-        context->framebuffer_stride,
-        (size_t)frame->width,
-        (size_t)frame->height,
-        &context->framebuffer_format);
+    if (context->framebuffer_shadow != NULL) {
+        conversion_status = nb_framebuffer_shadow_present(
+            context->framebuffer_shadow,
+            frame->pixels,
+            source_size,
+            frame->stride,
+            source_format,
+            context->visible_framebuffer,
+            context->framebuffer_size,
+            context->framebuffer_stride,
+            &context->framebuffer_format,
+            NULL);
+    } else {
+        conversion_status = nb_framebuffer_convert(
+            frame->pixels,
+            source_size,
+            frame->stride,
+            source_format,
+            context->visible_framebuffer,
+            context->framebuffer_size,
+            context->framebuffer_stride,
+            (size_t)frame->width,
+            (size_t)frame->height,
+            &context->framebuffer_format);
+    }
     if (conversion_status != NB_FRAMEBUFFER_OK) {
         fail_host(context,
                   "Could not convert frame for wsdisplay",
@@ -1294,6 +1335,8 @@ static void cleanup_context(struct nb_host_wsdisplay_context *context)
     close_context_fd(&context->signal_pipe[0]);
     close_context_fd(&context->signal_pipe[1]);
     close_context_fd(&context->display_fd);
+    nb_framebuffer_shadow_destroy(context->framebuffer_shadow);
+    context->framebuffer_shadow = NULL;
     if (context->instance_claimed) {
         atomic_flag_clear_explicit(&instance_claimed,
                                    memory_order_release);

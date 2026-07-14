@@ -220,6 +220,27 @@ The hardware runner selects `RelWithDebInfo` unless
 work, but their unoptimized full-frame software conversion is not a meaningful
 pointer-fluidity baseline.
 
+The X220 timing checkpoint first measured 175..179 ms per input-associated
+frame. Its already compatible 32-bit layout was still traversing the generic
+per-channel converter in an unoptimized build. A canonical RGB8888 fast path
+and `RelWithDebInfo` hardware runner reduced the next trial to 7..60 ms,
+averaging 36 ms. The pipeline split attributed about 2 ms to SDL software
+rendering and 34 ms to the synchronous full mapped-framebuffer presentation;
+input-to-render and completion delivery both averaged zero at millisecond
+resolution.
+
+To avoid rewriting roughly 4.0 MiB for every cursor update, the `wsdisplay`
+host now owns a tightly packed copy of the last accepted 32-bit source
+frame. After complete upfront validation, unchanged rows cause no device write
+and a changed row converts only its first-through-last changed-pixel span. The
+shadow ignores stride padding and source bits irrelevant to the destination.
+It is never populated from framebuffer memory. Initial presentation, source or
+destination format changes, destination allocation changes, and every map or
+unmap invalidate it and force a full refresh. If the optional allocation is
+unavailable, the existing full-frame path remains functional. A planned update
+whose row spans cover more than half the pixels also uses one full conversion,
+avoiding hundreds of small conversions for dense animation.
+
 If the supervisor itself fails, a second SSH session can run
 `sudo ./build/nixbench-wsdisplay-smoke --recover` against the persisted record.
 This manual fallback is why the command explicitly acknowledges the absence of
@@ -241,9 +262,10 @@ and no harness process. Manual recovery was not needed.
 A later bounded `--interactive-preview` X220 trial rendered the software
 cursor and allowed the physical pointer to operate the global menus and
 managed window. Motion was functional but felt slower and less fluid than the
-hosted path. Follow-up work should measure raw-delta scaling and acceleration,
-input-to-frame latency, and full-frame software render/copy cost before changing
-the provider's safety-oriented batching or lifecycle priority.
+hosted path. The later pipeline measurements isolated the initial delay to
+full-frame conversion and mapped-framebuffer writes; the optimized conversion
+felt substantially better. Damage-suppressed mapped writes are the next
+physical checkpoint before acceleration or input-wait policy changes.
 
 On 2026-07-14, the first guided `--runtime-preview` X220 trial completed as
 well. The physical console displayed the shared runtime and real NixInfo

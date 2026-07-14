@@ -255,7 +255,7 @@ static void store_pixel(uint8_t *destination,
     }
 }
 
-enum nb_framebuffer_status nb_framebuffer_convert(
+enum nb_framebuffer_status nb_framebuffer_conversion_validate(
     const void *source,
     size_t source_size,
     size_t source_stride,
@@ -273,9 +273,6 @@ enum nb_framebuffer_status nb_framebuffer_convert(
     size_t source_required;
     size_t destination_required;
     size_t destination_pixel_size;
-    size_t row;
-    const uint8_t *source_bytes = source;
-    uint8_t *destination_bytes = destination;
 
     status = nb_framebuffer_format_validate(destination_format);
     if (status != NB_FRAMEBUFFER_OK) {
@@ -321,6 +318,42 @@ enum nb_framebuffer_status nb_framebuffer_convert(
     if (destination_size < destination_required) {
         return NB_FRAMEBUFFER_DESTINATION_BUFFER_TOO_SMALL;
     }
+    return NB_FRAMEBUFFER_OK;
+}
+
+enum nb_framebuffer_status nb_framebuffer_convert(
+    const void *source,
+    size_t source_size,
+    size_t source_stride,
+    enum nb_framebuffer_source_format source_format,
+    void *destination,
+    size_t destination_size,
+    size_t destination_stride,
+    size_t width,
+    size_t height,
+    const struct nb_framebuffer_format *destination_format)
+{
+    enum nb_framebuffer_status status;
+    size_t destination_pixel_size;
+    size_t row;
+    const uint8_t *source_bytes = source;
+    uint8_t *destination_bytes = destination;
+
+    status = nb_framebuffer_conversion_validate(
+        source,
+        source_size,
+        source_stride,
+        source_format,
+        destination,
+        destination_size,
+        destination_stride,
+        width,
+        height,
+        destination_format);
+    if (status != NB_FRAMEBUFFER_OK || width == 0 || height == 0) {
+        return status;
+    }
+    destination_pixel_size = destination_format->bits_per_pixel / 8;
 
     if (canonical_rgb8888(destination_format)) {
         convert_canonical_rgb8888(

@@ -60,6 +60,19 @@ enum nb_framebuffer_status {
 enum nb_framebuffer_status nb_framebuffer_format_validate(
     const struct nb_framebuffer_format *format);
 
+/* Perform the exact no-write argument and buffer validation used by convert. */
+enum nb_framebuffer_status nb_framebuffer_conversion_validate(
+    const void *source,
+    size_t source_size,
+    size_t source_stride,
+    enum nb_framebuffer_source_format source_format,
+    void *destination,
+    size_t destination_size,
+    size_t destination_stride,
+    size_t width,
+    size_t height,
+    const struct nb_framebuffer_format *destination_format);
+
 enum nb_framebuffer_status nb_framebuffer_convert(
     const void *source,
     size_t source_size,
