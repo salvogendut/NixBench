@@ -227,6 +227,12 @@ hosted path. Follow-up work should measure raw-delta scaling and acceleration,
 input-to-frame latency, and full-frame software render/copy cost before changing
 the provider's safety-oriented batching or lifecycle priority.
 
+On 2026-07-14, the first guided `--runtime-preview` X220 trial completed as
+well. The physical console displayed the shared runtime and real NixInfo
+application through `wsdisplay` and wscons with X11, Wayland publication, and
+SDL video absent. The user confirmed the scene worked, and the guided
+postflight restored and rechecked the console successfully.
+
 ### 3. Production supervised standalone sessions
 
 Move device ownership and final restoration from the compositor process into

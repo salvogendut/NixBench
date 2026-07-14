@@ -239,6 +239,12 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
   interaction trial does not turn this research harness into a production
   input/session path.
 
+  On 2026-07-14, the first guided `--runtime-preview` trial also completed on
+  the X220. The physical console displayed the shared desktop runtime and real
+  NixInfo application through `wsdisplay`/wscons without X11, Wayland, or SDL
+  video. The user confirmed the scene worked, and the guided postflight
+  completed with the console restored.
+
 This is a manual target-system validation; automated NetBSD testing remains
 future work.
 

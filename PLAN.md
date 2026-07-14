@@ -328,6 +328,10 @@ hosted path. Before broadening standalone input, profile raw-delta scaling and
 acceleration, input-to-frame scheduling, and full-frame software rendering and
 copy costs while preserving the current lifecycle-event priority and bounded
 batch rules.
+A first guided `--runtime-preview` X220 trial completed on 2026-07-14. The
+physical console displayed the shared runtime and real NixInfo application
+through `wsdisplay` and wscons without X11, Wayland publication, or SDL video;
+the user confirmed it worked, and the guided postflight restored the console.
 
 ## Milestone 8: Add standalone X11 compatibility
 
