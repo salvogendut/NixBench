@@ -112,9 +112,11 @@ framebuffer range, converts the canonical CPU frame, participates in
 process-controlled virtual-terminal release/acquire, and restores the saved
 console state on normal teardown. An opt-in, duration-bounded supervisor
 harness has completed the first two-second framebuffer presentation and
-verified restoration on a ThinkPad X220. The adapter is not a crash-safe login
-session: wscons input and a production privileged recovery watchdog are still
-required before it can become a standalone runtime mode. See
+verified restoration on a ThinkPad X220. An explicit desktop-preview frame
+source now renders the real menu bar, clock, and managed-window chrome into the
+same canonical CPU frame without initializing SDL video. The adapter is not a
+crash-safe login session: wscons input and a production privileged recovery
+watchdog are still required before it can become a standalone runtime mode. See
 [the standalone backend architecture](docs/standalone-backend.md) for the
 staged safety and implementation boundaries.
 
@@ -194,7 +196,7 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
 - **NetBSD 11.0_RC6 (GENERIC), amd64 on a Lenovo ThinkPad X220** with Intel
   Sandy Bridge graphics and SDL3 3.4.2 from pkgsrc: a clean-machine setup,
   explicit `NIXBENCH_LIBDRM=ON` and `NIXBENCH_WAYLAND=ON` configuration, full
-  native build, and all 26 tests were confirmed working on July 14, 2026. The
+  native build, and all 27 tests were confirmed working on July 14, 2026. The
   kernel attaches `i915drmkms` and provides an `intelfb` console.
 
   The privileged query-only probe reports a supported 1366x768, 32-bit RGB
@@ -311,12 +313,17 @@ one guided command. Run it over SSH while watching the physical console:
 
 It defaults to 3000 ms; an alternate safe duration can be passed as its sole
 argument, for example `./tools/run-wsdisplay-smoke.sh 2000`. The script still
-requires typing `TAKEOVER` before it supplies the harness acknowledgements.
+requires typing `TAKEOVER` before it supplies the harness acknowledgements. It
+selects the NixBench desktop preview: the real global menu bar and clock,
+desktop background, and managed-window chrome are rendered into an SDL
+software surface without initializing SDL video or opening X11, Wayland, or
+input devices.
 
 Preflight reads `/dev/ttyEstat` to select the active zero-based screen node;
 it does not change display state. A presentation run changes that console to
-framebuffer mode briefly, draws a diagnostic pattern, and accepts only
-durations from 250 through 5000 milliseconds (default 3000). It refuses to run
+framebuffer mode briefly and accepts only durations from 250 through 5000
+milliseconds (default 3000). Direct harness runs draw the diagnostic pattern
+by default; `--desktop-preview` selects the shell scene. It refuses to run
 unless both risk acknowledgements are present. Keep a second SSH session
 available and retain an outer timeout during hardware bring-up:
 
@@ -325,6 +332,7 @@ sudo -n /usr/bin/timeout -s SIGTERM -k 15s 10s \
   ./build/nixbench-wsdisplay-smoke \
   --acknowledge-console-takeover \
   --acknowledge-no-crash-watchdog \
+  --desktop-preview \
   --duration-ms 3000
 ```
 

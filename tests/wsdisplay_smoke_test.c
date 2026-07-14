@@ -48,10 +48,16 @@ static void test_parser_takeover(void)
 {
     struct nb_wsdisplay_smoke_options options;
     char error[NB_WSDISPLAY_SMOKE_ERROR_CAPACITY];
+    char *diagnostic[] = {
+        "smoke",
+        "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog"
+    };
     char *run[] = {
         "smoke",
         "--acknowledge-console-takeover",
         "--acknowledge-no-crash-watchdog",
+        "--desktop-preview",
         "--duration-ms",
         "1250",
         "--status-device",
@@ -60,6 +66,11 @@ static void test_parser_takeover(void)
         "/dev/custom"
     };
 
+    CHECK(parse((int)(sizeof(diagnostic) / sizeof(diagnostic[0])),
+                diagnostic,
+                &options,
+                error));
+    CHECK(options.content == NB_WSDISPLAY_SMOKE_CONTENT_DIAGNOSTIC);
     CHECK(parse((int)(sizeof(run) / sizeof(run[0])),
                 run,
                 &options,
@@ -68,6 +79,7 @@ static void test_parser_takeover(void)
     CHECK(strcmp(options.program_path, "smoke") == 0);
     CHECK(options.acknowledge_console_takeover);
     CHECK(options.acknowledge_no_crash_watchdog);
+    CHECK(options.content == NB_WSDISPLAY_SMOKE_CONTENT_DESKTOP_PREVIEW);
     CHECK(options.duration_ms == 1250);
     CHECK(strcmp(options.status_device_path, "/dev/customstat") == 0);
     CHECK(strcmp(options.screen_device_prefix, "/dev/custom") == 0);
@@ -110,6 +122,14 @@ static void test_parser_rejections(void)
     char *relative_prefix[] = {
         "smoke", "--preflight-only", "--screen-prefix", "ttyE"
     };
+    char *unsafe_preview[] = {
+        "smoke", "--preflight-only", "--desktop-preview"
+    };
+    char *duplicate_preview[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--desktop-preview",
+        "--desktop-preview"
+    };
 
     CHECK(!parse(5, low, &options, error));
     CHECK(!parse(5, high, &options, error));
@@ -121,6 +141,8 @@ static void test_parser_rejections(void)
     CHECK(!parse(4, recover_path, &options, error));
     CHECK(!parse(4, relative_status, &options, error));
     CHECK(!parse(4, relative_prefix, &options, error));
+    CHECK(!parse(3, unsafe_preview, &options, error));
+    CHECK(!parse(5, duplicate_preview, &options, error));
 }
 
 static void test_vt_number_translation(void)

@@ -86,7 +86,8 @@ sudo -n "$smoke" --preflight-only
 
 cat <<EOF
 
-Ready to take over the active wsdisplay console for $duration_ms ms.
+Ready to show the NixBench desktop preview on the active wsdisplay console
+for $duration_ms ms.
 
 Keep a second SSH session open. If this script does not restore the console,
 wait for its timeout, verify no nixbench-wsdisplay-smoke process remains, then
@@ -104,12 +105,13 @@ if ! IFS= read -r answer || [ "$answer" != TAKEOVER ]; then
     fail "cancelled without changing display state"
 fi
 
-echo "==> Presenting the diagnostic framebuffer"
+echo "==> Presenting the NixBench desktop preview"
 set +e
 sudo -n /usr/bin/timeout -s SIGTERM -k 15s 10s \
     "$smoke" \
     --acknowledge-console-takeover \
     --acknowledge-no-crash-watchdog \
+    --desktop-preview \
     --duration-ms "$duration_ms"
 run_status=$?
 set -e
@@ -138,4 +140,4 @@ if [ "$run_status" -ne 0 ]; then
     fail "the harness returned status $run_status, but no recovery record remains"
 fi
 
-echo "==> Success: presentation completed and console restoration was verified"
+echo "==> Success: desktop preview completed and console restoration was verified"

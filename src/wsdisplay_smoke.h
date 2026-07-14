@@ -21,11 +21,17 @@ enum nb_wsdisplay_smoke_action {
     NB_WSDISPLAY_SMOKE_ACTION_RECOVER
 };
 
+enum nb_wsdisplay_smoke_content {
+    NB_WSDISPLAY_SMOKE_CONTENT_DIAGNOSTIC,
+    NB_WSDISPLAY_SMOKE_CONTENT_DESKTOP_PREVIEW
+};
+
 struct nb_wsdisplay_smoke_options {
     enum nb_wsdisplay_smoke_action action;
     const char *program_path;
     const char *status_device_path;
     const char *screen_device_prefix;
+    enum nb_wsdisplay_smoke_content content;
     uint32_t duration_ms;
     bool acknowledge_console_takeover;
     bool acknowledge_no_crash_watchdog;

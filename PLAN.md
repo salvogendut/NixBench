@@ -273,12 +273,16 @@ An experimental NetBSD `wsdisplay` adapter implements the first output-only
 standalone slice. It validates and maps RGB DUMBFB memory, converts canonical
 frames, uses process-controlled VT release/acquire with a self-pipe signal
 handoff, and attempts full state restoration on every normal and partial
-startup path. Its unsupported-platform stub is covered by normal tests, and
-the NetBSD branch compiles against the official NetBSD 10.1 amd64 headers under
-strict warnings. It is intentionally not a selectable desktop runtime yet:
-broader hardware validation, wscons input, failure-injection tests, and a
-separate privileged watchdog that can recover after a compositor crash are the
-next safety gates. The detailed design and source references are in
+startup path. The bounded harness can now feed either its diagnostic pattern
+or an explicit `--desktop-preview` frame from the real shell renderers. That
+preview uses SDL only for an in-memory software surface; the `wsdisplay` host
+remains the only display owner and no input device is opened. Its
+unsupported-platform stub is covered by normal tests, and the NetBSD branch
+compiles against the official NetBSD 10.1 amd64 headers under strict warnings.
+It is intentionally not a selectable desktop runtime yet: broader hardware
+validation, wscons input, failure-injection tests, and a separate privileged
+watchdog that can recover after a compositor crash are the next safety gates.
+The detailed design and source references are in
 [`docs/standalone-backend.md`](docs/standalone-backend.md).
 
 The harness is excluded by default behind
@@ -287,14 +291,16 @@ does not alter display state. A run requires both
 `--acknowledge-console-takeover` and
 `--acknowledge-no-crash-watchdog`, is limited to 250..5000 ms, and writes a
 root-only recovery record at `/var/run/nixbench-wsdisplay-smoke.state` before
-forking. The framebuffer worker maps and presents; an unmapped parent enforces
-the deadline, reaps the worker, and independently restores and verifies the
-saved console state. `--recover` provides a separate-session restoration path
-if the record remains. Automated tests cover support code and refusal gates,
-but CTest never performs a takeover. The first 2000 ms X220 presentation run
-completed with automatic restoration and an independent SSH watch; wscons
-input, failure injection, privilege separation, broader hardware coverage, and
-a production crash watchdog remain later gates.
+forking. The diagnostic pattern remains the default; `--desktop-preview`
+selects the bounded shell scene, and the guided hardware script selects that
+mode explicitly. The framebuffer worker maps and presents; an unmapped parent
+enforces the deadline, reaps the worker, and independently restores and
+verifies the saved console state. `--recover` provides a separate-session
+restoration path if the record remains. Automated tests cover support code and
+refusal gates, but CTest never performs a takeover. The first 2000 ms X220
+diagnostic presentation completed with automatic restoration and an
+independent SSH watch; wscons input, failure injection, privilege separation,
+broader hardware coverage, and a production crash watchdog remain later gates.
 
 ## Milestone 8: Add standalone X11 compatibility
 

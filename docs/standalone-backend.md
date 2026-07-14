@@ -161,12 +161,22 @@ A presentation run requires both `--acknowledge-console-takeover` and
 and defaults to 3000 ms. Before forking, the root parent persists the original
 display mode, video state, VT mode, and active screen in the root-only
 `/var/run/nixbench-wsdisplay-smoke.state`. The child alone creates the
-`wsdisplay` host, maps the framebuffer, and presents the diagnostic image. The
+`wsdisplay` host, maps the framebuffer, and presents the selected image. The
+diagnostic pattern remains the default. An explicit `--desktop-preview` mode
+uses the real NixBench shell and chrome renderers to draw a global menu bar,
+clock, desktop, and managed window into an SDL software surface. It does not
+initialize SDL video, create an SDL window, start X11 or Wayland, or read input;
+the same output-only `wsdisplay` host submits the resulting XRGB frame. The
 unmapped parent applies a hard deadline, terminates and reaps an unresponsive
 child, then independently restores and verifies every saved console property.
 Job-control stop signals also request supervised shutdown rather than pausing
 the parent indefinitely. The state file is removed only after restoration is
 verified.
+
+`tools/run-wsdisplay-smoke.sh` configures, builds, tests, performs preflight,
+explicitly selects the desktop preview, and verifies postflight state. It still
+requires an SSH session, passwordless recovery access, a typed `TAKEOVER`, both
+harness acknowledgements, and the outer timeout.
 
 If the supervisor itself fails, a second SSH session can run
 `sudo ./build/nixbench-wsdisplay-smoke --recover` against the persisted record.
@@ -176,10 +186,10 @@ root and must not be confused with the future least-privilege session helper.
 
 CTest registers only support-unit and help checks for the executable. It never
 supplies the acknowledgements and never performs a console takeover. The first
-2000 ms ThinkPad X220 run completed normally: the supervisor verified the saved
-emulation, video, VT, and active-screen state; an independent SSH watcher saw
-the recovery record clear with no manual recovery needed; and the post-run
-probe matched the baseline.
+2000 ms ThinkPad X220 diagnostic run completed normally: the supervisor
+verified the saved emulation, video, VT, and active-screen state; an independent
+SSH watcher saw the recovery record clear with no manual recovery needed; and
+the post-run probe matched the baseline.
 
 ### 3. Production supervised standalone sessions
 

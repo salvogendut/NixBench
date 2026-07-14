@@ -399,6 +399,40 @@ target_link_libraries(
 nixbench_configure_c_target(nixbench_software_canvas)
 
 add_library(
+  nixbench_renderers STATIC
+  src/desktop_renderer.c
+  src/menu_renderer.c
+  src/nixinfo_renderer.c
+  src/shell_renderer.c
+  src/window_renderer.c
+)
+target_include_directories(
+  nixbench_renderers
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(
+  nixbench_renderers
+  PUBLIC SDL3::SDL3 nixbench_model
+)
+nixbench_configure_c_target(nixbench_renderers)
+
+add_library(nixbench_desktop_preview STATIC src/desktop_preview.c)
+target_include_directories(
+  nixbench_desktop_preview
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(
+  nixbench_desktop_preview
+  PUBLIC nixbench_host
+  PRIVATE
+    SDL3::SDL3
+    nixbench_model
+    nixbench_renderers
+    nixbench_software_canvas
+)
+nixbench_configure_c_target(nixbench_desktop_preview)
+
+add_library(
   nixbench_framebuffer STATIC
   src/framebuffer_format.c
 )
@@ -441,7 +475,10 @@ if(NIXBENCH_BUILD_WSDISPLAY_SMOKE)
   )
   target_link_libraries(
     nixbench-wsdisplay-smoke
-    PRIVATE nixbench_host_wsdisplay nixbench_wsdisplay_smoke_support
+    PRIVATE
+      nixbench_desktop_preview
+      nixbench_host_wsdisplay
+      nixbench_wsdisplay_smoke_support
   )
   nixbench_configure_c_target(nixbench-wsdisplay-smoke)
 endif()
@@ -484,12 +521,7 @@ nixbench_configure_c_target(nixbench-backend-probe)
 
 add_executable(
   nixbench
-  src/desktop_renderer.c
   src/main.c
-  src/menu_renderer.c
-  src/nixinfo_renderer.c
-  src/shell_renderer.c
-  src/window_renderer.c
 )
 nixbench_configure_c_target(nixbench)
 
@@ -512,6 +544,7 @@ target_link_libraries(
     SDL3::SDL3
     nixbench_host_sdl
     nixbench_model
+    nixbench_renderers
     nixbench_software_canvas
 )
 
@@ -674,14 +707,22 @@ if(BUILD_TESTING)
   add_executable(
     nixbench_renderer_tests
     tests/renderer_test.c
-    src/desktop_renderer.c
-    src/window_renderer.c
   )
   target_link_libraries(
     nixbench_renderer_tests
-    PRIVATE SDL3::SDL3 nixbench_model
+    PRIVATE nixbench_renderers
   )
   nixbench_configure_c_target(nixbench_renderer_tests)
+
+  add_executable(
+    nixbench_desktop_preview_tests
+    tests/desktop_preview_test.c
+  )
+  target_link_libraries(
+    nixbench_desktop_preview_tests
+    PRIVATE SDL3::SDL3 nixbench_desktop_preview
+  )
+  nixbench_configure_c_target(nixbench_desktop_preview_tests)
 
   add_executable(
     nixbench_wayland_demo_ui_tests
@@ -769,6 +810,10 @@ if(BUILD_TESTING)
     COMMAND nixbench_nixinfo_system_tests
   )
   add_test(NAME nixbench.renderer.callback COMMAND nixbench_renderer_tests)
+  add_test(
+    NAME nixbench.desktop.preview
+    COMMAND nixbench_desktop_preview_tests
+  )
   add_test(
     NAME nixbench.wayland.demo-ui
     COMMAND nixbench_wayland_demo_ui_tests

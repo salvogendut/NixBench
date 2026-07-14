@@ -39,6 +39,7 @@ int nb_wsdisplay_smoke_run(
 #include <time.h>
 #include <unistd.h>
 
+#include "desktop_preview.h"
 #include "host_wsdisplay.h"
 
 enum {
@@ -610,22 +611,42 @@ static void print_host_error(struct nb_host *host, const char *operation)
     }
 }
 
-static bool present_pattern(struct nb_host *host,
-                            struct nb_wsdisplay_smoke_image *image,
-                            uint64_t *serial)
+struct nb_smoke_frame_source {
+    struct nb_wsdisplay_smoke_image diagnostic;
+    struct nb_desktop_preview *desktop;
+};
+
+static const char *content_description(
+    enum nb_wsdisplay_smoke_content content)
+{
+    return content == NB_WSDISPLAY_SMOKE_CONTENT_DESKTOP_PREVIEW
+               ? "NixBench desktop preview"
+               : "diagnostic pattern";
+}
+
+static void current_clock_text(char clock_text[6])
+{
+    const time_t now = time(NULL);
+    struct tm local_time;
+
+    if (now == (time_t)-1 || localtime_r(&now, &local_time) == NULL ||
+        strftime(clock_text, 6, "%H:%M", &local_time) == 0) {
+        (void)snprintf(clock_text, 6, "--:--");
+    }
+}
+
+static bool present_content(
+    struct nb_host *host,
+    const struct nb_wsdisplay_smoke_options *options,
+    struct nb_smoke_frame_source *source,
+    uint64_t *serial)
 {
     struct nb_host_output output;
     struct nb_host_frame frame;
+    char clock_text[6];
 
     if (!nb_host_get_output(host, &output)) {
         print_host_error(host, "Could not query wsdisplay output");
-        return false;
-    }
-    nb_wsdisplay_smoke_image_destroy(image);
-    if (!nb_wsdisplay_smoke_image_create(image,
-                                         output.pixel_width,
-                                         output.pixel_height)) {
-        fputs("Could not allocate the diagnostic frame\n", stderr);
         return false;
     }
     if (*serial == UINT64_MAX) {
@@ -633,9 +654,34 @@ static bool present_pattern(struct nb_host *host,
         return false;
     }
     ++*serial;
-    if (!nb_wsdisplay_smoke_image_frame(image, *serial, &frame) ||
-        nb_host_present(host, &frame) != NB_HOST_RESULT_OK) {
-        print_host_error(host, "Could not present the diagnostic frame");
+
+    if (options->content == NB_WSDISPLAY_SMOKE_CONTENT_DESKTOP_PREVIEW) {
+        current_clock_text(clock_text);
+        if (!nb_desktop_preview_set_output(source->desktop, &output) ||
+            !nb_desktop_preview_render(source->desktop,
+                                       clock_text,
+                                       *serial,
+                                       &frame)) {
+            fputs("Could not render the NixBench desktop preview\n", stderr);
+            return false;
+        }
+    } else {
+        nb_wsdisplay_smoke_image_destroy(&source->diagnostic);
+        if (!nb_wsdisplay_smoke_image_create(&source->diagnostic,
+                                             output.pixel_width,
+                                             output.pixel_height)) {
+            fputs("Could not allocate the diagnostic frame\n", stderr);
+            return false;
+        }
+        if (!nb_wsdisplay_smoke_image_frame(&source->diagnostic,
+                                            *serial,
+                                            &frame)) {
+            fputs("Could not render the diagnostic frame\n", stderr);
+            return false;
+        }
+    }
+    if (nb_host_present(host, &frame) != NB_HOST_RESULT_OK) {
+        print_host_error(host, "Could not present the selected frame");
         return false;
     }
     return true;
@@ -646,14 +692,21 @@ static int run_worker(const struct nb_wsdisplay_smoke_options *options,
                       int expected_active_vt)
 {
     struct nb_host_wsdisplay_options host_options;
-    struct nb_wsdisplay_smoke_image image;
+    struct nb_smoke_frame_source source;
     struct nb_host *host = NULL;
     uint64_t serial = 0;
     uint64_t deadline;
     bool frame_completed = false;
     bool success = false;
 
-    memset(&image, 0, sizeof(image));
+    memset(&source, 0, sizeof(source));
+    if (options->content == NB_WSDISPLAY_SMOKE_CONTENT_DESKTOP_PREVIEW) {
+        source.desktop = nb_desktop_preview_create();
+        if (source.desktop == NULL) {
+            fputs("Could not create the NixBench desktop preview\n", stderr);
+            goto cleanup;
+        }
+    }
     nb_host_wsdisplay_options_init(&host_options);
     host_options.device_path = screen_device;
     host_options.expected_active_vt = expected_active_vt;
@@ -666,7 +719,7 @@ static int run_worker(const struct nb_wsdisplay_smoke_options *options,
     }
     deadline = add_milliseconds(nb_host_monotonic_milliseconds(host),
                                 options->duration_ms);
-    if (!present_pattern(host, &image, &serial)) {
+    if (!present_content(host, options, &source, &serial)) {
         goto cleanup;
     }
 
@@ -702,15 +755,17 @@ static int run_worker(const struct nb_wsdisplay_smoke_options *options,
             break;
         case NB_HOST_EVENT_CONSOLE_ACQUIRE_REQUESTED:
             if (nb_host_complete_console_acquire(host) !=
-                    NB_HOST_RESULT_OK ||
-                !present_pattern(host, &image, &serial)) {
+                NB_HOST_RESULT_OK) {
                 print_host_error(host, "Could not reacquire the console");
+                goto cleanup;
+            }
+            if (!present_content(host, options, &source, &serial)) {
                 goto cleanup;
             }
             break;
         case NB_HOST_EVENT_OUTPUT_CHANGED:
             if (nb_host_get_state(host) == NB_HOST_STATE_ACTIVE &&
-                !present_pattern(host, &image, &serial)) {
+                !present_content(host, options, &source, &serial)) {
                 goto cleanup;
             }
             break;
@@ -726,14 +781,17 @@ static int run_worker(const struct nb_wsdisplay_smoke_options *options,
     }
     success = frame_completed;
     if (!frame_completed) {
-        fputs("No diagnostic frame completion was observed\n", stderr);
+        fprintf(stderr,
+                "No %s frame completion was observed\n",
+                content_description(options->content));
     }
 
 cleanup:
     if (host != NULL) {
         nb_host_destroy(host);
     }
-    nb_wsdisplay_smoke_image_destroy(&image);
+    nb_desktop_preview_destroy(source.desktop);
+    nb_wsdisplay_smoke_image_destroy(&source.diagnostic);
     return success ? 0 : 1;
 }
 
@@ -956,6 +1014,17 @@ int nb_wsdisplay_smoke_run(
         fputs("Invalid wsdisplay smoke options\n", stderr);
         return 2;
     }
+    if (options->content != NB_WSDISPLAY_SMOKE_CONTENT_DIAGNOSTIC &&
+        options->content != NB_WSDISPLAY_SMOKE_CONTENT_DESKTOP_PREVIEW) {
+        fputs("Invalid wsdisplay smoke content selection\n", stderr);
+        return 2;
+    }
+    if (options->action != NB_WSDISPLAY_SMOKE_ACTION_RUN &&
+        options->content != NB_WSDISPLAY_SMOKE_CONTENT_DIAGNOSTIC) {
+        fputs("A wsdisplay content selection is valid only when running\n",
+              stderr);
+        return 2;
+    }
     if (options->action != NB_WSDISPLAY_SMOKE_ACTION_RECOVER &&
         (options->status_device_path == NULL ||
          options->status_device_path[0] != '/' ||
@@ -1005,6 +1074,7 @@ int nb_wsdisplay_smoke_run(
            snapshot.screen_device,
            options->duration_ms,
            state_path);
+    printf("Content: %s\n", content_description(options->content));
     puts("The parent supervisor remains unmapped and will restore and verify "
          "the saved console state after the worker exits.");
     (void)fflush(NULL);

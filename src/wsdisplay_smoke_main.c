@@ -22,7 +22,9 @@ static void print_usage(const char *program_name)
     puts("  --acknowledge-console-takeover");
     puts("  --acknowledge-no-crash-watchdog   parent failure needs --recover");
     puts("\nRun options:");
+    puts("  --desktop-preview                  render NixBench shell content");
     puts("  --duration-ms N                    250..5000 (default 3000)");
+    puts("  The default content is the framebuffer diagnostic pattern.");
     puts("\nPath options:");
     puts("  --status-device PATH               default /dev/ttyEstat");
     puts("  --screen-prefix PATH               default /dev/ttyE");
