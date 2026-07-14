@@ -26,7 +26,25 @@ if [ "${#duration_ms}" -gt 4 ] ||
     fail "duration must be from 250 through 5000 ms"
 fi
 
-script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+script_path=$0
+case "$script_path" in
+    */*) ;;
+    *)
+        script_path=$(command -v "$script_path") ||
+            fail "could not locate the runner script"
+        ;;
+esac
+while [ -L "$script_path" ]; do
+    link_dir=$(CDPATH= cd "$(dirname "$script_path")" && pwd)
+    link_target=$(readlink "$script_path") ||
+        fail "could not resolve $script_path"
+    case "$link_target" in
+        /*) script_path=$link_target ;;
+        *) script_path=$link_dir/$link_target ;;
+    esac
+done
+
+script_dir=$(CDPATH= cd "$(dirname "$script_path")" && pwd)
 repo_dir=$(CDPATH= cd "$script_dir/.." && pwd)
 build_dir=${NIXBENCH_BUILD_DIR:-$repo_dir/build}
 smoke=$build_dir/nixbench-wsdisplay-smoke
