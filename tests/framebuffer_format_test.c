@@ -423,6 +423,115 @@ static void test_strides_and_exact_sizes(void)
     CHECK(memcmp(source, source_copy, sizeof(source)) == 0);
 }
 
+static void test_canonical_rgb8888_rows(void)
+{
+    struct nb_framebuffer_format format = argb8888();
+    uint32_t source_words[8] = {
+        UINT32_C(0x00112233),
+        UINT32_C(0x80445566),
+        UINT32_C(0xa5a5a5a5),
+        UINT32_C(0xa5a5a5a5),
+        UINT32_C(0xfe778899),
+        UINT32_C(0x01abcdef),
+        UINT32_C(0xa5a5a5a5),
+        UINT32_C(0xa5a5a5a5)
+    };
+    uint32_t destination_words[10];
+    uint32_t source_copy[8];
+    size_t index;
+
+    memcpy(source_copy, source_words, sizeof(source_words));
+
+    for (index = 0; index < 10; ++index) {
+        destination_words[index] = UINT32_C(0xdeadbeef);
+    }
+    CHECK(nb_framebuffer_convert(
+              source_words,
+              sizeof(source_words),
+              4 * sizeof(uint32_t),
+              NB_FRAMEBUFFER_SOURCE_ARGB8888,
+              destination_words,
+              sizeof(destination_words),
+              5 * sizeof(uint32_t),
+              2,
+              2,
+              &format) == NB_FRAMEBUFFER_OK);
+    CHECK(destination_words[0] == UINT32_C(0x00112233));
+    CHECK(destination_words[1] == UINT32_C(0x80445566));
+    CHECK(destination_words[5] == UINT32_C(0xfe778899));
+    CHECK(destination_words[6] == UINT32_C(0x01abcdef));
+    CHECK(destination_words[2] == UINT32_C(0xdeadbeef));
+    CHECK(destination_words[4] == UINT32_C(0xdeadbeef));
+    CHECK(destination_words[7] == UINT32_C(0xdeadbeef));
+    CHECK(destination_words[9] == UINT32_C(0xdeadbeef));
+
+    for (index = 0; index < 10; ++index) {
+        destination_words[index] = UINT32_C(0xdeadbeef);
+    }
+    CHECK(nb_framebuffer_convert(
+              source_words,
+              sizeof(source_words),
+              4 * sizeof(uint32_t),
+              NB_FRAMEBUFFER_SOURCE_XRGB8888,
+              destination_words,
+              sizeof(destination_words),
+              5 * sizeof(uint32_t),
+              2,
+              2,
+              &format) == NB_FRAMEBUFFER_OK);
+    CHECK(destination_words[0] == UINT32_C(0xff112233));
+    CHECK(destination_words[1] == UINT32_C(0xff445566));
+    CHECK(destination_words[5] == UINT32_C(0xff778899));
+    CHECK(destination_words[6] == UINT32_C(0xffabcdef));
+    CHECK(destination_words[2] == UINT32_C(0xdeadbeef));
+    CHECK(destination_words[7] == UINT32_C(0xdeadbeef));
+
+    format.alpha.offset = UINT32_MAX;
+    format.alpha.size = 0;
+    for (index = 0; index < 10; ++index) {
+        destination_words[index] = UINT32_C(0xdeadbeef);
+    }
+    CHECK(nb_framebuffer_convert(
+              source_words,
+              sizeof(source_words),
+              4 * sizeof(uint32_t),
+              NB_FRAMEBUFFER_SOURCE_ARGB8888,
+              destination_words,
+              sizeof(destination_words),
+              5 * sizeof(uint32_t),
+              2,
+              2,
+              &format) == NB_FRAMEBUFFER_OK);
+    CHECK(destination_words[0] == UINT32_C(0x00112233));
+    CHECK(destination_words[1] == UINT32_C(0x00445566));
+    CHECK(destination_words[5] == UINT32_C(0x00778899));
+    CHECK(destination_words[6] == UINT32_C(0x00abcdef));
+    CHECK(destination_words[2] == UINT32_C(0xdeadbeef));
+    CHECK(destination_words[7] == UINT32_C(0xdeadbeef));
+
+    for (index = 0; index < 10; ++index) {
+        destination_words[index] = UINT32_C(0xdeadbeef);
+    }
+    CHECK(nb_framebuffer_convert(
+              source_words,
+              sizeof(source_words),
+              4 * sizeof(uint32_t),
+              NB_FRAMEBUFFER_SOURCE_XRGB8888,
+              destination_words,
+              sizeof(destination_words),
+              5 * sizeof(uint32_t),
+              2,
+              2,
+              &format) == NB_FRAMEBUFFER_OK);
+    CHECK(destination_words[0] == UINT32_C(0x00112233));
+    CHECK(destination_words[1] == UINT32_C(0x00445566));
+    CHECK(destination_words[5] == UINT32_C(0x00778899));
+    CHECK(destination_words[6] == UINT32_C(0x00abcdef));
+    CHECK(destination_words[2] == UINT32_C(0xdeadbeef));
+    CHECK(destination_words[7] == UINT32_C(0xdeadbeef));
+    CHECK(memcmp(source_words, source_copy, sizeof(source_words)) == 0);
+}
+
 static void test_conversion_errors(void)
 {
     const struct nb_framebuffer_format format = rgb565();
@@ -585,6 +694,7 @@ int main(void)
     test_all_channel_scalings();
     test_all_alpha_scalings();
     test_strides_and_exact_sizes();
+    test_canonical_rgb8888_rows();
     test_conversion_errors();
     test_status_strings();
 

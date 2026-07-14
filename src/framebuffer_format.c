@@ -153,6 +153,72 @@ static uint32_t pack_pixel(uint32_t source,
     return insert_channel(packed, alpha, &format->alpha);
 }
 
+static bool channel_matches(const struct nb_framebuffer_channel *channel,
+                            uint32_t offset,
+                            uint32_t size)
+{
+    return channel->offset == offset && channel->size == size;
+}
+
+static bool canonical_rgb8888(
+    const struct nb_framebuffer_format *format)
+{
+    return format->bits_per_pixel == 32 &&
+           channel_matches(&format->red, 16, 8) &&
+           channel_matches(&format->green, 8, 8) &&
+           channel_matches(&format->blue, 0, 8) &&
+           (format->alpha.size == 0 ||
+            channel_matches(&format->alpha, 24, 8));
+}
+
+static void convert_canonical_rgb8888(
+    const uint8_t *source,
+    size_t source_stride,
+    enum nb_framebuffer_source_format source_format,
+    uint8_t *destination,
+    size_t destination_stride,
+    size_t width,
+    size_t height,
+    bool destination_has_alpha)
+{
+    const uint32_t high_bits =
+        destination_has_alpha ? UINT32_C(0xff000000) : UINT32_C(0);
+    const uint32_t color_mask = UINT32_C(0x00ffffff);
+    size_t row;
+
+    /*
+     * Keeping this loop free of per-channel helpers is important for mapped
+     * software framebuffers, including unoptimized diagnostic builds. Small
+     * memcpy calls retain the public API's unaligned-buffer support and are
+     * lowered to native word moves by the supported C compilers.
+     */
+    for (row = 0; row < height; ++row) {
+        const uint8_t *source_pixel = source + row * source_stride;
+        uint8_t *destination_pixel = destination + row * destination_stride;
+        size_t column;
+
+        if (destination_has_alpha &&
+            source_format == NB_FRAMEBUFFER_SOURCE_ARGB8888) {
+            memcpy(destination_pixel,
+                   source_pixel,
+                   width * sizeof(uint32_t));
+            continue;
+        }
+        for (column = 0; column < width; ++column) {
+            uint32_t source_value;
+            uint32_t destination_value;
+
+            memcpy(&source_value, source_pixel, sizeof(source_value));
+            destination_value = (source_value & color_mask) | high_bits;
+            memcpy(destination_pixel,
+                   &destination_value,
+                   sizeof(destination_value));
+            source_pixel += sizeof(source_value);
+            destination_pixel += sizeof(destination_value);
+        }
+    }
+}
+
 static bool host_is_little_endian(void)
 {
     const uint16_t marker = UINT16_C(1);
@@ -254,6 +320,19 @@ enum nb_framebuffer_status nb_framebuffer_convert(
     }
     if (destination_size < destination_required) {
         return NB_FRAMEBUFFER_DESTINATION_BUFFER_TOO_SMALL;
+    }
+
+    if (canonical_rgb8888(destination_format)) {
+        convert_canonical_rgb8888(
+            source_bytes,
+            source_stride,
+            source_format,
+            destination_bytes,
+            destination_stride,
+            width,
+            height,
+            destination_format->alpha.size != 0);
+        return NB_FRAMEBUFFER_OK;
     }
 
     for (row = 0; row < height; ++row) {
