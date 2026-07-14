@@ -287,17 +287,26 @@ runtime used by the SDL frontend, including the real NixInfo application and
 application-owned global menus; Wayland publication remains disabled. Its
 unsupported-platform stub is covered by normal tests, and the NetBSD branch
 compiles against the official NetBSD 10.1 amd64 headers under strict warnings.
-Raw wscons motion now has opt-in 25..400% fixed-point sensitivity with an
-identity 100% library default; the guided X220 comparison selects 150% and
-prints raw/logical counters plus monotonic userspace-read-to-framebuffer-copy-
-complete measurements. Hosted SDL coordinates are never scaled.
+Raw wscons motion retains a flat 100% library/default profile, with opt-in
+25..400% fixed-point sensitivity. The harness exposes
+`--wscons-pointer-profile flat|adaptive`; adaptive rejects an explicit fixed
+sensitivity, and the guided X220 runner selects it. It groups X/Y events read
+in the same monotonic millisecond, applies the preceding group's velocity with
+a one-quarter EWMA, and ramps gain from 100% through 250 counts/s to 150% at
+750, 200% at 1500, and 250% at 2500 counts/s. History resets after 100 ms idle,
+timestamp regression, an edge clamp, configuration change, or lifecycle
+transition. Diagnostics expose the selected profile, adaptive gain buckets,
+peak capped filtered velocity/gain, idle/timestamp/edge reset counts,
+raw/logical motion, and
+input-to-copy measurements. Hosted SDL coordinates are never scaled.
 The first measured runtime averaged 176 ms per input-associated frame. A
 canonical 32-bit fast path and optimized hardware build reduced this to 36 ms,
 with 2 ms in rendering and 34 ms in full mapped-framebuffer presentation. The
 `wsdisplay` host now retains a 32-bit source shadow and converts only each
 changed row's first-through-last changed-pixel span. It invalidates on every
 map/unmap and falls back to full conversion if the optional shadow cannot be
-allocated; physical latency validation of this damage-suppressed path is next.
+allocated. Physical X220 validation of this damage-suppressed path averaged
+5 ms from userspace input read through framebuffer-copy completion.
 This is still a bounded hardware-validation mode rather than a desktop session:
 broader hardware validation, complete wscons keymap/seat/hotplug support,
 failure-injection tests, privilege separation, and a separate privileged
@@ -337,9 +346,10 @@ and allowed the physical pointer to operate the global menus and managed
 window. Motion was functional but noticeably slower and less fluid than the
 hosted path. Subsequent pipeline profiling isolated the dominant cost to the
 full-frame mapped-framebuffer write. Canonical conversion is now fast and the
-backend has source-shadow damage suppression; remeasure that path before tuning
-acceleration or changing the current lifecycle-event priority and bounded batch
-rules.
+backend's source-shadow damage suppression has been physically validated at a
+5 ms average. The new raw-wscons adaptive profile is the next physical pointer-
+feel comparison; input-wait policy and the current lifecycle-event priority and
+bounded batch rules remain separate tuning work.
 A first guided `--runtime-preview` X220 trial completed on 2026-07-14. The
 physical console displayed the shared runtime and real NixInfo application
 through `wsdisplay` and wscons without X11, Wayland publication, or SDL video;

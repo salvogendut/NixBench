@@ -100,6 +100,23 @@ static bool parse_pointer_sensitivity(
     return true;
 }
 
+static bool parse_pointer_profile(
+    const char *text,
+    enum nb_wscons_pointer_profile *profile,
+    char error[NB_WSDISPLAY_SMOKE_ERROR_CAPACITY])
+{
+    if (strcmp(text, "flat") == 0) {
+        *profile = NB_WSCONS_POINTER_PROFILE_FLAT;
+        return true;
+    }
+    if (strcmp(text, "adaptive") == 0) {
+        *profile = NB_WSCONS_POINTER_PROFILE_ADAPTIVE;
+        return true;
+    }
+    set_error(error, "Pointer profile must be flat or adaptive");
+    return false;
+}
+
 void nb_wsdisplay_smoke_options_init(
     struct nb_wsdisplay_smoke_options *options)
 {
@@ -111,6 +128,7 @@ void nb_wsdisplay_smoke_options_init(
     options->status_device_path = default_status_device;
     options->screen_device_prefix = default_screen_prefix;
     options->duration_ms = NB_WSDISPLAY_SMOKE_DEFAULT_DURATION_MS;
+    options->wscons_pointer_profile = NB_WSCONS_POINTER_PROFILE_FLAT;
     options->wscons_pointer_sensitivity_percent =
         NB_WSDISPLAY_SMOKE_DEFAULT_POINTER_SENSITIVITY_PERCENT;
 }
@@ -138,6 +156,7 @@ bool nb_wsdisplay_smoke_parse_options(
 {
     bool action_selected = false;
     bool duration_selected = false;
+    bool pointer_profile_selected = false;
     bool pointer_sensitivity_selected = false;
     bool content_selected = false;
     bool status_selected = false;
@@ -228,6 +247,22 @@ bool nb_wsdisplay_smoke_parse_options(
             }
             duration_selected = true;
         } else if (strcmp(argv[index],
+                          "--wscons-pointer-profile") == 0) {
+            const char *value;
+
+            if (pointer_profile_selected) {
+                set_error(error,
+                          "Duplicate --wscons-pointer-profile option");
+                return false;
+            }
+            if (!option_value(argc, argv, &index, &value, error) ||
+                !parse_pointer_profile(value,
+                                       &options->wscons_pointer_profile,
+                                       error)) {
+                return false;
+            }
+            pointer_profile_selected = true;
+        } else if (strcmp(argv[index],
                           "--wscons-pointer-sensitivity-percent") == 0) {
             const char *value;
 
@@ -294,17 +329,27 @@ bool nb_wsdisplay_smoke_parse_options(
                   "Refusing takeover without both explicit acknowledgements");
         return false;
     }
+    if (options->wscons_pointer_profile ==
+            NB_WSCONS_POINTER_PROFILE_ADAPTIVE &&
+        pointer_sensitivity_selected) {
+        set_error(error,
+                  "--wscons-pointer-profile adaptive cannot be combined with "
+                  "--wscons-pointer-sensitivity-percent");
+        return false;
+    }
     if (options->action != NB_WSDISPLAY_SMOKE_ACTION_RUN &&
         (options->acknowledge_console_takeover ||
          options->acknowledge_no_crash_watchdog || duration_selected ||
-         content_selected || pointer_sensitivity_selected ||
+         content_selected || pointer_profile_selected ||
+         pointer_sensitivity_selected ||
          options->wscons_input_stats)) {
         set_error(error,
                   "Run acknowledgements, content, duration, and wscons options apply only to takeover");
         return false;
     }
     if (options->action == NB_WSDISPLAY_SMOKE_ACTION_RUN &&
-        (pointer_sensitivity_selected || options->wscons_input_stats) &&
+        (pointer_profile_selected || pointer_sensitivity_selected ||
+         options->wscons_input_stats) &&
         options->content != NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW &&
         options->content != NB_WSDISPLAY_SMOKE_CONTENT_RUNTIME_PREVIEW) {
         set_error(error,

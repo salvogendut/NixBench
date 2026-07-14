@@ -2,6 +2,7 @@
 #define NIXBENCH_WSDISPLAY_SMOKE_H
 
 #include "host.h"
+#include "wscons_input.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -38,6 +39,7 @@ struct nb_wsdisplay_smoke_options {
     const char *screen_device_prefix;
     enum nb_wsdisplay_smoke_content content;
     uint32_t duration_ms;
+    enum nb_wscons_pointer_profile wscons_pointer_profile;
     uint32_t wscons_pointer_sensitivity_percent;
     bool acknowledge_console_takeover;
     bool acknowledge_no_crash_watchdog;

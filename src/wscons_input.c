@@ -35,6 +35,30 @@ struct nb_wscons_input {
     bool prefer_mouse;
 };
 
+enum {
+    NB_WSCONS_ADAPTIVE_IDLE_RESET_MILLISECONDS = 100,
+    NB_WSCONS_ADAPTIVE_PRECISION_VELOCITY = 250,
+    NB_WSCONS_ADAPTIVE_LOW_VELOCITY = 750,
+    NB_WSCONS_ADAPTIVE_HIGH_VELOCITY = 1500,
+    NB_WSCONS_ADAPTIVE_MAX_GAIN_VELOCITY = 2500,
+    NB_WSCONS_ADAPTIVE_VELOCITY_LIMIT =
+        NB_WSCONS_ADAPTIVE_MAX_GAIN_VELOCITY
+};
+
+static void reset_adaptive_motion(
+    struct nb_wscons_input_reducer *reducer)
+{
+    reducer->adaptive_group_milliseconds = 0;
+    reducer->adaptive_group_distance_x = 0;
+    reducer->adaptive_group_distance_y = 0;
+    reducer->adaptive_filtered_velocity_counts_per_second = 0;
+    reducer->adaptive_gain_percent =
+        NB_WSCONS_POINTER_ADAPTIVE_MIN_GAIN_PERCENT;
+    reducer->adaptive_group_valid = false;
+    reducer->pointer_remainder_x = 0;
+    reducer->pointer_remainder_y = 0;
+}
+
 static bool reducer_is_valid(const struct nb_wscons_input_reducer *reducer)
 {
     return reducer != NULL && reducer->logical_width > 0 &&
@@ -43,6 +67,9 @@ static bool reducer_is_valid(const struct nb_wscons_input_reducer *reducer)
            reducer->pointer_y >= 0 &&
            reducer->pointer_y < reducer->logical_height &&
            reducer->escape_keycode >= -1 &&
+           (reducer->pointer_profile == NB_WSCONS_POINTER_PROFILE_FLAT ||
+            reducer->pointer_profile ==
+                NB_WSCONS_POINTER_PROFILE_ADAPTIVE) &&
            reducer->pointer_sensitivity_percent >=
                NB_WSCONS_POINTER_SENSITIVITY_MIN_PERCENT &&
            reducer->pointer_sensitivity_percent <=
@@ -50,7 +77,13 @@ static bool reducer_is_valid(const struct nb_wscons_input_reducer *reducer)
            reducer->pointer_remainder_x > -100 &&
            reducer->pointer_remainder_x < 100 &&
            reducer->pointer_remainder_y > -100 &&
-           reducer->pointer_remainder_y < 100;
+           reducer->pointer_remainder_y < 100 &&
+           reducer->adaptive_filtered_velocity_counts_per_second <=
+               NB_WSCONS_ADAPTIVE_VELOCITY_LIMIT &&
+           reducer->adaptive_gain_percent >=
+               NB_WSCONS_POINTER_ADAPTIVE_MIN_GAIN_PERCENT &&
+           reducer->adaptive_gain_percent <=
+               NB_WSCONS_POINTER_ADAPTIVE_MAX_GAIN_PERCENT;
 }
 
 static int clamp_coordinate(int coordinate, int extent)
@@ -74,8 +107,10 @@ bool nb_wscons_input_reducer_init(struct nb_wscons_input_reducer *reducer,
     reducer->pointer_x = (logical_width - 1) / 2;
     reducer->pointer_y = (logical_height - 1) / 2;
     reducer->escape_keycode = -1;
+    reducer->pointer_profile = NB_WSCONS_POINTER_PROFILE_FLAT;
     reducer->pointer_sensitivity_percent =
         NB_WSCONS_POINTER_SENSITIVITY_DEFAULT_PERCENT;
+    reset_adaptive_motion(reducer);
     return true;
 }
 
@@ -94,6 +129,7 @@ bool nb_wscons_input_reducer_set_bounds(
     reducer->pointer_y = clamp_coordinate(reducer->pointer_y, logical_height);
     reducer->pointer_remainder_x = 0;
     reducer->pointer_remainder_y = 0;
+    reset_adaptive_motion(reducer);
     return true;
 }
 
@@ -121,6 +157,23 @@ bool nb_wscons_input_reducer_set_pointer_sensitivity(
     reducer->pointer_sensitivity_percent = sensitivity_percent;
     reducer->pointer_remainder_x = 0;
     reducer->pointer_remainder_y = 0;
+    reset_adaptive_motion(reducer);
+    return true;
+}
+
+bool nb_wscons_input_reducer_set_pointer_profile(
+    struct nb_wscons_input_reducer *reducer,
+    enum nb_wscons_pointer_profile profile)
+{
+    if (!reducer_is_valid(reducer) ||
+        (profile != NB_WSCONS_POINTER_PROFILE_FLAT &&
+         profile != NB_WSCONS_POINTER_PROFILE_ADAPTIVE)) {
+        return false;
+    }
+    reducer->pointer_profile = profile;
+    reducer->pointer_remainder_x = 0;
+    reducer->pointer_remainder_y = 0;
+    reset_adaptive_motion(reducer);
     return true;
 }
 
@@ -134,6 +187,7 @@ void nb_wscons_input_reducer_reset(
     reducer->escape_pressed = false;
     reducer->pointer_remainder_x = 0;
     reducer->pointer_remainder_y = 0;
+    reset_adaptive_motion(reducer);
 }
 
 bool nb_wscons_input_reducer_get_position(
@@ -196,6 +250,195 @@ static uint64_t signed_distance(int64_t value)
     return value < 0
                ? (uint64_t)(-(value + INT64_C(1))) + UINT64_C(1)
                : (uint64_t)value;
+}
+
+/*
+ * X and Y arrive as separate wscons events. Events stamped in the same
+ * millisecond therefore form one motion group and receive one shared gain.
+ * Once a later group starts, the completed group's approximate vector length
+ * and elapsed time update the velocity used by the new group. This deliberate
+ * one-group delay avoids axis-order bias without buffering host events.
+ */
+
+static uint64_t approximate_group_distance(
+    const struct nb_wscons_input_reducer *reducer)
+{
+    const uint64_t maximum =
+        reducer->adaptive_group_distance_x >=
+                reducer->adaptive_group_distance_y
+            ? reducer->adaptive_group_distance_x
+            : reducer->adaptive_group_distance_y;
+    const uint64_t minimum =
+        reducer->adaptive_group_distance_x <
+                reducer->adaptive_group_distance_y
+            ? reducer->adaptive_group_distance_x
+            : reducer->adaptive_group_distance_y;
+    const uint64_t half_minimum = minimum / UINT64_C(2);
+
+    return half_minimum > UINT64_MAX - maximum
+               ? UINT64_MAX
+               : maximum + half_minimum;
+}
+
+static uint64_t adaptive_group_velocity(
+    const struct nb_wscons_input_reducer *reducer,
+    uint64_t elapsed_milliseconds)
+{
+    const uint64_t distance = approximate_group_distance(reducer);
+    const uint64_t distance_at_limit =
+        ((uint64_t)NB_WSCONS_ADAPTIVE_VELOCITY_LIMIT *
+             elapsed_milliseconds +
+         UINT64_C(999)) /
+        UINT64_C(1000);
+
+    /* elapsed is 1..99 ms, so this comparison also protects distance * 1000. */
+    if (distance >= distance_at_limit) {
+        return NB_WSCONS_ADAPTIVE_VELOCITY_LIMIT;
+    }
+    return distance * UINT64_C(1000) / elapsed_milliseconds;
+}
+
+static uint64_t filter_adaptive_velocity(uint64_t previous,
+                                         uint64_t instantaneous)
+{
+    if (instantaneous > previous) {
+        return previous +
+               (instantaneous - previous + UINT64_C(3)) / UINT64_C(4);
+    }
+    if (instantaneous < previous) {
+        return previous -
+               (previous - instantaneous + UINT64_C(3)) / UINT64_C(4);
+    }
+    return previous;
+}
+
+static unsigned int interpolate_gain(uint64_t velocity,
+                                     uint64_t lower_velocity,
+                                     unsigned int lower_gain,
+                                     uint64_t upper_velocity,
+                                     unsigned int upper_gain)
+{
+    return lower_gain +
+           (unsigned int)((velocity - lower_velocity) *
+                          (uint64_t)(upper_gain - lower_gain) /
+                          (upper_velocity - lower_velocity));
+}
+
+static unsigned int gain_for_velocity(uint64_t velocity)
+{
+    if (velocity <= NB_WSCONS_ADAPTIVE_PRECISION_VELOCITY) {
+        return 100;
+    }
+    if (velocity <= NB_WSCONS_ADAPTIVE_LOW_VELOCITY) {
+        return interpolate_gain(velocity,
+                                NB_WSCONS_ADAPTIVE_PRECISION_VELOCITY,
+                                100,
+                                NB_WSCONS_ADAPTIVE_LOW_VELOCITY,
+                                150);
+    }
+    if (velocity <= NB_WSCONS_ADAPTIVE_HIGH_VELOCITY) {
+        return interpolate_gain(velocity,
+                                NB_WSCONS_ADAPTIVE_LOW_VELOCITY,
+                                150,
+                                NB_WSCONS_ADAPTIVE_HIGH_VELOCITY,
+                                200);
+    }
+    if (velocity < NB_WSCONS_ADAPTIVE_MAX_GAIN_VELOCITY) {
+        return interpolate_gain(velocity,
+                                NB_WSCONS_ADAPTIVE_HIGH_VELOCITY,
+                                200,
+                                NB_WSCONS_ADAPTIVE_MAX_GAIN_VELOCITY,
+                                250);
+    }
+    return NB_WSCONS_POINTER_ADAPTIVE_MAX_GAIN_PERCENT;
+}
+
+static void begin_adaptive_group(
+    struct nb_wscons_input_reducer *reducer,
+    uint64_t milliseconds)
+{
+    reducer->adaptive_group_milliseconds = milliseconds;
+    reducer->adaptive_group_distance_x = 0;
+    reducer->adaptive_group_distance_y = 0;
+    reducer->adaptive_group_valid = true;
+}
+
+static unsigned int prepare_adaptive_gain(
+    struct nb_wscons_input_reducer *reducer,
+    uint64_t milliseconds)
+{
+    struct nb_wscons_input_stats *stats = &reducer->stats;
+
+    if (!reducer->adaptive_group_valid) {
+        begin_adaptive_group(reducer, milliseconds);
+        return reducer->adaptive_gain_percent;
+    }
+    if (milliseconds < reducer->adaptive_group_milliseconds) {
+        saturating_increment(&stats->adaptive_timestamp_resets);
+        reset_adaptive_motion(reducer);
+        begin_adaptive_group(reducer, milliseconds);
+        return reducer->adaptive_gain_percent;
+    }
+    if (milliseconds > reducer->adaptive_group_milliseconds) {
+        const uint64_t elapsed =
+            milliseconds - reducer->adaptive_group_milliseconds;
+
+        if (elapsed >= NB_WSCONS_ADAPTIVE_IDLE_RESET_MILLISECONDS) {
+            saturating_increment(&stats->adaptive_idle_resets);
+            reset_adaptive_motion(reducer);
+        } else {
+            const uint64_t instantaneous =
+                adaptive_group_velocity(reducer, elapsed);
+
+            reducer->adaptive_filtered_velocity_counts_per_second =
+                filter_adaptive_velocity(
+                    reducer->adaptive_filtered_velocity_counts_per_second,
+                    instantaneous);
+            reducer->adaptive_gain_percent = gain_for_velocity(
+                reducer->adaptive_filtered_velocity_counts_per_second);
+            if (reducer->adaptive_filtered_velocity_counts_per_second >
+                stats->adaptive_peak_filtered_velocity_counts_per_second) {
+                stats->adaptive_peak_filtered_velocity_counts_per_second =
+                    reducer->adaptive_filtered_velocity_counts_per_second;
+            }
+        }
+        begin_adaptive_group(reducer, milliseconds);
+    }
+    return reducer->adaptive_gain_percent;
+}
+
+static void accumulate_adaptive_distance(
+    struct nb_wscons_input_reducer *reducer,
+    bool horizontal,
+    uint64_t magnitude)
+{
+    saturating_add(horizontal
+                       ? &reducer->adaptive_group_distance_x
+                       : &reducer->adaptive_group_distance_y,
+                   magnitude);
+}
+
+static void record_adaptive_gain(struct nb_wscons_input_reducer *reducer,
+                                 unsigned int gain_percent)
+{
+    struct nb_wscons_input_stats *stats = &reducer->stats;
+    uint64_t *bucket;
+
+    if (gain_percent == 100) {
+        bucket = &stats->adaptive_gain_100_events;
+    } else if (gain_percent < 150) {
+        bucket = &stats->adaptive_gain_101_149_events;
+    } else if (gain_percent < 200) {
+        bucket = &stats->adaptive_gain_150_199_events;
+    } else if (gain_percent < 250) {
+        bucket = &stats->adaptive_gain_200_249_events;
+    } else {
+        bucket = &stats->adaptive_gain_250_events;
+    }
+    saturating_increment(bucket);
+    if ((uint64_t)gain_percent > stats->adaptive_peak_gain_percent) {
+        stats->adaptive_peak_gain_percent = gain_percent;
+    }
 }
 
 static void record_relative_event(
@@ -360,10 +603,20 @@ static enum nb_wscons_reduce_result reduce_relative_event(
     int64_t applied;
     int moved;
     bool raw_points_outward;
+    unsigned int gain_percent;
+    const uint64_t magnitude = integer_magnitude(raw_event->value);
 
     record_relative_event(reducer, raw_event, horizontal);
+    if (reducer->pointer_profile == NB_WSCONS_POINTER_PROFILE_ADAPTIVE) {
+        gain_percent = prepare_adaptive_gain(reducer,
+                                             raw_event->milliseconds);
+        accumulate_adaptive_distance(reducer, horizontal, magnitude);
+        record_adaptive_gain(reducer, gain_percent);
+    } else {
+        gain_percent = reducer->pointer_sensitivity_percent;
+    }
     delta = scaled_pointer_delta(raw_event->value,
-                                 reducer->pointer_sensitivity_percent,
+                                 gain_percent,
                                  remainder);
     if (!horizontal) {
         /* wscons relative Y is positive upwards; desktop Y is positive down. */
@@ -380,6 +633,11 @@ static enum nb_wscons_reduce_result reduce_relative_event(
         saturating_increment(&stats->clamped_motion_events);
         /* Never retain fractional movement after hitting an output edge. */
         *remainder = 0;
+        if (reducer->pointer_profile ==
+            NB_WSCONS_POINTER_PROFILE_ADAPTIVE) {
+            saturating_increment(&stats->adaptive_edge_resets);
+            reset_adaptive_motion(reducer);
+        }
     }
     if (moved == *coordinate) {
         saturating_increment(&stats->suppressed_motion_events);
@@ -877,6 +1135,15 @@ bool nb_wscons_input_set_pointer_sensitivity(
            nb_wscons_input_reducer_set_pointer_sensitivity(
                &input->reducer,
                sensitivity_percent);
+}
+
+bool nb_wscons_input_set_pointer_profile(
+    struct nb_wscons_input *input,
+    enum nb_wscons_pointer_profile profile)
+{
+    return input != NULL && !input->active &&
+           nb_wscons_input_reducer_set_pointer_profile(&input->reducer,
+                                                       profile);
 }
 
 bool nb_wscons_input_get_position(const struct nb_wscons_input *input,

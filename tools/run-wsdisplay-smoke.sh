@@ -101,10 +101,10 @@ keyboard translation, including the usual keyboard VT-switch shortcuts, is
 unavailable while the worker owns /dev/wskbd; input is closed before every
 acknowledged VT release and on exit.
 
-This trial applies 150% sensitivity only to raw wscons relative motion; hosted
-SDL input is unchanged. At exit it prints raw-motion statistics and splits
-userspace-read-to-framebuffer-copy-complete time into render, present, and
-event-delivery stages for comparison with later trials.
+This trial enables the adaptive profile only for raw wscons relative motion;
+hosted SDL input is unchanged. At exit it prints raw-motion and adaptive-gain
+statistics and splits userspace-read-to-framebuffer-copy-complete time into
+render, present, and event-delivery stages for comparison with later trials.
 
 Keep a second SSH session open. If this script does not restore the console,
 wait for its timeout, verify no nixbench-wsdisplay-smoke process remains, then
@@ -129,7 +129,7 @@ sudo -n /usr/bin/timeout -s SIGTERM -k 15s "${outer_timeout_seconds}s" \
     --acknowledge-console-takeover \
     --acknowledge-no-crash-watchdog \
     --runtime-preview \
-    --wscons-pointer-sensitivity-percent 150 \
+    --wscons-pointer-profile adaptive \
     --wscons-input-stats \
     --duration-ms "$duration_ms"
 run_status=$?

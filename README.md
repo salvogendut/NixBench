@@ -233,11 +233,12 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
   A subsequent bounded `--interactive-preview` trial also completed on the
   X220. The software cursor responded, and the global menus and managed window
   could be operated with the physical pointer. Motion was usable but felt
-  slower and less fluid than the hosted desktop. Pointer acceleration, input
-  scheduling, and the cost of full software-rendered framebuffer updates are
-  therefore explicit follow-up profiling and tuning work; the successful
-  interaction trial does not turn this research harness into a production
-  input/session path.
+  slower and less fluid than the hosted desktop. Subsequent profiling and
+  source-shadow damage suppression reduced the measured userspace-read-to-
+  framebuffer-copy-complete average to 5 ms on this machine. Raw-wscons
+  adaptive pointer gain and input scheduling remain tuning work; the
+  successful interaction trial does not turn this research harness into a
+  production input/session path.
 
   On 2026-07-14, the first guided `--runtime-preview` trial also completed on
   the X220. The physical console displayed the shared desktop runtime and real
@@ -359,16 +360,36 @@ measurements are not dominated by unoptimized per-pixel diagnostic code. Set
 `NIXBENCH_BUILD_TYPE=Debug` explicitly when the takeover is intended for
 debugger work instead of responsiveness measurement.
 
-Raw wscons relative motion defaults to an identity 100% sensitivity. The
-explicit `--wscons-pointer-sensitivity-percent` option accepts 25..400 and uses
-signed fixed-point carry so fractional gain does not introduce directional
-drift; it is never applied to hosted SDL input. The guided X220 runner uses
-150% for repeatable comparisons. `--wscons-input-stats` reports raw and logical
-distance, unit deltas, suppression/clamping, event gaps, and userspace-read-to-
-framebuffer-copy-complete timing. That timing excludes device/kernel queueing,
-scanout, and physical-display latency. Its input-frame pipeline also separates
-time waiting to render, SDL software rendering, synchronous host presentation,
-the framebuffer-copy-complete timestamp, and event delivery.
+Raw wscons relative motion retains a flat identity profile as its library and
+command-line default. `--wscons-pointer-profile flat|adaptive` selects the
+profile. Flat mode may be tuned from 25 through 400% with
+`--wscons-pointer-sensitivity-percent`; signed per-axis fixed-point carry keeps
+fractional gain symmetric and drift-free. An explicit sensitivity cannot be
+combined with `--wscons-pointer-profile adaptive`. Neither profile is ever
+applied to hosted SDL input. The guided X220 runner selects adaptive mode.
+
+The adaptive profile combines X and Y events stamped in the same userspace-
+read millisecond into one motion group. A group uses the preceding completed
+group's velocity, smoothed with a one-quarter EWMA, so both axes receive the
+same gain while the group remains uninterrupted. A clamp deliberately resets
+the profile before any later axis event. Gain is 100% through 250 raw counts
+per second, interpolates linearly to 150% at 750, 200% at 1500, and 250% at
+2500, then remains at 250%. Its history resets after at least 100 ms idle, a
+timestamp regression, a pointer-
+edge clamp, a profile/configuration change, or an input lifecycle transition.
+Velocity is estimated from userspace read timestamps, so a queued burst can
+temporarily look faster than the physical device stream; this remains an
+experimental profile to validate on hardware.
+
+`--wscons-input-stats` identifies the active profile and reports raw and
+logical distance, unit deltas, suppression/clamping, adaptive gain buckets,
+peak filtered velocity (capped at 2500 counts/s) and gain, idle/timestamp/edge
+reset counts, event gaps, and userspace-read-to-framebuffer-copy-complete
+timing. That timing excludes
+device/kernel queueing, scanout, and physical-display latency. Its input-frame
+pipeline also separates time waiting to render, SDL software rendering,
+synchronous host presentation, the framebuffer-copy-complete timestamp, and
+event delivery.
 
 The first measured X220 runtime averaged 176 ms from input read through the
 framebuffer copy. A canonical 32-bit conversion fast path reduced that to
@@ -378,7 +399,9 @@ shadow in ordinary RAM. Its first frame and every frame after VT reacquisition
 remain full refreshes; steady frames compare visible rows and convert only the
 span between each row's first and last changed pixel. No framebuffer readback
 is used. Damage covering more than half the frame and shadow-allocation failure
-safely retain full-frame presentation.
+safely retain full-frame presentation. The later guided X220 validation of
+this damage-suppressed path averaged 5 ms from userspace input read through
+framebuffer-copy completion.
 
 Preflight reads `/dev/ttyEstat` to select the active zero-based screen node;
 it does not change display state. A presentation run changes that console to
@@ -398,7 +421,7 @@ sudo -n /usr/bin/timeout -s SIGTERM -k 15s 10s \
   --acknowledge-console-takeover \
   --acknowledge-no-crash-watchdog \
   --runtime-preview \
-  --wscons-pointer-sensitivity-percent 150 \
+  --wscons-pointer-profile adaptive \
   --wscons-input-stats \
   --duration-ms 3000
 ```

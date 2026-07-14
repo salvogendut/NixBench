@@ -900,6 +900,18 @@ static void print_duration_stats(
            (unsigned long long)stats->maximum_milliseconds);
 }
 
+static const char *pointer_profile_name(
+    enum nb_wscons_pointer_profile profile)
+{
+    switch (profile) {
+    case NB_WSCONS_POINTER_PROFILE_FLAT:
+        return "flat";
+    case NB_WSCONS_POINTER_PROFILE_ADAPTIVE:
+        return "adaptive";
+    }
+    return "unknown";
+}
+
 static void print_input_stats(const struct nb_smoke_worker *worker)
 {
     struct nb_wscons_input_stats stats;
@@ -915,8 +927,30 @@ static void print_input_stats(const struct nb_smoke_worker *worker)
                stats.first_motion_milliseconds;
     }
     puts("wscons input stats:");
-    printf("  sensitivity: %u%%\n",
-           worker->options->wscons_pointer_sensitivity_percent);
+    printf("  profile: %s\n",
+           pointer_profile_name(worker->options->wscons_pointer_profile));
+    if (worker->options->wscons_pointer_profile ==
+        NB_WSCONS_POINTER_PROFILE_FLAT) {
+        printf("  sensitivity: %u%%\n",
+               worker->options->wscons_pointer_sensitivity_percent);
+    } else {
+        printf("  adaptive gain events: 100%%=%llu 101-149%%=%llu "
+               "150-199%%=%llu 200-249%%=%llu 250%%=%llu\n",
+               (unsigned long long)stats.adaptive_gain_100_events,
+               (unsigned long long)stats.adaptive_gain_101_149_events,
+               (unsigned long long)stats.adaptive_gain_150_199_events,
+               (unsigned long long)stats.adaptive_gain_200_249_events,
+               (unsigned long long)stats.adaptive_gain_250_events);
+        printf("  adaptive peaks: filtered-velocity=%llu counts/s "
+               "(capped at 2500) gain=%llu%%\n",
+               (unsigned long long)
+                   stats.adaptive_peak_filtered_velocity_counts_per_second,
+               (unsigned long long)stats.adaptive_peak_gain_percent);
+        printf("  adaptive resets: idle=%llu timestamp=%llu edge=%llu\n",
+               (unsigned long long)stats.adaptive_idle_resets,
+               (unsigned long long)stats.adaptive_timestamp_resets,
+               (unsigned long long)stats.adaptive_edge_resets);
+    }
     printf("  native: read=%llu untranslated=%llu\n",
            (unsigned long long)stats.native_events_read,
            (unsigned long long)stats.untranslated_native_events);
@@ -1414,6 +1448,9 @@ static int run_worker(const struct nb_wsdisplay_smoke_options *options,
             !nb_wscons_input_set_pointer_sensitivity(
                 worker.input,
                 options->wscons_pointer_sensitivity_percent) ||
+            !nb_wscons_input_set_pointer_profile(
+                worker.input,
+                options->wscons_pointer_profile) ||
             !nb_wscons_input_resume(worker.input)) {
             print_input_error(worker.input, "Could not acquire wscons input");
             goto cleanup;
@@ -1717,13 +1754,23 @@ int nb_wsdisplay_smoke_run(
         fputs("Invalid wsdisplay smoke content selection\n", stderr);
         return 2;
     }
-    if ((interactive_content(options->content) &&
+    if ((options->wscons_pointer_profile !=
+             NB_WSCONS_POINTER_PROFILE_FLAT &&
+         options->wscons_pointer_profile !=
+             NB_WSCONS_POINTER_PROFILE_ADAPTIVE) ||
+        (interactive_content(options->content) &&
          (options->wscons_pointer_sensitivity_percent <
               NB_WSDISPLAY_SMOKE_MIN_POINTER_SENSITIVITY_PERCENT ||
           options->wscons_pointer_sensitivity_percent >
-              NB_WSDISPLAY_SMOKE_MAX_POINTER_SENSITIVITY_PERCENT)) ||
+              NB_WSDISPLAY_SMOKE_MAX_POINTER_SENSITIVITY_PERCENT ||
+          (options->wscons_pointer_profile ==
+               NB_WSCONS_POINTER_PROFILE_ADAPTIVE &&
+           options->wscons_pointer_sensitivity_percent !=
+               NB_WSDISPLAY_SMOKE_DEFAULT_POINTER_SENSITIVITY_PERCENT))) ||
         (!interactive_content(options->content) &&
-         (options->wscons_pointer_sensitivity_percent !=
+         (options->wscons_pointer_profile !=
+              NB_WSCONS_POINTER_PROFILE_FLAT ||
+          options->wscons_pointer_sensitivity_percent !=
               NB_WSDISPLAY_SMOKE_DEFAULT_POINTER_SENSITIVITY_PERCENT ||
           options->wscons_input_stats))) {
         fputs("Invalid wscons input tuning selection\n", stderr);

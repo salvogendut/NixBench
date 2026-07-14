@@ -83,6 +83,7 @@ static void test_parser_takeover(void)
                 &options,
                 error));
     CHECK(options.content == NB_WSDISPLAY_SMOKE_CONTENT_DIAGNOSTIC);
+    CHECK(options.wscons_pointer_profile == NB_WSCONS_POINTER_PROFILE_FLAT);
     CHECK(options.wscons_pointer_sensitivity_percent ==
           NB_WSDISPLAY_SMOKE_DEFAULT_POINTER_SENSITIVITY_PERCENT);
     CHECK(!options.wscons_input_stats);
@@ -119,6 +120,17 @@ static void test_parser_wscons_tuning(void)
         "--acknowledge-no-crash-watchdog", "--interactive-preview",
         "--wscons-pointer-sensitivity-percent", "150",
         "--wscons-input-stats"
+    };
+    char *adaptive[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--runtime-preview",
+        "--wscons-pointer-profile", "adaptive", "--wscons-input-stats"
+    };
+    char *flat_profile[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--interactive-preview",
+        "--wscons-pointer-profile", "flat",
+        "--wscons-pointer-sensitivity-percent", "150"
     };
     char *minimum[] = {
         "smoke", "--acknowledge-console-takeover",
@@ -171,6 +183,34 @@ static void test_parser_wscons_tuning(void)
         "--wscons-pointer-sensitivity-percent", "100",
         "--wscons-pointer-sensitivity-percent", "200"
     };
+    char *invalid_profile[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--runtime-preview",
+        "--wscons-pointer-profile", "accelerated"
+    };
+    char *missing_profile[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--runtime-preview",
+        "--wscons-pointer-profile"
+    };
+    char *duplicate_profile[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--runtime-preview",
+        "--wscons-pointer-profile", "flat",
+        "--wscons-pointer-profile", "adaptive"
+    };
+    char *adaptive_then_sensitivity[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--runtime-preview",
+        "--wscons-pointer-profile", "adaptive",
+        "--wscons-pointer-sensitivity-percent", "100"
+    };
+    char *sensitivity_then_adaptive[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--runtime-preview",
+        "--wscons-pointer-sensitivity-percent", "100",
+        "--wscons-pointer-profile", "adaptive"
+    };
     char *duplicate_stats[] = {
         "smoke", "--acknowledge-console-takeover",
         "--acknowledge-no-crash-watchdog", "--runtime-preview",
@@ -180,6 +220,11 @@ static void test_parser_wscons_tuning(void)
         "smoke", "--acknowledge-console-takeover",
         "--acknowledge-no-crash-watchdog",
         "--wscons-pointer-sensitivity-percent", "100"
+    };
+    char *diagnostic_profile[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog",
+        "--wscons-pointer-profile", "flat"
     };
     char *diagnostic_stats[] = {
         "smoke", "--acknowledge-console-takeover",
@@ -194,6 +239,10 @@ static void test_parser_wscons_tuning(void)
         "smoke", "--preflight-only",
         "--wscons-pointer-sensitivity-percent", "100"
     };
+    char *preflight_profile[] = {
+        "smoke", "--preflight-only",
+        "--wscons-pointer-profile", "adaptive"
+    };
     char *recover_stats[] = {
         "smoke", "--recover", "--wscons-input-stats"
     };
@@ -202,8 +251,24 @@ static void test_parser_wscons_tuning(void)
     };
 
     CHECK(parse(7, interactive, &options, error));
+    CHECK(options.wscons_pointer_profile == NB_WSCONS_POINTER_PROFILE_FLAT);
     CHECK(options.wscons_pointer_sensitivity_percent == 150);
     CHECK(options.wscons_input_stats);
+    CHECK(parse((int)(sizeof(adaptive) / sizeof(adaptive[0])),
+                adaptive,
+                &options,
+                error));
+    CHECK(options.wscons_pointer_profile ==
+          NB_WSCONS_POINTER_PROFILE_ADAPTIVE);
+    CHECK(options.wscons_pointer_sensitivity_percent ==
+          NB_WSDISPLAY_SMOKE_DEFAULT_POINTER_SENSITIVITY_PERCENT);
+    CHECK(options.wscons_input_stats);
+    CHECK(parse((int)(sizeof(flat_profile) / sizeof(flat_profile[0])),
+                flat_profile,
+                &options,
+                error));
+    CHECK(options.wscons_pointer_profile == NB_WSCONS_POINTER_PROFILE_FLAT);
+    CHECK(options.wscons_pointer_sensitivity_percent == 150);
     CHECK(parse(6, minimum, &options, error));
     CHECK(options.wscons_pointer_sensitivity_percent ==
           NB_WSDISPLAY_SMOKE_MIN_POINTER_SENSITIVITY_PERCENT);
@@ -220,11 +285,46 @@ static void test_parser_wscons_tuning(void)
     CHECK(!parse(6, leading_space, &options, error));
     CHECK(!parse(5, missing, &options, error));
     CHECK(!parse(8, duplicate_sensitivity, &options, error));
+    CHECK(!parse((int)(sizeof(invalid_profile) /
+                       sizeof(invalid_profile[0])),
+                 invalid_profile,
+                 &options,
+                 error));
+    CHECK(!parse((int)(sizeof(missing_profile) /
+                       sizeof(missing_profile[0])),
+                 missing_profile,
+                 &options,
+                 error));
+    CHECK(!parse((int)(sizeof(duplicate_profile) /
+                       sizeof(duplicate_profile[0])),
+                 duplicate_profile,
+                 &options,
+                 error));
+    CHECK(!parse((int)(sizeof(adaptive_then_sensitivity) /
+                       sizeof(adaptive_then_sensitivity[0])),
+                 adaptive_then_sensitivity,
+                 &options,
+                 error));
+    CHECK(!parse((int)(sizeof(sensitivity_then_adaptive) /
+                       sizeof(sensitivity_then_adaptive[0])),
+                 sensitivity_then_adaptive,
+                 &options,
+                 error));
     CHECK(!parse(6, duplicate_stats, &options, error));
     CHECK(!parse(5, diagnostic_sensitivity, &options, error));
+    CHECK(!parse((int)(sizeof(diagnostic_profile) /
+                       sizeof(diagnostic_profile[0])),
+                 diagnostic_profile,
+                 &options,
+                 error));
     CHECK(!parse(4, diagnostic_stats, &options, error));
     CHECK(!parse(5, desktop_stats, &options, error));
     CHECK(!parse(4, preflight_sensitivity, &options, error));
+    CHECK(!parse((int)(sizeof(preflight_profile) /
+                       sizeof(preflight_profile[0])),
+                 preflight_profile,
+                 &options,
+                 error));
     CHECK(!parse(3, recover_stats, &options, error));
     CHECK(!parse(3, help_stats, &options, error));
 }

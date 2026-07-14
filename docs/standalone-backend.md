@@ -188,17 +188,43 @@ preview model. Wayland service publication remains disabled for this step, so
 the mode does not require X11, Wayland, or SDL video.
 
 Pointer gain remains a raw-wscons concern rather than a desktop-runtime or SDL
-policy. The provider defaults to identity 100% sensitivity; explicit
-interactive/runtime trials may select 25..400% with
-`--wscons-pointer-sensitivity-percent`. Signed per-axis fixed-point carry keeps
-small deltas symmetric and drift-free. The guided X220 trial uses 150%.
-`--wscons-input-stats` prints raw/logical distance and event-shape counters plus
-userspace-read-to-framebuffer-copy-complete timing. Live events are stamped at
-read time with `CLOCK_MONOTONIC`, matching the wsdisplay completion clock. The
-metric excludes time already spent in the device/kernel queue and does not
-measure scanout or glass latency. An input-frame pipeline breakdown separates
-the wait to render, SDL software rendering, the synchronous present call and
-copy-complete timestamp, and completion-event delivery.
+policy. The library and harness default to the flat identity profile.
+`--wscons-pointer-profile flat|adaptive` selects the raw-input profile. Flat
+mode retains `--wscons-pointer-sensitivity-percent` for explicit 25..400%
+gain, with signed per-axis fixed-point carry to keep fractional scaling
+symmetric and drift-free. The harness rejects adaptive mode combined with an
+explicit sensitivity option. The guided X220 trial selects adaptive mode.
+Neither choice changes hosted SDL input.
+
+The adaptive reducer groups native X and Y motion stamped in the same
+userspace-read millisecond. Each group is scaled from the preceding completed
+group's raw velocity, filtered with a one-quarter EWMA; using one completed
+group ensures both axes of an uninterrupted current group share a gain. An
+edge clamp intentionally resets the profile before any later axis event. The
+piecewise-linear curve is 100% at and below 250 counts/s, reaches 150% at 750
+counts/s, 200% at 1500 counts/s, and 250% at 2500 counts/s, where it saturates.
+Adaptive history is discarded after an idle interval of at least 100 ms,
+timestamp regression,
+pointer-edge clamp, profile or sensitivity configuration change, and input
+open/close or other lifecycle transition. A resumed stream therefore begins at
+identity gain instead of inheriting stale motion.
+
+The current native adapter timestamps each event after its userspace `read`
+rather than preserving a device timestamp. The estimator therefore observes
+the userspace drain rate: queued events consumed in a burst can appear faster
+than the original physical stream. The profile and its counters remain a
+hardware-tuning checkpoint, not a claim of device-accurate velocity.
+
+`--wscons-input-stats` identifies the active profile and prints raw/logical
+distance and event-shape counters, adaptive gain buckets, peak filtered
+velocity (capped at 2500 counts/s) and gain, idle/timestamp/edge reset counts,
+and userspace-read-to-framebuffer-copy-
+complete timing. Live events are stamped at read time with `CLOCK_MONOTONIC`,
+matching the wsdisplay completion clock. The metric excludes time already
+spent in the device/kernel queue and does not measure scanout or glass latency.
+An input-frame pipeline breakdown separates the wait to render, SDL software
+rendering, the synchronous present call and copy-complete timestamp, and
+completion-event delivery.
 
 The unmapped parent applies a hard deadline of at most 30000 ms, terminates and
 reaps an unresponsive child, then independently restores and verifies every
@@ -227,7 +253,9 @@ and `RelWithDebInfo` hardware runner reduced the next trial to 7..60 ms,
 averaging 36 ms. The pipeline split attributed about 2 ms to SDL software
 rendering and 34 ms to the synchronous full mapped-framebuffer presentation;
 input-to-render and completion delivery both averaged zero at millisecond
-resolution.
+resolution. Source-shadow damage suppression was then validated on the same
+hardware: the latest guided runtime trial averaged 5 ms from userspace input
+read through framebuffer-copy completion.
 
 To avoid rewriting roughly 4.0 MiB for every cursor update, the `wsdisplay`
 host now owns a tightly packed copy of the last accepted 32-bit source
@@ -264,8 +292,10 @@ cursor and allowed the physical pointer to operate the global menus and
 managed window. Motion was functional but felt slower and less fluid than the
 hosted path. The later pipeline measurements isolated the initial delay to
 full-frame conversion and mapped-framebuffer writes; the optimized conversion
-felt substantially better. Damage-suppressed mapped writes are the next
-physical checkpoint before acceleration or input-wait policy changes.
+felt substantially better. Damage-suppressed mapped writes subsequently
+averaged 5 ms in physical validation. The adaptive raw-wscons profile is now
+the next pointer-feel comparison; input-wait policy remains an independent
+follow-up.
 
 On 2026-07-14, the first guided `--runtime-preview` X220 trial completed as
 well. The physical console displayed the shared runtime and real NixInfo

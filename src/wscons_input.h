@@ -11,7 +11,14 @@ enum {
     NB_WSCONS_INPUT_ERROR_CAPACITY = 256,
     NB_WSCONS_POINTER_SENSITIVITY_MIN_PERCENT = 25,
     NB_WSCONS_POINTER_SENSITIVITY_DEFAULT_PERCENT = 100,
-    NB_WSCONS_POINTER_SENSITIVITY_MAX_PERCENT = 400
+    NB_WSCONS_POINTER_SENSITIVITY_MAX_PERCENT = 400,
+    NB_WSCONS_POINTER_ADAPTIVE_MIN_GAIN_PERCENT = 100,
+    NB_WSCONS_POINTER_ADAPTIVE_MAX_GAIN_PERCENT = 250
+};
+
+enum nb_wscons_pointer_profile {
+    NB_WSCONS_POINTER_PROFILE_FLAT,
+    NB_WSCONS_POINTER_PROFILE_ADAPTIVE
 };
 
 /*
@@ -67,6 +74,16 @@ struct nb_wscons_input_stats {
     uint64_t last_motion_milliseconds;
     uint64_t maximum_motion_gap_milliseconds;
     uint64_t timestamp_regressions;
+    uint64_t adaptive_gain_100_events;
+    uint64_t adaptive_gain_101_149_events;
+    uint64_t adaptive_gain_150_199_events;
+    uint64_t adaptive_gain_200_249_events;
+    uint64_t adaptive_gain_250_events;
+    uint64_t adaptive_peak_filtered_velocity_counts_per_second;
+    uint64_t adaptive_peak_gain_percent;
+    uint64_t adaptive_idle_resets;
+    uint64_t adaptive_timestamp_resets;
+    uint64_t adaptive_edge_resets;
 };
 
 /* Public so the portable reducer can be stack-allocated and tested directly. */
@@ -77,11 +94,18 @@ struct nb_wscons_input_reducer {
     int pointer_y;
     int escape_keycode;
     uint32_t pressed_buttons;
+    enum nb_wscons_pointer_profile pointer_profile;
     unsigned int pointer_sensitivity_percent;
     int pointer_remainder_x;
     int pointer_remainder_y;
+    uint64_t adaptive_group_milliseconds;
+    uint64_t adaptive_group_distance_x;
+    uint64_t adaptive_group_distance_y;
+    uint64_t adaptive_filtered_velocity_counts_per_second;
+    unsigned int adaptive_gain_percent;
     struct nb_wscons_input_stats stats;
     bool escape_pressed;
+    bool adaptive_group_valid;
 };
 
 bool nb_wscons_input_reducer_init(struct nb_wscons_input_reducer *reducer,
@@ -94,10 +118,14 @@ bool nb_wscons_input_reducer_set_bounds(
 bool nb_wscons_input_reducer_set_escape_keycode(
     struct nb_wscons_input_reducer *reducer,
     int escape_keycode);
-/* Applies only to raw relative wscons motion, never hosted SDL input. */
+/* Configures flat raw-relative wscons gain, never hosted SDL input. */
 bool nb_wscons_input_reducer_set_pointer_sensitivity(
     struct nb_wscons_input_reducer *reducer,
     unsigned int sensitivity_percent);
+/* Selects flat scaling or the deterministic velocity-sensitive profile. */
+bool nb_wscons_input_reducer_set_pointer_profile(
+    struct nb_wscons_input_reducer *reducer,
+    enum nb_wscons_pointer_profile profile);
 void nb_wscons_input_reducer_reset(
     struct nb_wscons_input_reducer *reducer);
 bool nb_wscons_input_reducer_get_position(
@@ -128,10 +156,14 @@ bool nb_wscons_input_is_active(const struct nb_wscons_input *input);
 bool nb_wscons_input_set_bounds(struct nb_wscons_input *input,
                                 int logical_width,
                                 int logical_height);
-/* Sensitivity may be changed only while the live provider is inactive. */
+/* Flat-profile sensitivity may change only while the provider is inactive. */
 bool nb_wscons_input_set_pointer_sensitivity(
     struct nb_wscons_input *input,
     unsigned int sensitivity_percent);
+/* The profile may be changed only while the live provider is inactive. */
+bool nb_wscons_input_set_pointer_profile(
+    struct nb_wscons_input *input,
+    enum nb_wscons_pointer_profile profile);
 bool nb_wscons_input_get_position(const struct nb_wscons_input *input,
                                   int *x,
                                   int *y);
