@@ -221,10 +221,11 @@ page, consume input, or explicitly request DRM master.
 
 An idle primary-node open can grant DRM master implicitly. The probe detects
 and drops that state before the inventory, and aborts the card if either safety
-operation fails. Because NetBSD 10 restricts the drop operation to privileged
-processes, an unprivileged probe of an otherwise idle live primary node aborts
-safely and a complete idle-console inventory requires a controlled privileged
-diagnostic session. The direct-KMS candidate classification requires a
+operation fails. Because current NetBSD releases restrict the drop operation
+to privileged processes, an unprivileged probe of an otherwise idle live
+primary node aborts safely and a complete idle-console inventory requires a
+controlled privileged diagnostic session. The direct-KMS candidate
+classification requires a
 read-write open, a completed master-safety check with any implicit grant
 dropped, a live driver version, KMS resources with at least one CRTC and
 encoder, dumb-buffer support, and a connected output with at least one cached
@@ -232,6 +233,13 @@ mode. This is only a preflight for later takeover and presentation tests. In
 particular, static device nodes do not qualify by themselves: the current QEMU
 NetBSD guest has four `/dev/dri/card*` nodes whose actual opens fail with
 `ENODEV` because no DRM driver is configured for its display device.
+
+The first real-hardware preflight now passes on a NetBSD 11.0_RC6 ThinkPad X220.
+Its Intel i915 device exposes a connected 1366x768 LVDS panel, two CRTCs, eight
+encoders, dumb buffers, and two legacy-visible planes. Its `intelfb` console
+also reports a supported 1366x768 XRGB8888-compatible framebuffer layout. This
+makes the machine suitable for the first supervised framebuffer and KMS
+presentation experiments; neither output path has taken over the console yet.
 
 Detailed DRM inventory is controlled by `NIXBENCH_LIBDRM=AUTO|ON|OFF`. `AUTO`
 degrades to path-only inspection when libdrm is absent, `ON` fails configuration

@@ -190,6 +190,19 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
   console mode change, framebuffer mapping, DRM buffer allocation, modeset, or
   page flip was attempted.
 
+- **NetBSD 11.0_RC6 (GENERIC), amd64 on a Lenovo ThinkPad X220** with Intel
+  Sandy Bridge graphics and SDL3 3.4.2 from pkgsrc: a clean-machine setup,
+  explicit `NIXBENCH_LIBDRM=ON` and `NIXBENCH_WAYLAND=ON` configuration, full
+  native build, and all 24 tests were confirmed working on July 14, 2026. The
+  kernel attaches `i915drmkms` and provides an `intelfb` console.
+
+  The privileged query-only probe reports a supported 1366x768, 32-bit RGB
+  `wsdisplay` layout and a live i915 DRM/KMS device. The internal LVDS panel is
+  connected at 1366x768 at 60 Hz; dumb buffers, two CRTCs, eight encoders, and
+  two legacy-visible planes are available. Both the software framebuffer and
+  direct KMS paths pass preflight. No console mode change, framebuffer mapping,
+  DRM buffer allocation, modeset, input read, or page flip was attempted.
+
 This is a manual target-system validation; automated NetBSD testing remains
 future work.
 
@@ -252,10 +265,11 @@ events. Opening an idle primary DRM node may nevertheless grant DRM master
 implicitly. The probe detects that state and drops it before collecting the
 driver and KMS inventory; it aborts all further queries for that card if it
 cannot establish the master state or drop an implicitly granted master.
-On NetBSD 10, dropping DRM master is privileged, so an unprivileged probe of an
-otherwise idle, working primary node will abort safely at this point. Use a
-controlled privileged diagnostic session when a full idle-console inventory is
-needed; the probe never treats the failed partial result as usable.
+On current NetBSD releases, dropping DRM master is privileged, so an
+unprivileged probe of an otherwise idle, working primary node will abort safely
+at this point. Use a controlled privileged diagnostic session when a full
+idle-console inventory is needed; the probe never treats the failed partial
+result as usable.
 
 A card is reported as a direct KMS candidate only when the detailed query is
 available, the card opens read-write, the master-safety check succeeds, any

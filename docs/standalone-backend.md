@@ -87,10 +87,10 @@ after opening, drops an implicitly granted master before collecting the
 inventory, and abandons that card if it cannot establish the master state or
 drop it. It never explicitly requests master, changes a mode, creates or maps a
 buffer, changes connector or plane state, or submits a page flip.
-NetBSD 10 restricts the drop-master operation to privileged processes. As a
-result, an unprivileged probe of an otherwise idle, working primary node aborts
-safely before inventory collection; a complete idle-console inventory currently
-requires a controlled privileged diagnostic session.
+Current NetBSD releases restrict the drop-master operation to privileged
+processes. As a result, an unprivileged probe of an otherwise idle, working
+primary node aborts safely before inventory collection; a complete idle-console
+inventory currently requires a controlled privileged diagnostic session.
 
 The direct-KMS candidate result is deliberately conservative. It requires a
 read-write open, a completed master-safety check with any implicit grant
@@ -102,6 +102,14 @@ page flip will succeed. Likewise, a `/dev/dri/card*` entry and permissive access
 bits do not establish that a DRM driver is attached. The current QEMU NetBSD
 guest contains four such static nodes, but opens return `ENODEV` because its
 display device has no configured DRM driver.
+
+The first real-hardware preflight passes on a NetBSD 11.0_RC6 ThinkPad X220.
+The privileged query-only run sees a 1366x768 at 60 Hz internal LVDS panel, a
+live i915 driver, two CRTCs, eight encoders, dumb-buffer support, and two
+legacy-visible planes. The same machine's `intelfb` console reports a
+supported 1366x768, 32-bit RGB framebuffer with a 5504-byte stride. This
+establishes both DRM/KMS and software `wsdisplay` as candidates, but does not
+yet validate takeover, presentation, VT transitions, or recovery.
 
 The CMake setting `NIXBENCH_LIBDRM=AUTO|ON|OFF` controls this detailed layer.
 `AUTO`, the default, enables it when all headers and the library are found and
