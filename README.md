@@ -301,6 +301,18 @@ query-only preflight:
 sudo ./build/nixbench-wsdisplay-smoke --preflight-only
 ```
 
+On a NetBSD test machine, the convenience runner performs configuration,
+building, tests, preflight, the bounded presentation, and postflight checks in
+one guided command. Run it over SSH while watching the physical console:
+
+```sh
+./tools/run-wsdisplay-smoke.sh
+```
+
+It defaults to 3000 ms; an alternate safe duration can be passed as its sole
+argument, for example `./tools/run-wsdisplay-smoke.sh 2000`. The script still
+requires typing `TAKEOVER` before it supplies the harness acknowledgements.
+
 Preflight reads `/dev/ttyEstat` to select the active zero-based screen node;
 it does not change display state. A presentation run changes that console to
 framebuffer mode briefly, draws a diagnostic pattern, and accepts only
