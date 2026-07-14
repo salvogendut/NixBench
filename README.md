@@ -211,9 +211,14 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
   automatic VT handling, and the original active screen. An independent SSH
   watcher saw the root-only recovery record only while the processes were
   alive; it disappeared on successful restoration, and a fresh preflight and
-  backend probe reported the original state. No recovery invocation was
-  needed. No DRM buffer allocation, modeset, page flip, or input read was
-  attempted.
+  backend probe reported the original state. A later 5000 ms run selected
+  `--desktop-preview` and completed
+  through the same supervised software-framebuffer path. The parent again
+  verified restoration, the guided postflight and a separate SSH preflight
+  found screen 0 in emulation mode with automatic VT handling and video on,
+  and the recovery record and harness processes were absent. Manual recovery
+  was not needed for either run. No DRM buffer allocation, modeset, page flip,
+  or input read was attempted.
 
 This is a manual target-system validation; automated NetBSD testing remains
 future work.

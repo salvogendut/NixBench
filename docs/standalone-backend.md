@@ -189,7 +189,11 @@ supplies the acknowledgements and never performs a console takeover. The first
 2000 ms ThinkPad X220 diagnostic run completed normally: the supervisor
 verified the saved emulation, video, VT, and active-screen state; an independent
 SSH watcher saw the recovery record clear with no manual recovery needed; and
-the post-run probe matched the baseline.
+the post-run probe matched the baseline. A later 5000 ms
+`--desktop-preview` run completed through the same software-framebuffer path.
+The supervisor again verified restoration; the guided postflight and a
+separate SSH preflight found the original console state, no recovery record,
+and no harness process. Manual recovery was not needed.
 
 ### 3. Production supervised standalone sessions
 

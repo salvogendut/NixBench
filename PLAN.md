@@ -301,6 +301,10 @@ refusal gates, but CTest never performs a takeover. The first 2000 ms X220
 diagnostic presentation completed with automatic restoration and an
 independent SSH watch; wscons input, failure injection, privilege separation,
 broader hardware coverage, and a production crash watchdog remain later gates.
+A subsequent 5000 ms `--desktop-preview` run completed through the same X220
+software-framebuffer path. The supervisor verified restoration, and separate
+postflight checks found the original console state with no recovery record or
+harness process remaining; manual recovery was not needed.
 
 ## Milestone 8: Add standalone X11 compatibility
 
