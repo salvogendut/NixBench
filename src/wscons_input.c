@@ -1,3 +1,8 @@
+#if defined(__NetBSD__)
+#define _NETBSD_SOURCE 1
+#endif
+#define _POSIX_C_SOURCE 200809L
+
 #include "wscons_input.h"
 
 #include <errno.h>
@@ -16,6 +21,7 @@
 
 #include <fcntl.h>
 #include <poll.h>
+#include <time.h>
 #include <unistd.h>
 #endif
 
@@ -36,7 +42,15 @@ static bool reducer_is_valid(const struct nb_wscons_input_reducer *reducer)
            reducer->pointer_x < reducer->logical_width &&
            reducer->pointer_y >= 0 &&
            reducer->pointer_y < reducer->logical_height &&
-           reducer->escape_keycode >= -1;
+           reducer->escape_keycode >= -1 &&
+           reducer->pointer_sensitivity_percent >=
+               NB_WSCONS_POINTER_SENSITIVITY_MIN_PERCENT &&
+           reducer->pointer_sensitivity_percent <=
+               NB_WSCONS_POINTER_SENSITIVITY_MAX_PERCENT &&
+           reducer->pointer_remainder_x > -100 &&
+           reducer->pointer_remainder_x < 100 &&
+           reducer->pointer_remainder_y > -100 &&
+           reducer->pointer_remainder_y < 100;
 }
 
 static int clamp_coordinate(int coordinate, int extent)
@@ -60,6 +74,8 @@ bool nb_wscons_input_reducer_init(struct nb_wscons_input_reducer *reducer,
     reducer->pointer_x = (logical_width - 1) / 2;
     reducer->pointer_y = (logical_height - 1) / 2;
     reducer->escape_keycode = -1;
+    reducer->pointer_sensitivity_percent =
+        NB_WSCONS_POINTER_SENSITIVITY_DEFAULT_PERCENT;
     return true;
 }
 
@@ -76,6 +92,8 @@ bool nb_wscons_input_reducer_set_bounds(
     reducer->logical_height = logical_height;
     reducer->pointer_x = clamp_coordinate(reducer->pointer_x, logical_width);
     reducer->pointer_y = clamp_coordinate(reducer->pointer_y, logical_height);
+    reducer->pointer_remainder_x = 0;
+    reducer->pointer_remainder_y = 0;
     return true;
 }
 
@@ -91,6 +109,21 @@ bool nb_wscons_input_reducer_set_escape_keycode(
     return true;
 }
 
+bool nb_wscons_input_reducer_set_pointer_sensitivity(
+    struct nb_wscons_input_reducer *reducer,
+    unsigned int sensitivity_percent)
+{
+    if (!reducer_is_valid(reducer) ||
+        sensitivity_percent < NB_WSCONS_POINTER_SENSITIVITY_MIN_PERCENT ||
+        sensitivity_percent > NB_WSCONS_POINTER_SENSITIVITY_MAX_PERCENT) {
+        return false;
+    }
+    reducer->pointer_sensitivity_percent = sensitivity_percent;
+    reducer->pointer_remainder_x = 0;
+    reducer->pointer_remainder_y = 0;
+    return true;
+}
+
 void nb_wscons_input_reducer_reset(
     struct nb_wscons_input_reducer *reducer)
 {
@@ -99,6 +132,8 @@ void nb_wscons_input_reducer_reset(
     }
     reducer->pressed_buttons = 0;
     reducer->escape_pressed = false;
+    reducer->pointer_remainder_x = 0;
+    reducer->pointer_remainder_y = 0;
 }
 
 bool nb_wscons_input_reducer_get_position(
@@ -114,9 +149,20 @@ bool nb_wscons_input_reducer_get_position(
     return true;
 }
 
-static int moved_coordinate(int coordinate, int delta, int extent)
+bool nb_wscons_input_reducer_get_stats(
+    const struct nb_wscons_input_reducer *reducer,
+    struct nb_wscons_input_stats *stats)
 {
-    int64_t moved = (int64_t)coordinate + (int64_t)delta;
+    if (!reducer_is_valid(reducer) || stats == NULL) {
+        return false;
+    }
+    *stats = reducer->stats;
+    return true;
+}
+
+static int moved_coordinate(int coordinate, int64_t delta, int extent)
+{
+    int64_t moved = (int64_t)coordinate + delta;
 
     if (moved < 0) {
         moved = 0;
@@ -124,6 +170,75 @@ static int moved_coordinate(int coordinate, int delta, int extent)
         moved = extent - 1;
     }
     return (int)moved;
+}
+
+static void saturating_increment(uint64_t *value)
+{
+    if (*value != UINT64_MAX) {
+        ++*value;
+    }
+}
+
+static void saturating_add(uint64_t *value, uint64_t amount)
+{
+    *value = amount > UINT64_MAX - *value
+                 ? UINT64_MAX
+                 : *value + amount;
+}
+
+static uint64_t integer_magnitude(int value)
+{
+    return value < 0 ? (uint64_t)(-(int64_t)value) : (uint64_t)value;
+}
+
+static uint64_t signed_distance(int64_t value)
+{
+    return value < 0
+               ? (uint64_t)(-(value + INT64_C(1))) + UINT64_C(1)
+               : (uint64_t)value;
+}
+
+static void record_relative_event(
+    struct nb_wscons_input_reducer *reducer,
+    const struct nb_wscons_raw_event *raw_event,
+    bool horizontal)
+{
+    struct nb_wscons_input_stats *stats = &reducer->stats;
+    const uint64_t magnitude = integer_magnitude(raw_event->value);
+
+    if (stats->relative_events == 0) {
+        stats->first_motion_milliseconds = raw_event->milliseconds;
+    } else if (raw_event->milliseconds < stats->last_motion_milliseconds) {
+        saturating_increment(&stats->timestamp_regressions);
+    } else {
+        const uint64_t gap =
+            raw_event->milliseconds - stats->last_motion_milliseconds;
+
+        if (gap > stats->maximum_motion_gap_milliseconds) {
+            stats->maximum_motion_gap_milliseconds = gap;
+        }
+    }
+    stats->last_motion_milliseconds = raw_event->milliseconds;
+    saturating_increment(&stats->relative_events);
+    if (magnitude == 1) {
+        saturating_increment(&stats->unit_relative_events);
+    }
+    saturating_add(horizontal ? &stats->raw_distance_x
+                              : &stats->raw_distance_y,
+                   magnitude);
+}
+
+static int64_t scaled_pointer_delta(int raw_delta,
+                                    unsigned int sensitivity_percent,
+                                    int *remainder)
+{
+    const int64_t numerator =
+        (int64_t)raw_delta * (int64_t)sensitivity_percent +
+        (int64_t)*remainder;
+    const int64_t scaled = numerator / INT64_C(100);
+
+    *remainder = (int)(numerator % INT64_C(100));
+    return scaled;
 }
 
 static void set_pointer_motion_event(
@@ -228,13 +343,62 @@ static enum nb_wscons_reduce_result reduce_button_event(
     return NB_WSCONS_REDUCE_EVENT;
 }
 
+static enum nb_wscons_reduce_result reduce_relative_event(
+    struct nb_wscons_input_reducer *reducer,
+    const struct nb_wscons_raw_event *raw_event,
+    bool horizontal,
+    struct nb_host_event *event)
+{
+    struct nb_wscons_input_stats *stats = &reducer->stats;
+    int *coordinate = horizontal ? &reducer->pointer_x
+                                 : &reducer->pointer_y;
+    int *remainder = horizontal ? &reducer->pointer_remainder_x
+                                : &reducer->pointer_remainder_y;
+    const int extent = horizontal ? reducer->logical_width
+                                  : reducer->logical_height;
+    int64_t delta;
+    int64_t applied;
+    int moved;
+    bool raw_points_outward;
+
+    record_relative_event(reducer, raw_event, horizontal);
+    delta = scaled_pointer_delta(raw_event->value,
+                                 reducer->pointer_sensitivity_percent,
+                                 remainder);
+    if (!horizontal) {
+        /* wscons relative Y is positive upwards; desktop Y is positive down. */
+        delta = -delta;
+    }
+    raw_points_outward = horizontal
+        ? ((raw_event->value < 0 && *coordinate == 0) ||
+           (raw_event->value > 0 && *coordinate == extent - 1))
+        : ((raw_event->value > 0 && *coordinate == 0) ||
+           (raw_event->value < 0 && *coordinate == extent - 1));
+    moved = moved_coordinate(*coordinate, delta, extent);
+    applied = (int64_t)moved - (int64_t)*coordinate;
+    if (applied != delta || raw_points_outward) {
+        saturating_increment(&stats->clamped_motion_events);
+        /* Never retain fractional movement after hitting an output edge. */
+        *remainder = 0;
+    }
+    if (moved == *coordinate) {
+        saturating_increment(&stats->suppressed_motion_events);
+        return NB_WSCONS_REDUCE_IGNORED;
+    }
+    *coordinate = moved;
+    saturating_increment(&stats->emitted_motion_events);
+    saturating_add(horizontal ? &stats->logical_distance_x
+                              : &stats->logical_distance_y,
+                   signed_distance(applied));
+    set_pointer_motion_event(reducer, raw_event->milliseconds, event);
+    return NB_WSCONS_REDUCE_EVENT;
+}
+
 enum nb_wscons_reduce_result nb_wscons_input_reducer_apply(
     struct nb_wscons_input_reducer *reducer,
     const struct nb_wscons_raw_event *raw_event,
     struct nb_host_event *event)
 {
-    int moved;
-
     if (event != NULL) {
         memset(event, 0, sizeof(*event));
     }
@@ -244,34 +408,9 @@ enum nb_wscons_reduce_result nb_wscons_input_reducer_apply(
 
     switch (raw_event->type) {
     case NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X:
-        moved = moved_coordinate(reducer->pointer_x,
-                                 raw_event->value,
-                                 reducer->logical_width);
-        if (moved == reducer->pointer_x) {
-            return NB_WSCONS_REDUCE_IGNORED;
-        }
-        reducer->pointer_x = moved;
-        set_pointer_motion_event(reducer, raw_event->milliseconds, event);
-        return NB_WSCONS_REDUCE_EVENT;
+        return reduce_relative_event(reducer, raw_event, true, event);
     case NB_WSCONS_RAW_EVENT_MOUSE_DELTA_Y:
-    {
-        int64_t inverted = -(int64_t)raw_event->value;
-
-        if (inverted < INT_MIN) {
-            inverted = INT_MIN;
-        } else if (inverted > INT_MAX) {
-            inverted = INT_MAX;
-        }
-        moved = moved_coordinate(reducer->pointer_y,
-                                 (int)inverted,
-                                 reducer->logical_height);
-        if (moved == reducer->pointer_y) {
-            return NB_WSCONS_REDUCE_IGNORED;
-        }
-        reducer->pointer_y = moved;
-        set_pointer_motion_event(reducer, raw_event->milliseconds, event);
-        return NB_WSCONS_REDUCE_EVENT;
-    }
+        return reduce_relative_event(reducer, raw_event, false, event);
     case NB_WSCONS_RAW_EVENT_MOUSE_DOWN:
     case NB_WSCONS_RAW_EVENT_MOUSE_UP:
         return reduce_button_event(reducer, raw_event, event);
@@ -485,33 +624,42 @@ void nb_wscons_input_suspend(struct nb_wscons_input *input)
     nb_wscons_input_reducer_reset(&input->reducer);
 }
 
-static uint64_t event_milliseconds(const struct timespec *time)
+static bool monotonic_milliseconds(uint64_t *value, int *system_error)
 {
+    struct timespec now;
     uint64_t seconds;
     uint64_t milliseconds;
     uint64_t fraction;
 
-    if (time->tv_sec < 0 || time->tv_nsec < 0 ||
-        time->tv_nsec >= 1000000000L) {
-        return 0;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+        *system_error = errno != 0 ? errno : EIO;
+        return false;
     }
-    seconds = (uint64_t)time->tv_sec;
+    if (now.tv_sec < 0 || now.tv_nsec < 0 ||
+        now.tv_nsec >= 1000000000L) {
+        *system_error = EINVAL;
+        return false;
+    }
+    seconds = (uint64_t)now.tv_sec;
     if (seconds > UINT64_MAX / UINT64_C(1000)) {
-        return UINT64_MAX;
+        *value = UINT64_MAX;
+        return true;
     }
     milliseconds = seconds * UINT64_C(1000);
-    fraction = (uint64_t)time->tv_nsec / UINT64_C(1000000);
-    return fraction > UINT64_MAX - milliseconds
-               ? UINT64_MAX
-               : milliseconds + fraction;
+    fraction = (uint64_t)now.tv_nsec / UINT64_C(1000000);
+    *value = fraction > UINT64_MAX - milliseconds
+                 ? UINT64_MAX
+                 : milliseconds + fraction;
+    return true;
 }
 
 static bool translate_native_event(const struct wscons_event *native,
+                                   uint64_t read_milliseconds,
                                    struct nb_wscons_raw_event *raw)
 {
     memset(raw, 0, sizeof(*raw));
     raw->value = native->value;
-    raw->milliseconds = event_milliseconds(&native->time);
+    raw->milliseconds = read_milliseconds;
     switch (native->type) {
     case WSCONS_EVENT_KEY_UP:
         raw->type = NB_WSCONS_RAW_EVENT_KEY_UP;
@@ -580,8 +728,10 @@ enum nb_host_event_status nb_wscons_input_poll(
         struct wscons_event native;
         struct nb_wscons_raw_event raw;
         enum nb_wscons_reduce_result reduced;
+        uint64_t read_milliseconds;
         int selected;
         int result;
+        int timestamp_error = 0;
         ssize_t count;
 
         descriptors[0].fd = input->keyboard_fd;
@@ -640,7 +790,17 @@ enum nb_host_event_status nb_wscons_input_poll(
                              system_error,
                              event);
         }
-        if (!translate_native_event(&native, &raw)) {
+        saturating_increment(&input->reducer.stats.native_events_read);
+        if (!monotonic_milliseconds(&read_milliseconds,
+                                    &timestamp_error)) {
+            return fail_poll(input,
+                             "Could not timestamp wscons input",
+                             timestamp_error,
+                             event);
+        }
+        if (!translate_native_event(&native, read_milliseconds, &raw)) {
+            saturating_increment(
+                &input->reducer.stats.untranslated_native_events);
             continue;
         }
         reduced = nb_wscons_input_reducer_apply(&input->reducer,
@@ -709,12 +869,29 @@ bool nb_wscons_input_set_bounds(struct nb_wscons_input *input,
                                               logical_height);
 }
 
+bool nb_wscons_input_set_pointer_sensitivity(
+    struct nb_wscons_input *input,
+    unsigned int sensitivity_percent)
+{
+    return input != NULL && !input->active &&
+           nb_wscons_input_reducer_set_pointer_sensitivity(
+               &input->reducer,
+               sensitivity_percent);
+}
+
 bool nb_wscons_input_get_position(const struct nb_wscons_input *input,
                                   int *x,
                                   int *y)
 {
     return input != NULL &&
            nb_wscons_input_reducer_get_position(&input->reducer, x, y);
+}
+
+bool nb_wscons_input_get_stats(const struct nb_wscons_input *input,
+                               struct nb_wscons_input_stats *stats)
+{
+    return input != NULL &&
+           nb_wscons_input_reducer_get_stats(&input->reducer, stats);
 }
 
 bool nb_wscons_input_get_last_error(const struct nb_wscons_input *input,

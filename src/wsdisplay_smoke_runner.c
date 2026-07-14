@@ -622,11 +622,24 @@ struct nb_smoke_frame_source {
     struct nb_desktop_runtime *runtime;
 };
 
+struct nb_smoke_input_latency {
+    uint64_t dirty_read_milliseconds;
+    uint64_t pending_read_milliseconds;
+    uint64_t samples;
+    uint64_t total_milliseconds;
+    uint64_t minimum_milliseconds;
+    uint64_t maximum_milliseconds;
+    uint64_t regressions;
+    bool dirty_valid;
+    bool pending_valid;
+};
+
 struct nb_smoke_worker {
     const struct nb_wsdisplay_smoke_options *options;
     struct nb_host *host;
     struct nb_wscons_input *input;
     struct nb_smoke_frame_source source;
+    struct nb_smoke_input_latency input_latency;
     struct nb_host_output output;
     uint64_t next_serial;
     uint64_t pending_serial;
@@ -695,6 +708,121 @@ static void print_input_error(struct nb_wscons_input *input,
         }
     } else {
         fprintf(stderr, "%s\n", operation);
+    }
+}
+
+static void clear_input_latency_associations(struct nb_smoke_worker *worker)
+{
+    worker->input_latency.dirty_valid = false;
+    worker->input_latency.pending_valid = false;
+}
+
+static void remember_redraw_input(struct nb_smoke_worker *worker,
+                                  uint64_t read_milliseconds)
+{
+    if (!worker->options->wscons_input_stats) {
+        return;
+    }
+    if (!worker->input_latency.dirty_valid ||
+        read_milliseconds <
+            worker->input_latency.dirty_read_milliseconds) {
+        worker->input_latency.dirty_read_milliseconds = read_milliseconds;
+        worker->input_latency.dirty_valid = true;
+    }
+}
+
+static void submit_redraw_input(struct nb_smoke_worker *worker)
+{
+    if (!worker->input_latency.dirty_valid) {
+        worker->input_latency.pending_valid = false;
+        return;
+    }
+    worker->input_latency.pending_read_milliseconds =
+        worker->input_latency.dirty_read_milliseconds;
+    worker->input_latency.pending_valid = true;
+    worker->input_latency.dirty_valid = false;
+}
+
+static void add_input_latency_sample(struct nb_smoke_worker *worker,
+                                     uint64_t completion_milliseconds)
+{
+    struct nb_smoke_input_latency *latency = &worker->input_latency;
+    uint64_t elapsed;
+
+    if (!latency->pending_valid) {
+        return;
+    }
+    latency->pending_valid = false;
+    if (completion_milliseconds < latency->pending_read_milliseconds) {
+        if (latency->regressions != UINT64_MAX) {
+            ++latency->regressions;
+        }
+        return;
+    }
+    elapsed = completion_milliseconds - latency->pending_read_milliseconds;
+    if (latency->samples == 0 || elapsed < latency->minimum_milliseconds) {
+        latency->minimum_milliseconds = elapsed;
+    }
+    if (elapsed > latency->maximum_milliseconds) {
+        latency->maximum_milliseconds = elapsed;
+    }
+    latency->total_milliseconds =
+        elapsed > UINT64_MAX - latency->total_milliseconds
+            ? UINT64_MAX
+            : latency->total_milliseconds + elapsed;
+    if (latency->samples != UINT64_MAX) {
+        ++latency->samples;
+    }
+}
+
+static void print_input_stats(const struct nb_smoke_worker *worker)
+{
+    struct nb_wscons_input_stats stats;
+    uint64_t span = 0;
+
+    if (!worker->options->wscons_input_stats || worker->input == NULL ||
+        !nb_wscons_input_get_stats(worker->input, &stats)) {
+        return;
+    }
+    if (stats.relative_events != 0 &&
+        stats.last_motion_milliseconds >= stats.first_motion_milliseconds) {
+        span = stats.last_motion_milliseconds -
+               stats.first_motion_milliseconds;
+    }
+    puts("wscons input stats:");
+    printf("  sensitivity: %u%%\n",
+           worker->options->wscons_pointer_sensitivity_percent);
+    printf("  native: read=%llu untranslated=%llu\n",
+           (unsigned long long)stats.native_events_read,
+           (unsigned long long)stats.untranslated_native_events);
+    printf("  motion: relative=%llu unit=%llu emitted=%llu "
+           "suppressed=%llu clamped=%llu\n",
+           (unsigned long long)stats.relative_events,
+           (unsigned long long)stats.unit_relative_events,
+           (unsigned long long)stats.emitted_motion_events,
+           (unsigned long long)stats.suppressed_motion_events,
+           (unsigned long long)stats.clamped_motion_events);
+    printf("  distance: raw=(%llu,%llu) logical=(%llu,%llu)\n",
+           (unsigned long long)stats.raw_distance_x,
+           (unsigned long long)stats.raw_distance_y,
+           (unsigned long long)stats.logical_distance_x,
+           (unsigned long long)stats.logical_distance_y);
+    printf("  timing: span=%llu ms max-gap=%llu ms regressions=%llu\n",
+           (unsigned long long)span,
+           (unsigned long long)stats.maximum_motion_gap_milliseconds,
+           (unsigned long long)stats.timestamp_regressions);
+    if (worker->input_latency.samples == 0) {
+        puts("  read-to-frame-complete: samples=0");
+    } else {
+        printf("  read-to-frame-complete: samples=%llu min=%llu ms "
+               "average=%llu ms max=%llu ms regressions=%llu\n",
+               (unsigned long long)worker->input_latency.samples,
+               (unsigned long long)worker->input_latency.minimum_milliseconds,
+               (unsigned long long)(
+                   worker->input_latency.total_milliseconds /
+                   worker->input_latency.samples),
+               (unsigned long long)worker->input_latency.maximum_milliseconds,
+               (unsigned long long)worker->input_latency.regressions);
     }
 }
 
@@ -803,6 +931,7 @@ static bool configure_content(struct nb_smoke_worker *worker)
             return false;
         }
     }
+    clear_input_latency_associations(worker);
     worker->pending_serial = 0;
     worker->redraw_needed = true;
     return true;
@@ -867,6 +996,7 @@ static bool try_present_content(struct nb_smoke_worker *worker)
         return false;
     }
     worker->pending_serial = worker->next_serial;
+    submit_redraw_input(worker);
     ++worker->next_serial;
     worker->redraw_needed = false;
     return true;
@@ -875,6 +1005,8 @@ static bool try_present_content(struct nb_smoke_worker *worker)
 static bool process_input_event(struct nb_smoke_worker *worker,
                                 const struct nb_host_event *event)
 {
+    bool redraw;
+
     if (runtime_content(worker->options->content)) {
         struct nb_desktop_runtime_update update;
 
@@ -886,6 +1018,7 @@ static bool process_input_event(struct nb_smoke_worker *worker,
             return false;
         }
         apply_runtime_update(worker, &update);
+        redraw = update.redraw;
     } else {
         struct nb_desktop_preview_update update;
 
@@ -898,6 +1031,10 @@ static bool process_input_event(struct nb_smoke_worker *worker,
         worker->redraw_needed = worker->redraw_needed || update.redraw;
         worker->user_exit_requested =
             worker->user_exit_requested || update.exit_requested;
+        redraw = update.redraw;
+    }
+    if (redraw) {
+        remember_redraw_input(worker, event->milliseconds);
     }
     return true;
 }
@@ -926,6 +1063,7 @@ static bool process_worker_host_event(struct nb_smoke_worker *worker,
     case NB_HOST_EVENT_FRAME_COMPLETE:
         if (event->data.frame_complete.frame_serial ==
             worker->pending_serial) {
+            add_input_latency_sample(worker, event->milliseconds);
             worker->pending_serial = 0;
             worker->frame_completed = true;
             if (runtime_content(worker->options->content)) {
@@ -945,6 +1083,7 @@ static bool process_worker_host_event(struct nb_smoke_worker *worker,
         if (worker->input != NULL) {
             nb_wscons_input_suspend(worker->input);
         }
+        clear_input_latency_associations(worker);
         worker->pending_serial = 0;
         worker->redraw_needed = true;
         result = nb_host_complete_console_release(worker->host);
@@ -1078,6 +1217,9 @@ static int run_worker(const struct nb_wsdisplay_smoke_options *options,
         worker.input = nb_wscons_input_create(worker.output.logical_width,
                                                worker.output.logical_height);
         if (worker.input == NULL ||
+            !nb_wscons_input_set_pointer_sensitivity(
+                worker.input,
+                options->wscons_pointer_sensitivity_percent) ||
             !nb_wscons_input_resume(worker.input)) {
             print_input_error(worker.input, "Could not acquire wscons input");
             goto cleanup;
@@ -1141,6 +1283,7 @@ static int run_worker(const struct nb_wsdisplay_smoke_options *options,
     }
 
 cleanup:
+    print_input_stats(&worker);
     if (worker.input != NULL) {
         nb_wscons_input_destroy(worker.input);
     }
@@ -1377,6 +1520,18 @@ int nb_wsdisplay_smoke_run(
         options->content != NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW &&
         options->content != NB_WSDISPLAY_SMOKE_CONTENT_RUNTIME_PREVIEW) {
         fputs("Invalid wsdisplay smoke content selection\n", stderr);
+        return 2;
+    }
+    if ((interactive_content(options->content) &&
+         (options->wscons_pointer_sensitivity_percent <
+              NB_WSDISPLAY_SMOKE_MIN_POINTER_SENSITIVITY_PERCENT ||
+          options->wscons_pointer_sensitivity_percent >
+              NB_WSDISPLAY_SMOKE_MAX_POINTER_SENSITIVITY_PERCENT)) ||
+        (!interactive_content(options->content) &&
+         (options->wscons_pointer_sensitivity_percent !=
+              NB_WSDISPLAY_SMOKE_DEFAULT_POINTER_SENSITIVITY_PERCENT ||
+          options->wscons_input_stats))) {
+        fputs("Invalid wscons input tuning selection\n", stderr);
         return 2;
     }
     if (options->action != NB_WSDISPLAY_SMOKE_ACTION_RUN &&

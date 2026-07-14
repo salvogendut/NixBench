@@ -287,6 +287,10 @@ runtime used by the SDL frontend, including the real NixInfo application and
 application-owned global menus; Wayland publication remains disabled. Its
 unsupported-platform stub is covered by normal tests, and the NetBSD branch
 compiles against the official NetBSD 10.1 amd64 headers under strict warnings.
+Raw wscons motion now has opt-in 25..400% fixed-point sensitivity with an
+identity 100% library default; the guided X220 comparison selects 150% and
+prints raw/logical counters plus monotonic userspace-read-to-framebuffer-copy-
+complete measurements. Hosted SDL coordinates are never scaled.
 This is still a bounded hardware-validation mode rather than a desktop session:
 broader hardware validation, complete wscons keymap/seat/hotplug support,
 failure-injection tests, privilege separation, and a separate privileged

@@ -63,6 +63,43 @@ static bool parse_duration(
     return true;
 }
 
+static bool parse_pointer_sensitivity(
+    const char *text,
+    uint32_t *sensitivity_percent,
+    char error[NB_WSDISPLAY_SMOKE_ERROR_CAPACITY])
+{
+    char *end = NULL;
+    const char *character;
+    unsigned long value;
+
+    if (text == NULL || text[0] == '\0' || text[0] == '-' ||
+        text[0] == '+') {
+        set_error(error,
+                  "Pointer sensitivity must be an unsigned decimal integer");
+        return false;
+    }
+    for (character = text; *character != '\0'; ++character) {
+        if (*character < '0' || *character > '9') {
+            set_error(error,
+                      "Pointer sensitivity must be an unsigned decimal integer");
+            return false;
+        }
+    }
+    errno = 0;
+    value = strtoul(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || value > UINT32_MAX) {
+        set_error(error, "Invalid pointer sensitivity");
+        return false;
+    }
+    if (value < NB_WSDISPLAY_SMOKE_MIN_POINTER_SENSITIVITY_PERCENT ||
+        value > NB_WSDISPLAY_SMOKE_MAX_POINTER_SENSITIVITY_PERCENT) {
+        set_error(error, "Pointer sensitivity is outside the 25..400 percent range");
+        return false;
+    }
+    *sensitivity_percent = (uint32_t)value;
+    return true;
+}
+
 void nb_wsdisplay_smoke_options_init(
     struct nb_wsdisplay_smoke_options *options)
 {
@@ -74,6 +111,8 @@ void nb_wsdisplay_smoke_options_init(
     options->status_device_path = default_status_device;
     options->screen_device_prefix = default_screen_prefix;
     options->duration_ms = NB_WSDISPLAY_SMOKE_DEFAULT_DURATION_MS;
+    options->wscons_pointer_sensitivity_percent =
+        NB_WSDISPLAY_SMOKE_DEFAULT_POINTER_SENSITIVITY_PERCENT;
 }
 
 static bool select_action(
@@ -99,6 +138,7 @@ bool nb_wsdisplay_smoke_parse_options(
 {
     bool action_selected = false;
     bool duration_selected = false;
+    bool pointer_sensitivity_selected = false;
     bool content_selected = false;
     bool status_selected = false;
     bool prefix_selected = false;
@@ -187,6 +227,29 @@ bool nb_wsdisplay_smoke_parse_options(
                 return false;
             }
             duration_selected = true;
+        } else if (strcmp(argv[index],
+                          "--wscons-pointer-sensitivity-percent") == 0) {
+            const char *value;
+
+            if (pointer_sensitivity_selected) {
+                set_error(error,
+                          "Duplicate --wscons-pointer-sensitivity-percent option");
+                return false;
+            }
+            if (!option_value(argc, argv, &index, &value, error) ||
+                !parse_pointer_sensitivity(
+                    value,
+                    &options->wscons_pointer_sensitivity_percent,
+                    error)) {
+                return false;
+            }
+            pointer_sensitivity_selected = true;
+        } else if (strcmp(argv[index], "--wscons-input-stats") == 0) {
+            if (options->wscons_input_stats) {
+                set_error(error, "Duplicate --wscons-input-stats option");
+                return false;
+            }
+            options->wscons_input_stats = true;
         } else if (strcmp(argv[index], "--status-device") == 0) {
             if (status_selected ||
                 !option_value(argc,
@@ -234,9 +297,18 @@ bool nb_wsdisplay_smoke_parse_options(
     if (options->action != NB_WSDISPLAY_SMOKE_ACTION_RUN &&
         (options->acknowledge_console_takeover ||
          options->acknowledge_no_crash_watchdog || duration_selected ||
-         content_selected)) {
+         content_selected || pointer_sensitivity_selected ||
+         options->wscons_input_stats)) {
         set_error(error,
-                  "Run acknowledgements, content, and duration apply only to takeover");
+                  "Run acknowledgements, content, duration, and wscons options apply only to takeover");
+        return false;
+    }
+    if (options->action == NB_WSDISPLAY_SMOKE_ACTION_RUN &&
+        (pointer_sensitivity_selected || options->wscons_input_stats) &&
+        options->content != NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW &&
+        options->content != NB_WSDISPLAY_SMOKE_CONTENT_RUNTIME_PREVIEW) {
+        set_error(error,
+                  "wscons tuning requires --interactive-preview or --runtime-preview");
         return false;
     }
     if ((options->action == NB_WSDISPLAY_SMOKE_ACTION_HELP ||

@@ -26,6 +26,9 @@ static void print_usage(const char *program_name)
     puts("  --interactive-preview              add wscons cursor, drag, and Escape");
     puts("  --runtime-preview                  run the shared desktop runtime");
     puts("  --duration-ms N                    250..30000 (default 3000)");
+    puts("  --wscons-pointer-sensitivity-percent N");
+    puts("                                      25..400 (default 100)");
+    puts("  --wscons-input-stats               report raw input counters");
     puts("  The default content is the framebuffer diagnostic pattern.");
     puts("\nPath options:");
     puts("  --status-device PATH               default /dev/ttyEstat");

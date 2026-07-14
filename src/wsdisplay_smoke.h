@@ -11,6 +11,9 @@ enum {
     NB_WSDISPLAY_SMOKE_MIN_DURATION_MS = 250,
     NB_WSDISPLAY_SMOKE_DEFAULT_DURATION_MS = 3000,
     NB_WSDISPLAY_SMOKE_MAX_DURATION_MS = 30000,
+    NB_WSDISPLAY_SMOKE_MIN_POINTER_SENSITIVITY_PERCENT = 25,
+    NB_WSDISPLAY_SMOKE_DEFAULT_POINTER_SENSITIVITY_PERCENT = 100,
+    NB_WSDISPLAY_SMOKE_MAX_POINTER_SENSITIVITY_PERCENT = 400,
     NB_WSDISPLAY_SMOKE_ERROR_CAPACITY = 256
 };
 
@@ -35,8 +38,10 @@ struct nb_wsdisplay_smoke_options {
     const char *screen_device_prefix;
     enum nb_wsdisplay_smoke_content content;
     uint32_t duration_ms;
+    uint32_t wscons_pointer_sensitivity_percent;
     bool acknowledge_console_takeover;
     bool acknowledge_no_crash_watchdog;
+    bool wscons_input_stats;
 };
 
 struct nb_wsdisplay_smoke_image {

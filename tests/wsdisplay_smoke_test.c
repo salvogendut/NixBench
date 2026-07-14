@@ -83,6 +83,9 @@ static void test_parser_takeover(void)
                 &options,
                 error));
     CHECK(options.content == NB_WSDISPLAY_SMOKE_CONTENT_DIAGNOSTIC);
+    CHECK(options.wscons_pointer_sensitivity_percent ==
+          NB_WSDISPLAY_SMOKE_DEFAULT_POINTER_SENSITIVITY_PERCENT);
+    CHECK(!options.wscons_input_stats);
     CHECK(parse((int)(sizeof(run) / sizeof(run[0])),
                 run,
                 &options,
@@ -105,6 +108,125 @@ static void test_parser_takeover(void)
                 &options,
                 error));
     CHECK(options.content == NB_WSDISPLAY_SMOKE_CONTENT_RUNTIME_PREVIEW);
+}
+
+static void test_parser_wscons_tuning(void)
+{
+    struct nb_wsdisplay_smoke_options options;
+    char error[NB_WSDISPLAY_SMOKE_ERROR_CAPACITY];
+    char *interactive[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--interactive-preview",
+        "--wscons-pointer-sensitivity-percent", "150",
+        "--wscons-input-stats"
+    };
+    char *minimum[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--runtime-preview",
+        "--wscons-pointer-sensitivity-percent", "25"
+    };
+    char *maximum[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--runtime-preview",
+        "--wscons-pointer-sensitivity-percent", "400"
+    };
+    char *low[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--interactive-preview",
+        "--wscons-pointer-sensitivity-percent", "24"
+    };
+    char *high[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--interactive-preview",
+        "--wscons-pointer-sensitivity-percent", "401"
+    };
+    char *plus[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--interactive-preview",
+        "--wscons-pointer-sensitivity-percent", "+100"
+    };
+    char *minus[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--interactive-preview",
+        "--wscons-pointer-sensitivity-percent", "-100"
+    };
+    char *junk[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--interactive-preview",
+        "--wscons-pointer-sensitivity-percent", "100x"
+    };
+    char *leading_space[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--interactive-preview",
+        "--wscons-pointer-sensitivity-percent", " 100"
+    };
+    char *missing[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--interactive-preview",
+        "--wscons-pointer-sensitivity-percent"
+    };
+    char *duplicate_sensitivity[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--runtime-preview",
+        "--wscons-pointer-sensitivity-percent", "100",
+        "--wscons-pointer-sensitivity-percent", "200"
+    };
+    char *duplicate_stats[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--runtime-preview",
+        "--wscons-input-stats", "--wscons-input-stats"
+    };
+    char *diagnostic_sensitivity[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog",
+        "--wscons-pointer-sensitivity-percent", "100"
+    };
+    char *diagnostic_stats[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--wscons-input-stats"
+    };
+    char *desktop_stats[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--desktop-preview",
+        "--wscons-input-stats"
+    };
+    char *preflight_sensitivity[] = {
+        "smoke", "--preflight-only",
+        "--wscons-pointer-sensitivity-percent", "100"
+    };
+    char *recover_stats[] = {
+        "smoke", "--recover", "--wscons-input-stats"
+    };
+    char *help_stats[] = {
+        "smoke", "--help", "--wscons-input-stats"
+    };
+
+    CHECK(parse(7, interactive, &options, error));
+    CHECK(options.wscons_pointer_sensitivity_percent == 150);
+    CHECK(options.wscons_input_stats);
+    CHECK(parse(6, minimum, &options, error));
+    CHECK(options.wscons_pointer_sensitivity_percent ==
+          NB_WSDISPLAY_SMOKE_MIN_POINTER_SENSITIVITY_PERCENT);
+    CHECK(!options.wscons_input_stats);
+    CHECK(parse(6, maximum, &options, error));
+    CHECK(options.wscons_pointer_sensitivity_percent ==
+          NB_WSDISPLAY_SMOKE_MAX_POINTER_SENSITIVITY_PERCENT);
+
+    CHECK(!parse(6, low, &options, error));
+    CHECK(!parse(6, high, &options, error));
+    CHECK(!parse(6, plus, &options, error));
+    CHECK(!parse(6, minus, &options, error));
+    CHECK(!parse(6, junk, &options, error));
+    CHECK(!parse(6, leading_space, &options, error));
+    CHECK(!parse(5, missing, &options, error));
+    CHECK(!parse(8, duplicate_sensitivity, &options, error));
+    CHECK(!parse(6, duplicate_stats, &options, error));
+    CHECK(!parse(5, diagnostic_sensitivity, &options, error));
+    CHECK(!parse(4, diagnostic_stats, &options, error));
+    CHECK(!parse(5, desktop_stats, &options, error));
+    CHECK(!parse(4, preflight_sensitivity, &options, error));
+    CHECK(!parse(3, recover_stats, &options, error));
+    CHECK(!parse(3, help_stats, &options, error));
 }
 
 static void test_parser_rejections(void)
@@ -273,6 +395,7 @@ int main(void)
 {
     test_parser_safe_actions();
     test_parser_takeover();
+    test_parser_wscons_tuning();
     test_parser_rejections();
     test_vt_number_translation();
     test_pattern();

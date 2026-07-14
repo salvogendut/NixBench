@@ -40,6 +40,10 @@ static void test_initialization_and_bounds(void)
     CHECK(!nb_wscons_input_reducer_init(&reducer, 0, 80));
     CHECK(!nb_wscons_input_reducer_init(&reducer, 100, -1));
     CHECK(nb_wscons_input_reducer_init(&reducer, 100, 80));
+    CHECK(reducer.pointer_sensitivity_percent ==
+          NB_WSCONS_POINTER_SENSITIVITY_DEFAULT_PERCENT);
+    CHECK(reducer.pointer_remainder_x == 0);
+    CHECK(reducer.pointer_remainder_y == 0);
     CHECK(nb_wscons_input_reducer_get_position(&reducer, &x, &y));
     CHECK(x == 49);
     CHECK(y == 39);
@@ -57,6 +61,25 @@ static void test_initialization_and_bounds(void)
     CHECK(!nb_wscons_input_reducer_set_escape_keycode(&reducer, -1));
     CHECK(nb_wscons_input_reducer_set_escape_keycode(&reducer, 42));
     CHECK(reducer.escape_keycode == 42);
+    CHECK(!nb_wscons_input_reducer_set_pointer_sensitivity(NULL, 100));
+    CHECK(!nb_wscons_input_reducer_set_pointer_sensitivity(
+        &reducer,
+        NB_WSCONS_POINTER_SENSITIVITY_MIN_PERCENT - 1U));
+    CHECK(!nb_wscons_input_reducer_set_pointer_sensitivity(
+        &reducer,
+        NB_WSCONS_POINTER_SENSITIVITY_MAX_PERCENT + 1U));
+    CHECK(reducer.pointer_sensitivity_percent ==
+          NB_WSCONS_POINTER_SENSITIVITY_DEFAULT_PERCENT);
+    CHECK(nb_wscons_input_reducer_set_pointer_sensitivity(
+        &reducer,
+        NB_WSCONS_POINTER_SENSITIVITY_MIN_PERCENT));
+    CHECK(reducer.pointer_sensitivity_percent ==
+          NB_WSCONS_POINTER_SENSITIVITY_MIN_PERCENT);
+    CHECK(nb_wscons_input_reducer_set_pointer_sensitivity(
+        &reducer,
+        NB_WSCONS_POINTER_SENSITIVITY_MAX_PERCENT));
+    CHECK(reducer.pointer_sensitivity_percent ==
+          NB_WSCONS_POINTER_SENSITIVITY_MAX_PERCENT);
 }
 
 static void test_relative_pointer_motion(void)
@@ -127,6 +150,339 @@ static void test_relative_pointer_motion(void)
                 50,
                 108,
                 &event) == NB_WSCONS_REDUCE_IGNORED);
+}
+
+static void test_fractional_pointer_sensitivity(void)
+{
+    struct nb_wscons_input_reducer reducer;
+    struct nb_host_event event;
+
+    CHECK(nb_wscons_input_reducer_init(&reducer, 1000, 1000));
+    CHECK(nb_wscons_input_reducer_set_pointer_sensitivity(&reducer, 150));
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                110,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.data.pointer_motion.x == 500);
+    CHECK(reducer.pointer_remainder_x == 50);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                111,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.data.pointer_motion.x == 502);
+    CHECK(reducer.pointer_remainder_x == 0);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                112,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.data.pointer_motion.x == 503);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                113,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.data.pointer_motion.x == 505);
+
+    reducer.pointer_x = 500;
+    nb_wscons_input_reducer_reset(&reducer);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                -1,
+                114,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.data.pointer_motion.x == 499);
+    CHECK(reducer.pointer_remainder_x == -50);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                -1,
+                115,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.data.pointer_motion.x == 497);
+    CHECK(reducer.pointer_remainder_x == 0);
+
+    reducer.pointer_x = 500;
+    nb_wscons_input_reducer_reset(&reducer);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                116,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                -1,
+                117,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.data.pointer_motion.x == 500);
+    CHECK(reducer.pointer_remainder_x == 0);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                118,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                -1,
+                119,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.data.pointer_motion.x == 500);
+    CHECK(reducer.pointer_remainder_x == 0);
+
+    reducer.pointer_x = 500;
+    reducer.pointer_y = 500;
+    nb_wscons_input_reducer_reset(&reducer);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                120,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(reducer.pointer_x == 501);
+    CHECK(reducer.pointer_remainder_x == 50);
+    CHECK(reducer.pointer_remainder_y == 0);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_Y,
+                1,
+                121,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(reducer.pointer_y == 499);
+    CHECK(reducer.pointer_remainder_x == 50);
+    CHECK(reducer.pointer_remainder_y == 50);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                122,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(reducer.pointer_x == 503);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_Y,
+                1,
+                123,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(reducer.pointer_y == 497);
+    CHECK(reducer.pointer_remainder_x == 0);
+    CHECK(reducer.pointer_remainder_y == 0);
+
+    reducer.pointer_x = 500;
+    CHECK(nb_wscons_input_reducer_set_pointer_sensitivity(&reducer, 150));
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                124,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(reducer.pointer_remainder_x == 50);
+    CHECK(nb_wscons_input_reducer_set_pointer_sensitivity(&reducer, 175));
+    CHECK(reducer.pointer_remainder_x == 0);
+    CHECK(reducer.pointer_remainder_y == 0);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                125,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.data.pointer_motion.x == 502);
+    CHECK(reducer.pointer_remainder_x == 75);
+    nb_wscons_input_reducer_reset(&reducer);
+    CHECK(reducer.pointer_remainder_x == 0);
+    CHECK(reducer.pointer_remainder_y == 0);
+
+    reducer.pointer_x = 500;
+    CHECK(nb_wscons_input_reducer_set_pointer_sensitivity(&reducer, 25));
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                126,
+                &event) == NB_WSCONS_REDUCE_IGNORED);
+    CHECK(reducer.pointer_remainder_x == 25);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                127,
+                &event) == NB_WSCONS_REDUCE_IGNORED);
+    CHECK(reducer.pointer_remainder_x == 50);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                128,
+                &event) == NB_WSCONS_REDUCE_IGNORED);
+    CHECK(reducer.pointer_remainder_x == 75);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                129,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.data.pointer_motion.x == 501);
+    CHECK(reducer.pointer_remainder_x == 0);
+}
+
+static void test_pointer_sensitivity_edges(void)
+{
+    struct nb_wscons_input_reducer reducer;
+    struct nb_host_event event;
+    struct nb_wscons_input_stats stats;
+
+    CHECK(nb_wscons_input_reducer_init(&reducer, 10, 10));
+    CHECK(nb_wscons_input_reducer_set_pointer_sensitivity(&reducer, 150));
+    reducer.pointer_x = 9;
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                130,
+                &event) == NB_WSCONS_REDUCE_IGNORED);
+    CHECK(reducer.pointer_x == 9);
+    CHECK(reducer.pointer_remainder_x == 0);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                -1,
+                131,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.data.pointer_motion.x == 8);
+    CHECK(reducer.pointer_remainder_x == -50);
+
+    reducer.pointer_x = 9;
+    CHECK(nb_wscons_input_reducer_set_pointer_sensitivity(&reducer, 25));
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                132,
+                &event) == NB_WSCONS_REDUCE_IGNORED);
+    CHECK(reducer.pointer_remainder_x == 0);
+    reducer.pointer_y = 0;
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_Y,
+                1,
+                133,
+                &event) == NB_WSCONS_REDUCE_IGNORED);
+    CHECK(reducer.pointer_remainder_y == 0);
+
+    reducer.pointer_x = 4;
+    reducer.pointer_y = 4;
+    CHECK(nb_wscons_input_reducer_set_pointer_sensitivity(&reducer, 150));
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                134,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(reducer.pointer_remainder_x == 50);
+    CHECK(nb_wscons_input_reducer_set_bounds(&reducer, 8, 8));
+    CHECK(reducer.pointer_remainder_x == 0);
+    CHECK(reducer.pointer_remainder_y == 0);
+
+    reducer.pointer_x = 7;
+    CHECK(nb_wscons_input_reducer_set_pointer_sensitivity(&reducer, 400));
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                INT_MAX,
+                135,
+                &event) == NB_WSCONS_REDUCE_IGNORED);
+    CHECK(reducer.pointer_remainder_x == 0);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                -1,
+                136,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.data.pointer_motion.x == 3);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                INT_MIN,
+                137,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.data.pointer_motion.x == 0);
+    CHECK(nb_host_event_is_valid(&event));
+    reducer.pointer_y = 4;
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_Y,
+                INT_MIN,
+                138,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.data.pointer_motion.y == 7);
+    CHECK(nb_host_event_is_valid(&event));
+
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.clamped_motion_events >= 5);
+    CHECK(stats.suppressed_motion_events >= 4);
+}
+
+static void test_pointer_statistics(void)
+{
+    struct nb_wscons_input_reducer reducer;
+    struct nb_host_event event;
+    struct nb_wscons_input_stats stats;
+    struct nb_wscons_input_stats saved;
+
+    CHECK(nb_wscons_input_reducer_init(&reducer, 1000, 1000));
+    CHECK(nb_wscons_input_reducer_set_pointer_sensitivity(&reducer, 150));
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                100,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                104,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_Y,
+                -2,
+                110,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                0,
+                109,
+                &event) == NB_WSCONS_REDUCE_IGNORED);
+    reducer.pointer_x = 999;
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                120,
+                &event) == NB_WSCONS_REDUCE_IGNORED);
+
+    memset(&stats, 0xa5, sizeof(stats));
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.native_events_read == 0);
+    CHECK(stats.untranslated_native_events == 0);
+    CHECK(stats.relative_events == 5);
+    CHECK(stats.unit_relative_events == 3);
+    CHECK(stats.emitted_motion_events == 3);
+    CHECK(stats.suppressed_motion_events == 2);
+    CHECK(stats.clamped_motion_events == 1);
+    CHECK(stats.raw_distance_x == 3);
+    CHECK(stats.raw_distance_y == 2);
+    CHECK(stats.logical_distance_x == 3);
+    CHECK(stats.logical_distance_y == 3);
+    CHECK(stats.first_motion_milliseconds == 100);
+    CHECK(stats.last_motion_milliseconds == 120);
+    CHECK(stats.maximum_motion_gap_milliseconds == 11);
+    CHECK(stats.timestamp_regressions == 1);
+    saved = stats;
+
+    nb_wscons_input_reducer_reset(&reducer);
+    CHECK(nb_wscons_input_reducer_set_bounds(&reducer, 800, 800));
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(memcmp(&stats, &saved, sizeof(stats)) == 0);
+    CHECK(!nb_wscons_input_reducer_get_stats(NULL, &stats));
+    CHECK(!nb_wscons_input_reducer_get_stats(&reducer, NULL));
+
+    reducer.pointer_x = 400;
+    reducer.stats.relative_events = UINT64_MAX;
+    reducer.stats.unit_relative_events = UINT64_MAX;
+    reducer.stats.emitted_motion_events = UINT64_MAX;
+    reducer.stats.raw_distance_x = UINT64_MAX - UINT64_C(1);
+    reducer.stats.logical_distance_x = UINT64_MAX - UINT64_C(1);
+    CHECK(nb_wscons_input_reducer_set_pointer_sensitivity(&reducer, 400));
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                INT_MAX,
+                121,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.relative_events == UINT64_MAX);
+    CHECK(stats.unit_relative_events == UINT64_MAX);
+    CHECK(stats.emitted_motion_events == UINT64_MAX);
+    CHECK(stats.raw_distance_x == UINT64_MAX);
+    CHECK(stats.logical_distance_x == UINT64_MAX);
 }
 
 static void test_pointer_buttons(void)
@@ -288,6 +644,7 @@ static void test_live_provider_without_devices(void)
 {
     struct nb_wscons_input *input;
     struct nb_host_event event;
+    struct nb_wscons_input_stats stats;
     char message[NB_WSCONS_INPUT_ERROR_CAPACITY];
     int system_error = 0;
     int x = -1;
@@ -300,6 +657,16 @@ static void test_live_provider_without_devices(void)
         return;
     }
     CHECK(!nb_wscons_input_is_active(input));
+    CHECK(!nb_wscons_input_set_pointer_sensitivity(
+        NULL,
+        NB_WSCONS_POINTER_SENSITIVITY_DEFAULT_PERCENT));
+    CHECK(!nb_wscons_input_set_pointer_sensitivity(
+        input,
+        NB_WSCONS_POINTER_SENSITIVITY_MIN_PERCENT - 1U));
+    CHECK(!nb_wscons_input_set_pointer_sensitivity(
+        input,
+        NB_WSCONS_POINTER_SENSITIVITY_MAX_PERCENT + 1U));
+    CHECK(nb_wscons_input_set_pointer_sensitivity(input, 150));
     CHECK(nb_wscons_input_get_position(input, &x, &y));
     CHECK(x == 9);
     CHECK(y == 4);
@@ -326,7 +693,17 @@ static void test_live_provider_without_devices(void)
     CHECK(message[0] != '\0');
 #endif
 
+    memset(&stats, 0xa5, sizeof(stats));
+    CHECK(nb_wscons_input_get_stats(input, &stats));
+    CHECK(stats.native_events_read == 0);
+    CHECK(stats.untranslated_native_events == 0);
+    CHECK(stats.relative_events == 0);
+    CHECK(!nb_wscons_input_get_stats(NULL, &stats));
+    CHECK(!nb_wscons_input_get_stats(input, NULL));
     nb_wscons_input_suspend(input);
+    CHECK(nb_wscons_input_set_pointer_sensitivity(input, 175));
+    CHECK(nb_wscons_input_get_stats(input, &stats));
+    CHECK(stats.relative_events == 0);
     nb_wscons_input_destroy(input);
     nb_wscons_input_destroy(NULL);
     CHECK(nb_wscons_input_poll(NULL, &event) ==
@@ -337,6 +714,9 @@ int main(void)
 {
     test_initialization_and_bounds();
     test_relative_pointer_motion();
+    test_fractional_pointer_sensitivity();
+    test_pointer_sensitivity_edges();
+    test_pointer_statistics();
     test_pointer_buttons();
     test_escape_translation();
     test_defensive_reducer();

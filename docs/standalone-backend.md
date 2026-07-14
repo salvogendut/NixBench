@@ -187,6 +187,17 @@ application and its application-owned global menus rather than the lightweight
 preview model. Wayland service publication remains disabled for this step, so
 the mode does not require X11, Wayland, or SDL video.
 
+Pointer gain remains a raw-wscons concern rather than a desktop-runtime or SDL
+policy. The provider defaults to identity 100% sensitivity; explicit
+interactive/runtime trials may select 25..400% with
+`--wscons-pointer-sensitivity-percent`. Signed per-axis fixed-point carry keeps
+small deltas symmetric and drift-free. The guided X220 trial uses 150%.
+`--wscons-input-stats` prints raw/logical distance and event-shape counters plus
+userspace-read-to-framebuffer-copy-complete timing. Live events are stamped at
+read time with `CLOCK_MONOTONIC`, matching the wsdisplay completion clock. The
+metric excludes time already spent in the device/kernel queue and does not
+measure scanout or glass latency.
+
 The unmapped parent applies a hard deadline of at most 30000 ms, terminates and
 reaps an unresponsive child, then independently restores and verifies every
 saved console property. Job-control stop signals also request supervised

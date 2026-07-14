@@ -354,6 +354,15 @@ Relative pointer motion and the left button exercise menus and window dragging;
 Escape requests an orderly early exit. Absolute-only pointer devices are not
 translated by this first research provider.
 
+Raw wscons relative motion defaults to an identity 100% sensitivity. The
+explicit `--wscons-pointer-sensitivity-percent` option accepts 25..400 and uses
+signed fixed-point carry so fractional gain does not introduce directional
+drift; it is never applied to hosted SDL input. The guided X220 runner selects
+150% for the next comparison. `--wscons-input-stats` reports raw and logical
+distance, unit deltas, suppression/clamping, event gaps, and userspace-read-to-
+framebuffer-copy-complete timing. That timing excludes device/kernel queueing,
+scanout, and physical-display latency.
+
 Preflight reads `/dev/ttyEstat` to select the active zero-based screen node;
 it does not change display state. A presentation run changes that console to
 framebuffer mode briefly and accepts only durations from 250 through 30000
@@ -372,6 +381,8 @@ sudo -n /usr/bin/timeout -s SIGTERM -k 15s 10s \
   --acknowledge-console-takeover \
   --acknowledge-no-crash-watchdog \
   --runtime-preview \
+  --wscons-pointer-sensitivity-percent 150 \
+  --wscons-input-stats \
   --duration-ms 3000
 ```
 
