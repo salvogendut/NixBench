@@ -151,7 +151,8 @@ desktop, publishes a private Wayland display, and launches NixClock. The core
 receives only a bounded anonymous protocol endpoint; NixClock does not receive
 that endpoint, and neither process receives a framebuffer, wscons, recovery,
 or VT descriptor. This new path has device-free coverage but has not yet
-completed a physical console-takeover trial; it remains an explicitly
+completed the broader failure-injection matrix. Its first physical
+console-takeover and normal-exit trial has passed, but it remains an explicitly
 acknowledged development milestone rather than a supported login session.
 
 The older `nixbench-wsdisplay-smoke` research harness deliberately remains
@@ -465,10 +466,16 @@ pass there, including the ordinary-user core integration and failed-client
 launch path. `ldd` reports only NetBSD libc for the staged root launcher; SDL3,
 Wayland, and their client-side dependencies are confined to the ordinary-user
 side. A staged-launcher preflight also confirmed screen 0 in emulation mode,
-automatic VT handling, and video on without changing display state. The new
-privilege-separated takeover itself has not yet been physically validated, so
-the guided command remains an opt-in development test rather than a
-login-session installation procedure.
+automatic VT handling, and video on without changing display state.
+
+The first physical privilege-separated trial then launched the desktop and
+NixClock through the private Wayland display as UID 1000. Normal desktop exit
+completed, the supervisor independently verified restoration, removed the
+recovery record, and postflight again found screen 0 in emulation mode with
+automatic VT handling, video on, and one-based VT 1 active. VT cycling and the
+crash, hang, malformed-protocol, and forced-supervisor cases remain separate
+hardware gates. The guided command therefore remains an opt-in development
+test rather than a login-session installation procedure.
 
 The opt-in `wsdisplay` presentation harness must run as root. Start with its
 query-only preflight:

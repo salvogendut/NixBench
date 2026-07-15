@@ -166,8 +166,9 @@ or launch external applications: its compositor and desktop run in the
 privileged worker. A separate opt-in `nixbench-wsdisplay-session` milestone now
 implements the audited root supervisor/device-helper and ordinary-user core
 split, publishes a private Wayland display, and launches NixClock after the
-credential drop. Its device-free integration path is covered, but its first
-physical console takeover is still pending. Desktop-managed installation,
+credential drop. Its device-free integration path and first physical
+console-takeover/normal-exit trial are complete. VT cycling and failure
+injection remain pending. Desktop-managed installation,
 popup/subsurface/data protocols, toolkit trials, and broader application-menu
 bridges also remain outstanding.
 
@@ -450,9 +451,11 @@ an automatic deadline under the root recovery supervisor. A second SSH session
 and the printed supervisor cancellation/manual `--recover` commands remain
 mandatory. The exact opt-in configuration now builds on NetBSD and passes all
 45 device-free tests; the staged root launcher links only NetBSD libc, and its
-query-only preflight preserved the expected console state. No physical takeover
-result is recorded for this new path yet. Its next gate is normal exit plus VT,
-core crash, stopped/hung core, malformed protocol, supervisor termination, and
+query-only preflight preserved the expected console state. The first physical
+session also launched NixClock on the private Wayland display, exited normally,
+cleared the recovery record, and restored screen 0, emulation mode, automatic
+VT handling, video on, and one-based VT 1. Its next gates are VT cycling, core
+crash, stopped/hung core, malformed protocol, supervisor termination, and
 repeated-session validation on the X220.
 Direct KMS remains a Milestone 7 deliverable but is not on that immediate
 critical path.

@@ -10,10 +10,10 @@ are replaceable platform adapters, not part of application or shell policy.
 > all-root hardware-research harness. A separate, opt-in
 > `nixbench-wsdisplay-session` milestone now splits root console ownership from
 > an ordinary-user desktop, private Wayland server, and NixClock client. Its
-> device-free integration tests pass, but this new path has not yet completed a
-> physical takeover trial and has neither complete seat/input support,
-> acceleration, nor broad hardware coverage. It is not a production login
-> session or a default crash-safe console owner.
+> device-free integration tests and first physical takeover/normal-exit trial
+> pass, but it has neither completed its failure-injection matrix nor gained
+> complete seat/input support, acceleration, or broad hardware coverage. It is
+> not a production login session or a default crash-safe console owner.
 
 ## Process and backend boundaries
 
@@ -473,15 +473,17 @@ terminated if necessary; if orderly recovery does not complete, use:
 sudo /var/run/nixbench-wsdisplay-session --recover
 ```
 
-The process split and device-free integration coverage are implemented, but a
-physical takeover with this new command has not yet been claimed. The exact
-configuration builds natively on NetBSD and passes all 45 device-free tests.
-The staged root launcher links only NetBSD libc, has verified root ownership,
-and completed query-only preflight without changing the saved console state.
-Normal exit, VT release/acquire, core crash or hang, malformed protocol, worker
-and supervisor failure, and repeated-session recovery remain NetBSD hardware
-gates. The older all-root smoke harness remains useful only for bounded
-research and does not become an application launcher.
+The process split and device-free integration coverage are implemented. The
+exact configuration builds natively on NetBSD and passes all 45 device-free
+tests. The staged root launcher links only NetBSD libc, has verified root
+ownership, and completed query-only preflight without changing the saved
+console state. The first physical takeover launched the desktop and NixClock
+through the ordinary-user private Wayland display, then completed normal exit,
+verified restoration, cleared the recovery record, and returned to one-based
+VT 1. VT release/acquire, core crash or hang, malformed protocol, worker and
+supervisor failure, and repeated-session recovery remain NetBSD hardware gates.
+The older all-root smoke harness remains useful only for bounded research and
+does not become an application launcher.
 
 ### 4. DRM/KMS, then GBM/EGL
 
