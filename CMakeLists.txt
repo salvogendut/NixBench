@@ -30,6 +30,12 @@ option(
   OFF
 )
 
+option(
+  NIXBENCH_BUILD_WSDISPLAY_SESSION
+  "Build the privilege-separated NetBSD wsdisplay session"
+  OFF
+)
+
 set(
   NIXBENCH_LIBDRM "AUTO"
   CACHE STRING "Build detailed DRM/KMS capability queries (AUTO, ON, or OFF)"
@@ -549,7 +555,11 @@ target_include_directories(
 target_link_libraries(nixbench_wscons_input PUBLIC nixbench_host)
 nixbench_configure_c_target(nixbench_wscons_input)
 
-if(BUILD_TESTING OR NIXBENCH_BUILD_WSDISPLAY_SMOKE)
+if(
+  BUILD_TESTING
+  OR NIXBENCH_BUILD_WSDISPLAY_SMOKE
+  OR NIXBENCH_BUILD_WSDISPLAY_SESSION
+)
   add_library(
     nixbench_wsdisplay_console_session STATIC
     src/wsdisplay_console_session.c
@@ -570,6 +580,34 @@ if(BUILD_TESTING OR NIXBENCH_BUILD_WSDISPLAY_SMOKE)
     PUBLIC nixbench_host
   )
   nixbench_configure_c_target(nixbench_wsdisplay_smoke_support)
+endif()
+
+if(
+  UNIX
+  AND (
+    BUILD_TESTING
+    OR NIXBENCH_BUILD_WSDISPLAY_SESSION
+  )
+)
+  add_library(
+    nixbench_session_credentials STATIC
+    src/session_credentials.c
+  )
+  target_include_directories(
+    nixbench_session_credentials
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  )
+  nixbench_configure_c_target(nixbench_session_credentials)
+
+  add_library(
+    nixbench_wsdisplay_recovery STATIC
+    src/wsdisplay_recovery.c
+  )
+  target_include_directories(
+    nixbench_wsdisplay_recovery
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  )
+  nixbench_configure_c_target(nixbench_wsdisplay_recovery)
 endif()
 
 if(NIXBENCH_BUILD_WSDISPLAY_SMOKE)
@@ -795,6 +833,28 @@ if(BUILD_TESTING)
   )
   nixbench_configure_c_target(nixbench_privsep_protocol_tests)
 
+  if(UNIX)
+    add_executable(
+      nixbench_session_credentials_tests
+      tests/session_credentials_test.c
+    )
+    target_link_libraries(
+      nixbench_session_credentials_tests
+      PRIVATE nixbench_session_credentials
+    )
+    nixbench_configure_c_target(nixbench_session_credentials_tests)
+
+    add_executable(
+      nixbench_wsdisplay_recovery_tests
+      tests/wsdisplay_recovery_test.c
+    )
+    target_link_libraries(
+      nixbench_wsdisplay_recovery_tests
+      PRIVATE nixbench_wsdisplay_recovery
+    )
+    nixbench_configure_c_target(nixbench_wsdisplay_recovery_tests)
+  endif()
+
   add_executable(nixbench_host_sdl_tests tests/host_sdl_test.c)
   target_link_libraries(
     nixbench_host_sdl_tests
@@ -980,6 +1040,16 @@ if(BUILD_TESTING)
     NAME nixbench.privsep.protocol
     COMMAND nixbench_privsep_protocol_tests
   )
+  if(UNIX)
+    add_test(
+      NAME nixbench.session.credentials
+      COMMAND nixbench_session_credentials_tests
+    )
+    add_test(
+      NAME nixbench.wsdisplay.recovery-record
+      COMMAND nixbench_wsdisplay_recovery_tests
+    )
+  endif()
   add_test(NAME nixbench.host.sdl COMMAND nixbench_host_sdl_tests)
   set_tests_properties(
     nixbench.host.sdl
