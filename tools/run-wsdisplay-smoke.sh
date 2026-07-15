@@ -178,9 +178,10 @@ one-based USL VT numbers):
 Pause long enough between the commands to see VT $away_vt. This script captured
 VT $original_vt as the originating console; set NIXBENCH_VT_AWAY before starting
 the script if VT $away_vt is not a configured, idle text console. The worker
-closes wscons input before acknowledging release, then remaps, redraws, and
-reopens input after acquisition. The run fails if that complete cycle is not
-recorded together with a post-acquire frame.
+closes wscons input before acknowledging release. After acquisition it remaps
+and reconfigures, reopens input, and then submits the required full redraw. The
+run fails if that complete cycle is not recorded together with a post-acquire
+frame.
 EOF
 fi
 

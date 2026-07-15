@@ -504,10 +504,10 @@ the away console is visible before running the printed return command.
 
 This supplies the harness `--require-vt-cycle` option, which is accepted only
 for an interactive/runtime preview and fails unless the worker closes input,
-acknowledges release, reacquires and redraws, then reopens input. It also
-rejects lifecycle timestamp regressions, missing timing samples, and a missing
-post-acquire frame. The keyboard navigation and complete VT-cycle paths still
-require physical validation.
+acknowledges release, reacquires and reconfigures, reopens input, and then
+completes a full redraw. It also rejects lifecycle timestamp regressions,
+missing timing samples, and a missing post-acquire frame. The keyboard
+navigation and complete VT-cycle paths still require physical validation.
 
 Interactive input is acquired only by the framebuffer worker. Both mux
 descriptors are closed and held button/keyboard state is discarded before an

@@ -447,12 +447,12 @@ On release request, NixBench stops accepting frames, cancels focus, held input,
 and pointer capture, then acknowledges through
 `nb_host_complete_console_release()`. On acquire, it acknowledges through
 `nb_host_complete_console_acquire()`, re-queries output state, remaps or
-recreates invalid resources, performs a full redraw, reopens wscons input, and
-re-queries the active control bindings before resuming. Lifecycle requests must
-not be lost behind a full ordinary event queue. Required-cycle mode records
-acknowledgement and suspended-away timing and enforces balanced release/acquire
-and input suspend/resume counts, complete non-regressing timing samples, and a
-post-acquire frame.
+recreates invalid resources, reopens wscons input, and re-queries the active
+control bindings. The next event-loop presentation submits the required full
+redraw. Lifecycle requests must not be lost behind a full ordinary event queue.
+Required-cycle mode records acknowledgement and suspended-away timing and
+enforces balanced release/acquire and input suspend/resume counts, complete
+non-regressing timing samples, and a post-acquire frame.
 
 The watchdog records enough original state to restore emulation mode, video
 state, and automatic VT handling. Restoration is ordered, best-effort, and
