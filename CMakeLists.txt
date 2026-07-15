@@ -500,6 +500,16 @@ target_link_libraries(nixbench_wscons_input PUBLIC nixbench_host)
 nixbench_configure_c_target(nixbench_wscons_input)
 
 if(BUILD_TESTING OR NIXBENCH_BUILD_WSDISPLAY_SMOKE)
+  add_library(
+    nixbench_wsdisplay_console_session STATIC
+    src/wsdisplay_console_session.c
+  )
+  target_include_directories(
+    nixbench_wsdisplay_console_session
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  )
+  nixbench_configure_c_target(nixbench_wsdisplay_console_session)
+
   add_library(nixbench_wsdisplay_smoke_support STATIC src/wsdisplay_smoke.c)
   target_include_directories(
     nixbench_wsdisplay_smoke_support
@@ -524,6 +534,7 @@ if(NIXBENCH_BUILD_WSDISPLAY_SMOKE)
       nixbench_desktop_runtime
       nixbench_desktop_preview
       nixbench_host_wsdisplay
+      nixbench_wsdisplay_console_session
       nixbench_wscons_input
       nixbench_wsdisplay_smoke_support
   )
@@ -732,6 +743,16 @@ if(BUILD_TESTING)
   nixbench_configure_c_target(nixbench_wsdisplay_smoke_tests)
 
   add_executable(
+    nixbench_wsdisplay_console_session_tests
+    tests/wsdisplay_console_session_test.c
+  )
+  target_link_libraries(
+    nixbench_wsdisplay_console_session_tests
+    PRIVATE nixbench_wsdisplay_console_session
+  )
+  nixbench_configure_c_target(nixbench_wsdisplay_console_session_tests)
+
+  add_executable(
     nixbench_wscons_input_tests
     tests/wscons_input_test.c
   )
@@ -859,6 +880,10 @@ if(BUILD_TESTING)
   add_test(
     NAME nixbench.wsdisplay.smoke-support
     COMMAND nixbench_wsdisplay_smoke_tests
+  )
+  add_test(
+    NAME nixbench.wsdisplay.console-session
+    COMMAND nixbench_wsdisplay_console_session_tests
   )
   add_test(NAME nixbench.wscons.input COMMAND nixbench_wscons_input_tests)
   if(NIXBENCH_BUILD_WSDISPLAY_SMOKE)

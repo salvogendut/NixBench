@@ -6,7 +6,6 @@
 #include "wsdisplay_smoke_runner.h"
 
 #include <errno.h>
-#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -43,12 +42,12 @@ int nb_wsdisplay_smoke_run(
 #include "desktop_preview.h"
 #include "host_wsdisplay.h"
 #include "wscons_input.h"
+#include "wsdisplay_console_session.h"
 
 enum {
-    NB_SMOKE_PATH_CAPACITY = 256,
+    NB_SMOKE_PATH_CAPACITY = NB_WSDISPLAY_CONSOLE_PATH_CAPACITY,
     NB_SMOKE_PARENT_STARTUP_GRACE_MS = 2000,
     NB_SMOKE_TERM_GRACE_MS = 2000,
-    NB_SMOKE_ACTIVE_RESTORE_MS = 1000,
     NB_SMOKE_WAIT_SLICE_MS = 20,
     NB_SMOKE_UNBOUNDED_WAIT_SLICE_MS = 250,
     NB_SMOKE_EVENT_SLICE_MS = 50,
@@ -108,175 +107,41 @@ static void sleep_milliseconds(unsigned int milliseconds)
     }
 }
 
-static int open_device(const char *path, bool writable)
-{
-    int flags = (writable ? O_RDWR : O_RDONLY) | O_NONBLOCK | O_NOCTTY;
-    int descriptor;
-
-#if defined(O_CLOEXEC)
-    flags |= O_CLOEXEC;
-#endif
-#if defined(O_NOFOLLOW)
-    flags |= O_NOFOLLOW;
-#endif
-    do {
-        descriptor = open(path, flags);
-    } while (descriptor < 0 && errno == EINTR);
-    return descriptor;
-}
-
-static bool character_device(int descriptor, const char *path)
-{
-    struct stat status;
-
-    if (fstat(descriptor, &status) != 0) {
-        fprintf(stderr, "Could not inspect %s: %s\n", path, strerror(errno));
-        return false;
-    }
-    if (!S_ISCHR(status.st_mode)) {
-        fprintf(stderr, "%s is not a character device\n", path);
-        return false;
-    }
-    return true;
-}
-
-static bool unsupported_video_error(int system_error)
-{
-    return system_error == ENOTTY || system_error == EINVAL ||
-           system_error == ENODEV || system_error == ENOSYS ||
-           system_error == ENOTSUP || system_error == EOPNOTSUPP;
-}
-
-static bool copy_path(char destination[NB_SMOKE_PATH_CAPACITY],
-                      const char *source)
-{
-    const int length = snprintf(destination,
-                                NB_SMOKE_PATH_CAPACITY,
-                                "%s",
-                                source);
-
-    return length >= 0 && (size_t)length < NB_SMOKE_PATH_CAPACITY;
-}
-
 static bool snapshot_console(
     const struct nb_wsdisplay_smoke_options *options,
     struct nb_smoke_console_snapshot *snapshot)
 {
-    int status_device = -1;
-    int screen = -1;
-    int active_from_screen = -1;
-    int active_vt = -1;
-    bool success = false;
-    int length;
+    struct nb_wsdisplay_console_capture_options capture_options;
+    struct nb_wsdisplay_console_state state;
+
+    capture_options.status_device_path = options->status_device_path;
+    capture_options.screen_device_prefix = options->screen_device_prefix;
+    if (!nb_wsdisplay_console_capture(&capture_options, &state)) {
+        return false;
+    }
 
     memset(snapshot, 0, sizeof(*snapshot));
     snapshot->magic = state_magic;
     snapshot->version = NB_SMOKE_STATE_VERSION;
     snapshot->record_size = (uint32_t)sizeof(*snapshot);
-    if (!copy_path(snapshot->status_device,
-                   options->status_device_path)) {
-        fputs("Status-device path is too long\n", stderr);
-        return false;
-    }
-
-    status_device = open_device(snapshot->status_device, false);
-    if (status_device < 0) {
-        fprintf(stderr, "Could not open %s: %s\n",
-                snapshot->status_device, strerror(errno));
-        goto cleanup;
-    }
-    if (!character_device(status_device, snapshot->status_device) ||
-        ioctl(status_device,
-              WSDISPLAYIO_GETACTIVESCREEN,
-              &snapshot->active_screen) != 0) {
-        if (errno != 0) {
-            fprintf(stderr, "Could not query active wsdisplay screen: %s\n",
-                    strerror(errno));
-        }
-        goto cleanup;
-    }
-    if (snapshot->active_screen < 0 || snapshot->active_screen > 255) {
-        fprintf(stderr, "Invalid active wsdisplay screen: %d\n",
-                snapshot->active_screen);
-        goto cleanup;
-    }
-    if (!nb_wsdisplay_screen_index_to_vt_number(snapshot->active_screen,
-                                                 &active_vt)) {
-        fputs("Could not translate the active screen to a VT number\n",
-              stderr);
-        goto cleanup;
-    }
-    length = snprintf(snapshot->screen_device,
-                      sizeof(snapshot->screen_device),
-                      "%s%d",
-                      options->screen_device_prefix,
-                      snapshot->active_screen);
-    if (length < 0 || (size_t)length >= sizeof(snapshot->screen_device)) {
-        fputs("Active screen-device path is too long\n", stderr);
-        goto cleanup;
-    }
-
-    screen = open_device(snapshot->screen_device, false);
-    if (screen < 0) {
-        fprintf(stderr, "Could not open %s: %s\n",
-                snapshot->screen_device, strerror(errno));
-        goto cleanup;
-    }
-    if (!character_device(screen, snapshot->screen_device)) {
-        goto cleanup;
-    }
-    if (ioctl(screen,
-              WSDISPLAYIO_GMODE,
-              &snapshot->display_mode) != 0) {
-        fprintf(stderr, "Could not query wsdisplay mode: %s\n",
-                strerror(errno));
-        goto cleanup;
-    }
-    if (snapshot->display_mode != WSDISPLAYIO_MODE_EMUL) {
-        fprintf(stderr,
-                "Refusing takeover: active screen mode is %u, not emulation\n",
-                snapshot->display_mode);
-        goto cleanup;
-    }
-    memset(&snapshot->vt_mode, 0, sizeof(snapshot->vt_mode));
-    if (ioctl(screen, VT_GETMODE, &snapshot->vt_mode) != 0) {
-        fprintf(stderr, "Could not query wsdisplay VT mode: %s\n",
-                strerror(errno));
-        goto cleanup;
-    }
-    if (snapshot->vt_mode.mode != VT_AUTO) {
-        fputs("Refusing takeover: active VT is already process-controlled\n",
-              stderr);
-        goto cleanup;
-    }
-    if (ioctl(screen, VT_GETACTIVE, &active_from_screen) != 0 ||
-        active_from_screen != active_vt) {
-        fprintf(stderr,
-                "Active-screen state changed during preflight "
-                "(screen index %d, VT %d)\n",
-                snapshot->active_screen,
-                active_from_screen);
-        goto cleanup;
-    }
-
-    errno = 0;
-    if (ioctl(screen, WSDISPLAYIO_GVIDEO, &snapshot->video) == 0) {
-        snapshot->video_available = 1;
-    } else if (!unsupported_video_error(errno)) {
-        fprintf(stderr, "Could not query wsdisplay video state: %s\n",
-                strerror(errno));
-        goto cleanup;
-    }
-    success = true;
-
-cleanup:
-    if (screen >= 0) {
-        (void)close(screen);
-    }
-    if (status_device >= 0) {
-        (void)close(status_device);
-    }
-    return success;
+    snapshot->active_screen = state.active_screen;
+    snapshot->display_mode = state.display_mode;
+    snapshot->video = state.video;
+    snapshot->video_available = state.video_available ? 1U : 0U;
+    snapshot->vt_mode.mode = (char)state.vt_mode.mode;
+    snapshot->vt_mode.waitv = (char)state.vt_mode.waitv;
+    snapshot->vt_mode.relsig = (short)state.vt_mode.relsig;
+    snapshot->vt_mode.acqsig = (short)state.vt_mode.acqsig;
+    snapshot->vt_mode.frsig = (short)state.vt_mode.frsig;
+    (void)snprintf(snapshot->status_device,
+                   sizeof(snapshot->status_device),
+                   "%s",
+                   state.status_device);
+    (void)snprintf(snapshot->screen_device,
+                   sizeof(snapshot->screen_device),
+                   "%s",
+                   state.screen_device);
+    return true;
 }
 
 static void print_snapshot(const struct nb_smoke_console_snapshot *snapshot)
@@ -436,164 +301,30 @@ static bool load_snapshot(struct nb_smoke_console_snapshot *snapshot)
     return success;
 }
 
-static void report_restore_error(const char *operation, bool *success)
-{
-    fprintf(stderr, "RESTORE ERROR: %s: %s\n", operation, strerror(errno));
-    *success = false;
-}
-
-static int restore_ioctl_pointer(int descriptor,
-                                 unsigned long request,
-                                 const void *argument)
-{
-    int result;
-
-    do {
-        result = ioctl(descriptor, request, argument);
-    } while (result != 0 && errno == EINTR);
-    return result;
-}
-
-static int restore_ioctl_scalar(int descriptor,
-                                unsigned long request,
-                                int argument)
-{
-    int result;
-
-    do {
-        result = ioctl(descriptor, request, argument);
-    } while (result != 0 && errno == EINTR);
-    return result;
-}
-
 static bool restore_console(
     const struct nb_smoke_console_snapshot *snapshot)
 {
-    unsigned int mode = snapshot->display_mode;
-    unsigned int current_mode = UINT_MAX;
-    unsigned int current_video = UINT_MAX;
-    struct vt_mode current_vt;
-    int current_active = -1;
-    int saved_vt = -1;
-    int screen = -1;
-    int status_device = -1;
-    bool success = true;
-    unsigned int retry;
+    struct nb_wsdisplay_console_state state;
 
-    if (!nb_wsdisplay_screen_index_to_vt_number(snapshot->active_screen,
-                                                 &saved_vt)) {
-        fputs("RESTORE ERROR: invalid saved active-screen index\n", stderr);
-        return false;
-    }
-
-    for (retry = 0; retry < 20; ++retry) {
-        screen = open_device(snapshot->screen_device, true);
-        if (screen >= 0 || (errno != EBUSY && errno != EINTR)) {
-            break;
-        }
-        sleep_milliseconds(50);
-    }
-    if (screen < 0) {
-        fprintf(stderr, "RESTORE ERROR: could not open %s: %s\n",
-                snapshot->screen_device, strerror(errno));
-        return false;
-    }
-    if (!character_device(screen, snapshot->screen_device)) {
-        success = false;
-    }
-    if (restore_ioctl_pointer(screen, WSDISPLAYIO_SMODE, &mode) != 0) {
-        report_restore_error("could not restore emulation mode", &success);
-    }
-    if (snapshot->video_available != 0 &&
-        restore_ioctl_pointer(screen,
-                              WSDISPLAYIO_SVIDEO,
-                              &snapshot->video) != 0) {
-        report_restore_error("could not restore video state", &success);
-    }
-    if (restore_ioctl_pointer(screen,
-                              VT_SETMODE,
-                              &snapshot->vt_mode) != 0) {
-        report_restore_error("could not restore automatic VT mode", &success);
-    }
-
-    status_device = open_device(snapshot->status_device, false);
-    if (status_device < 0 ||
-        !character_device(status_device, snapshot->status_device)) {
-        fprintf(stderr, "RESTORE ERROR: could not open status device %s: %s\n",
-                snapshot->status_device, strerror(errno));
-        success = false;
-    } else if (restore_ioctl_pointer(status_device,
-                                     WSDISPLAYIO_GETACTIVESCREEN,
-                                     &current_active) != 0) {
-        report_restore_error("could not query active screen", &success);
-    } else if (current_active != snapshot->active_screen) {
-        const uint64_t deadline = add_milliseconds(
-            monotonic_milliseconds(), NB_SMOKE_ACTIVE_RESTORE_MS);
-
-        if (restore_ioctl_scalar(screen, VT_ACTIVATE, saved_vt) != 0) {
-            report_restore_error("could not reactivate saved screen", &success);
-        } else {
-            do {
-                sleep_milliseconds(20);
-                if (restore_ioctl_pointer(status_device,
-                                          WSDISPLAYIO_GETACTIVESCREEN,
-                                          &current_active) != 0) {
-                    report_restore_error("could not verify active screen",
-                                         &success);
-                    break;
-                }
-            } while (current_active != snapshot->active_screen &&
-                     monotonic_milliseconds() < deadline);
-            if (current_active != snapshot->active_screen) {
-                fputs("RESTORE ERROR: saved screen did not become active\n",
-                      stderr);
-                success = false;
-            }
-        }
-    }
-
-    memset(&current_vt, 0, sizeof(current_vt));
-    if (restore_ioctl_pointer(screen,
-                              WSDISPLAYIO_GMODE,
-                              &current_mode) != 0 ||
-        current_mode != snapshot->display_mode) {
-        fputs("RESTORE ERROR: display mode verification failed\n", stderr);
-        success = false;
-    }
-    if (snapshot->video_available != 0 &&
-        (restore_ioctl_pointer(screen,
-                               WSDISPLAYIO_GVIDEO,
-                               &current_video) != 0 ||
-         current_video != snapshot->video)) {
-        fputs("RESTORE ERROR: video-state verification failed\n", stderr);
-        success = false;
-    }
-    if (restore_ioctl_pointer(screen, VT_GETMODE, &current_vt) != 0 ||
-        current_vt.mode != snapshot->vt_mode.mode ||
-        current_vt.waitv != snapshot->vt_mode.waitv ||
-        current_vt.relsig != snapshot->vt_mode.relsig ||
-        current_vt.acqsig != snapshot->vt_mode.acqsig ||
-        current_vt.frsig != snapshot->vt_mode.frsig) {
-        fputs("RESTORE ERROR: VT-mode verification failed\n", stderr);
-        success = false;
-    }
-    if (status_device >= 0 &&
-        (restore_ioctl_pointer(status_device,
-                               WSDISPLAYIO_GETACTIVESCREEN,
-                               &current_active) != 0 ||
-         current_active != snapshot->active_screen)) {
-        fputs("RESTORE ERROR: active-screen verification failed\n", stderr);
-        success = false;
-    }
-    if (status_device >= 0) {
-        (void)close(status_device);
-    }
-    (void)close(screen);
-    if (success) {
-        puts("Supervisor verified console restoration: emulation, video, "
-             "VT mode, and active screen match the saved state.");
-    }
-    return success;
+    memset(&state, 0, sizeof(state));
+    state.active_screen = snapshot->active_screen;
+    state.display_mode = snapshot->display_mode;
+    state.video = snapshot->video;
+    state.video_available = snapshot->video_available != 0;
+    state.vt_mode.mode = snapshot->vt_mode.mode;
+    state.vt_mode.waitv = snapshot->vt_mode.waitv;
+    state.vt_mode.relsig = snapshot->vt_mode.relsig;
+    state.vt_mode.acqsig = snapshot->vt_mode.acqsig;
+    state.vt_mode.frsig = snapshot->vt_mode.frsig;
+    (void)snprintf(state.status_device,
+                   sizeof(state.status_device),
+                   "%s",
+                   snapshot->status_device);
+    (void)snprintf(state.screen_device,
+                   sizeof(state.screen_device),
+                   "%s",
+                   snapshot->screen_device);
+    return nb_wsdisplay_console_restore_and_verify(&state);
 }
 
 static void print_host_error(struct nb_host *host, const char *operation)
