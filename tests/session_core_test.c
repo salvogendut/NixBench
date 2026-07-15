@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -485,7 +486,19 @@ static void test_shutdown_acknowledgement_before_eof(void)
 }
 
 #if NIXBENCH_TEST_SESSION_CORE
-static void test_session_core_with_fake_helper(const char *application_path)
+enum session_core_shutdown_trigger {
+    SESSION_CORE_SHUTDOWN_BY_ESCAPE,
+    SESSION_CORE_SHUTDOWN_BY_SIGTERM
+};
+
+static void prior_sigterm_handler(int signal_number)
+{
+    (void)signal_number;
+}
+
+static void test_session_core_with_fake_helper(
+    const char *application_path,
+    enum session_core_shutdown_trigger trigger)
 {
     int sockets[2] = {-1, -1};
     struct wire_reader reader;
@@ -518,10 +531,33 @@ static void test_session_core_with_fake_helper(const char *application_path)
         return;
     }
     if (child == 0) {
+        struct sigaction prior_action;
         int result;
 
         (void)close(sockets[1]);
+        if (trigger == SESSION_CORE_SHUTDOWN_BY_SIGTERM) {
+            memset(&prior_action, 0, sizeof(prior_action));
+            prior_action.sa_handler = prior_sigterm_handler;
+            if (sigemptyset(&prior_action.sa_mask) != 0 ||
+                sigaddset(&prior_action.sa_mask, SIGUSR1) != 0) {
+                _exit(120);
+            }
+            prior_action.sa_flags = SA_RESTART;
+            if (sigaction(SIGTERM, &prior_action, NULL) != 0) {
+                _exit(121);
+            }
+        }
         result = nb_session_core_run(sockets[0], application_path);
+        if (trigger == SESSION_CORE_SHUTDOWN_BY_SIGTERM) {
+            struct sigaction restored_action;
+
+            if (sigaction(SIGTERM, NULL, &restored_action) != 0 ||
+                restored_action.sa_handler != prior_sigterm_handler ||
+                (restored_action.sa_flags & SA_RESTART) == 0 ||
+                sigismember(&restored_action.sa_mask, SIGUSR1) != 1) {
+                _exit(122);
+            }
+        }
         _exit(result);
     }
     (void)close(sockets[0]);
@@ -563,15 +599,19 @@ static void test_session_core_with_fake_helper(const char *application_path)
         }
     }
 
-    memset(&message, 0, sizeof(message));
-    message.type = NB_PRIVSEP_MESSAGE_KEY;
-    message.data.key.generation = 1;
-    message.data.key.milliseconds = 101;
-    (void)snprintf(message.data.key.xkb_key_name,
-                   sizeof(message.data.key.xkb_key_name),
-                   "ESC");
-    message.data.key.pressed = true;
-    CHECK(send_helper_message(sockets[1], helper_sequence++, &message));
+    if (trigger == SESSION_CORE_SHUTDOWN_BY_SIGTERM) {
+        CHECK(kill(child, SIGTERM) == 0);
+    } else {
+        memset(&message, 0, sizeof(message));
+        message.type = NB_PRIVSEP_MESSAGE_KEY;
+        message.data.key.generation = 1;
+        message.data.key.milliseconds = 101;
+        (void)snprintf(message.data.key.xkb_key_name,
+                       sizeof(message.data.key.xkb_key_name),
+                       "ESC");
+        message.data.key.pressed = true;
+        CHECK(send_helper_message(sockets[1], helper_sequence++, &message));
+    }
 
     {
         struct pollfd descriptor = {
@@ -584,7 +624,7 @@ static void test_session_core_with_fake_helper(const char *application_path)
         do {
             poll_result = poll(&descriptor, 1, 100);
         } while (poll_result < 0 && errno == EINTR);
-        /* A quit request must not overtake its accepted, incomplete frame. */
+        /* Neither shutdown trigger may overtake the incomplete frame. */
         CHECK(poll_result == 0);
     }
 
@@ -690,7 +730,12 @@ int main(int argc, char *argv[])
     test_host_proxy();
     test_shutdown_acknowledgement_before_eof();
 #if NIXBENCH_TEST_SESSION_CORE
-    test_session_core_with_fake_helper(application_path);
+    test_session_core_with_fake_helper(
+        application_path,
+        SESSION_CORE_SHUTDOWN_BY_ESCAPE);
+    test_session_core_with_fake_helper(
+        application_path,
+        SESSION_CORE_SHUTDOWN_BY_SIGTERM);
     test_session_core_rejects_unlaunchable_application();
 #endif
 

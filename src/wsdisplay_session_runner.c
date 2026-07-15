@@ -995,6 +995,7 @@ static int run_device_worker(
     bool signals_blocked = false;
     bool success = false;
     bool orderly = false;
+    bool core_reported = false;
     bool core_reaped = false;
     bool core_cleanup_complete = true;
     int core_status = 0;
@@ -1038,13 +1039,6 @@ static int run_device_worker(
                                              core_path,
                                              core_argv);
     }
-    if (!write_all(core_report_fd,
-                   &worker.core_pid,
-                   sizeof(worker.core_pid))) {
-        goto cleanup;
-    }
-    (void)close(core_report_fd);
-    core_report_fd = -1;
     (void)close(sockets[1]);
     sockets[1] = -1;
     worker.socket_fd = sockets[0];
@@ -1104,6 +1098,17 @@ static int run_device_worker(
         }
         if (!drain_core(&worker, &eof) || eof) {
             break;
+        }
+        if (!core_reported &&
+            nb_privsep_helper_is_ready(worker.helper)) {
+            if (!write_all(core_report_fd,
+                           &worker.core_pid,
+                           sizeof(worker.core_pid))) {
+                break;
+            }
+            (void)close(core_report_fd);
+            core_report_fd = -1;
+            core_reported = true;
         }
         if (nb_privsep_helper_shutdown_requested(worker.helper,
                                                  &shutdown_id)) {
@@ -1413,8 +1418,8 @@ static struct supervision_result supervise_device_worker(
     bool forced = false;
     bool report_complete = false;
     bool report_reliable = true;
+    bool core_sigterm_sent = false;
     bool term_sent = false;
-    bool term_delivered = false;
     bool kill_sent = false;
     bool wait_failed = false;
     uint64_t report_deadline;
@@ -1483,6 +1488,7 @@ static struct supervision_result supervise_device_worker(
             } else if (count == 0) {
                 report_complete = true;
                 report_reliable = false;
+                forced = true;
                 outcome.independent_failure = true;
                 orderly_deadline = add_milliseconds(
                     monotonic_milliseconds(),
@@ -1527,9 +1533,6 @@ static struct supervision_result supervise_device_worker(
         }
         if (supervisor_signal != 0) {
             forced = true;
-            if (!reaped && supervisor_signal == SIGTERM) {
-                outcome.sigterm_drove_shutdown = true;
-            }
         }
         now = monotonic_milliseconds();
         if (!report_complete && now >= report_deadline) {
@@ -1544,18 +1547,44 @@ static struct supervision_result supervise_device_worker(
                 now,
                 NB_SESSION_WORKER_ORDERLY_GRACE_MS);
         }
+        if (supervisor_signal == SIGTERM && !reaped &&
+            report_complete && report_reliable && core > 0 &&
+            !core_sigterm_sent) {
+            const bool core_sigterm_delivered =
+                signal_process(core, SIGTERM);
+
+            core_sigterm_sent = true;
+            if (!core_sigterm_delivered) {
+                outcome.independent_failure = true;
+            } else {
+                outcome.sigterm_drove_shutdown = true;
+                puts("Supervisor received SIGTERM; requesting orderly core "
+                     "shutdown.");
+                (void)fflush(stdout);
+            }
+            orderly_deadline = add_milliseconds(
+                now,
+                NB_SESSION_WORKER_ORDERLY_GRACE_MS);
+        }
         if (reaped && report_complete) {
             break;
         }
         if (forced && !reaped && report_complete) {
+            if (outcome.sigterm_drove_shutdown && !term_sent &&
+                now < orderly_deadline) {
+                sleep_milliseconds(NB_SESSION_WAIT_SLICE_MS);
+                continue;
+            }
             if (!report_reliable && now < orderly_deadline) {
                 sleep_milliseconds(NB_SESSION_WAIT_SLICE_MS);
                 continue;
             }
             if (!term_sent) {
-                term_delivered = signal_process(worker, SIGTERM);
+                if (!signal_process(worker, SIGTERM)) {
+                    outcome.independent_failure = true;
+                }
                 (void)signal_process(worker, SIGCONT);
-                if (!term_delivered) {
+                if (outcome.sigterm_drove_shutdown) {
                     outcome.independent_failure = true;
                 }
                 term_sent = true;
@@ -1577,21 +1606,19 @@ static struct supervision_result supervise_device_worker(
     if (report_pipe[0] >= 0) {
         (void)close(report_pipe[0]);
     }
-    outcome.sigterm_drove_shutdown =
-        outcome.sigterm_drove_shutdown && term_delivered;
     outcome.worker_gone = reaped;
     if (reaped) {
         if (WIFEXITED(status)) {
             if (WEXITSTATUS(status) != 0) {
                 outcome.independent_failure = true;
             }
-        } else if (!WIFSIGNALED(status) ||
-                   !outcome.sigterm_drove_shutdown ||
-                   (WTERMSIG(status) != SIGTERM &&
-                    WTERMSIG(status) != SIGKILL)) {
+        } else {
             outcome.independent_failure = true;
         }
     }
+    outcome.sigterm_drove_shutdown =
+        outcome.sigterm_drove_shutdown && !term_sent && reaped &&
+        WIFEXITED(status) && WEXITSTATUS(status) == 0;
     if (reaped && WIFEXITED(status) &&
         WEXITSTATUS(status) !=
             NB_SESSION_WORKER_CLEANUP_INCOMPLETE_EXIT) {
@@ -1622,7 +1649,7 @@ static struct supervision_result supervise_device_worker(
         forced = true;
     }
     if (!wait_failed && !outcome.independent_failure && outcome.worker_gone &&
-        outcome.core_session_gone && !forced && WIFEXITED(status) &&
+        outcome.core_session_gone && WIFEXITED(status) &&
         WEXITSTATUS(status) == 0) {
         outcome.status = 0;
     }

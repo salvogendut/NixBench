@@ -58,6 +58,14 @@ struct nb_session_core {
     bool running;
 };
 
+static volatile sig_atomic_t session_core_sigterm_requested;
+
+static void request_session_core_shutdown(int signal_number)
+{
+    (void)signal_number;
+    session_core_sigterm_requested = 1;
+}
+
 static uint64_t add_milliseconds(uint64_t start, uint64_t duration)
 {
     return duration > UINT64_MAX - start ? UINT64_MAX : start + duration;
@@ -716,7 +724,10 @@ int nb_session_core_run(int protocol_descriptor,
     struct nb_desktop_runtime_options desktop_options;
     struct nb_desktop_runtime_update focus_update;
     struct nb_host_output output;
+    struct sigaction previous_sigterm_action;
+    struct sigaction sigterm_action;
     const char *display_name;
+    bool sigterm_action_installed = false;
     int status = 1;
 
     memset(&core, 0, sizeof(core));
@@ -726,13 +737,32 @@ int nb_session_core_run(int protocol_descriptor,
     core.running = true;
     format_clock(core.clock_text);
 
+    memset(&sigterm_action, 0, sizeof(sigterm_action));
+    sigterm_action.sa_handler = request_session_core_shutdown;
+    if (sigemptyset(&sigterm_action.sa_mask) != 0) {
+        fprintf(stderr,
+                "Could not initialize the session SIGTERM handler: %s\n",
+                strerror(errno));
+        return 1;
+    }
+    session_core_sigterm_requested = 0;
+    if (sigaction(SIGTERM,
+                  &sigterm_action,
+                  &previous_sigterm_action) != 0) {
+        fprintf(stderr,
+                "Could not install the session SIGTERM handler: %s\n",
+                strerror(errno));
+        return 1;
+    }
+    sigterm_action_installed = true;
+
     /* Creation applies FD_CLOEXEC before allocation or protocol activity. */
     core.host = nb_host_privsep_client_create(protocol_descriptor);
     if (core.host == NULL) {
         fprintf(stderr,
                 "Could not create the unprivileged helper proxy: %s\n",
                 nb_host_privsep_client_creation_error());
-        return 1;
+        goto cleanup;
     }
     if (!core_identity_is_unprivileged()) {
         fputs("The NixBench session core refuses to run with privileged or "
@@ -802,6 +832,13 @@ int nb_session_core_run(int protocol_descriptor,
 
         reap_application_nonblocking(&core);
 
+        if (session_core_sigterm_requested) {
+            session_core_sigterm_requested = 0;
+            if (!core.shutdown_pending && !begin_shutdown(&core)) {
+                goto cleanup;
+            }
+        }
+
         if (event_status == NB_HOST_EVENT_STATUS_ERROR) {
             report_host_error(&core,
                               "Could not wait for standalone host activity");
@@ -851,5 +888,13 @@ cleanup:
     }
     nb_host_destroy(core.host);
     core.host = NULL;
+    session_core_sigterm_requested = 0;
+    if (sigterm_action_installed &&
+        sigaction(SIGTERM, &previous_sigterm_action, NULL) != 0) {
+        fprintf(stderr,
+                "Could not restore the prior SIGTERM disposition: %s\n",
+                strerror(errno));
+        status = 1;
+    }
     return status;
 }
