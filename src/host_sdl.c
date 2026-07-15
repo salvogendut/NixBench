@@ -455,13 +455,7 @@ static enum translated_event_status translate_window_event(
         source->type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED ||
         source->type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN ||
         source->type == SDL_EVENT_WINDOW_LEAVE_FULLSCREEN) {
-        bool changed;
-
-        if (!update_output(context, milliseconds, event, &changed)) {
-            return TRANSLATED_EVENT_ERROR;
-        }
-        return changed ? TRANSLATED_EVENT_READY
-                       : TRANSLATED_EVENT_IGNORED;
+        return TRANSLATED_EVENT_IGNORED;
     }
     return TRANSLATED_EVENT_IGNORED;
 }
@@ -954,6 +948,16 @@ struct nb_host *nb_host_sdl_create(
                                      &context->renderer)) {
         copy_error(creation_error,
                    "Could not create SDL window and renderer",
+                   SDL_GetError());
+        destroy_failed_context(context);
+        return NULL;
+    }
+    if (!SDL_SetRenderLogicalPresentation(context->renderer,
+                                          0,
+                                          0,
+                                          SDL_LOGICAL_PRESENTATION_DISABLED)) {
+        copy_error(creation_error,
+                   "Could not disable SDL logical presentation",
                    SDL_GetError());
         destroy_failed_context(context);
         return NULL;
