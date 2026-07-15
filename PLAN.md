@@ -180,12 +180,14 @@ connected to the private display but mapped no window: GTK 3.24 deferred
 creating its `GdkSeat` because NixBench did not advertise the core
 `wl_data_device_manager` global. Midori then closed its client connection; the
 session then exited normally, and the supervisor restored the console and
-removed the recovery record. A minimal version-1 data-device
-discovery skeleton is the next compatibility step, without yet claiming
-clipboard or drag-and-drop support. Malformed protocol, harder supervisor/
-worker failures, and repeated-session validation remain. Desktop-managed
-installation, popup/subsurface/data transfer, broader toolkit trials, and
-application-menu bridges also remain outstanding.
+removed the recovery record. NixBench now advertises a minimal version-1
+data-device manager, creates the inert source/device resources GTK requires,
+and sends the empty selection before keyboard focus. It does not yet claim
+clipboard or drag-and-drop transfer support. The repeat Midori probe will
+identify the next concrete compatibility boundary. Malformed protocol, harder
+supervisor/worker failures, and repeated-session validation remain. Installation
+and launching managed by the desktop, popup/subsurface/data transfer, broader
+toolkit trials, and application-menu bridges also remain outstanding.
 
 ## Milestone 6: Package and validate the hosted prototype
 

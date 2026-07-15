@@ -450,8 +450,8 @@ not an application sandbox: the selected program retains the invoking user's
 home-directory and group access. Use Midori only with blank or otherwise
 trusted content during this first probe. A main window may expose the next
 compatibility boundary rather than be fully usable: `xdg_popup`, pointer-axis
-scrolling, subsurfaces, clipboard/data-device support, accelerated buffers,
-and generic GTK global-menu integration remain incomplete.
+scrolling, subsurfaces, clipboard/data transfer beyond the discovery skeleton,
+accelerated buffers, and generic GTK global-menu integration remain incomplete.
 
 For the explicit supervisor-termination recovery gate, run:
 
@@ -575,8 +575,11 @@ connection. GTK 3.24 intentionally waits for both `wl_seat` and
 `wl_data_device_manager` before constructing a seat; NixBench advertised the
 former but not the latter. The shell remained available, and normal exit again
 restored the console, cleared the recovery record, and returned to one-based
-VT 1. The next probe will advertise a minimal version-1 data-device discovery
-skeleton. Clipboard and drag-and-drop data transfer remain unimplemented.
+VT 1. NixBench now advertises a minimal version-1 data-device discovery
+skeleton covered by a GTK-shaped registry test. It sends the required empty
+selection event before keyboard focus. Clipboard and drag-and-drop data
+transfer remain unimplemented; the repeat physical probe will identify the
+next compatibility boundary.
 
 The opt-in `wsdisplay` presentation harness must run as root. Start with its
 query-only preflight:

@@ -482,9 +482,9 @@ invoking user's home-directory and group access.
 
 The initial Midori run is diagnostic and should use only blank or trusted
 content. A toplevel may appear before the browser is fully usable. Missing
-`xdg_popup`, pointer-axis scrolling, subsurfaces, clipboard/data-device
-support, accelerated buffer sharing, and a generic GTK global-menu bridge are
-the expected first compatibility boundaries.
+`xdg_popup`, pointer-axis scrolling, subsurfaces, clipboard/data transfer
+beyond the discovery skeleton, accelerated buffer sharing, and a generic GTK
+global-menu bridge are the expected first compatibility boundaries.
 
 It configures and builds the opt-in targets, runs device-free tests, stages the
 privileged launcher as the root-owned, non-writable
@@ -558,8 +558,10 @@ connection. GTK 3.24 defers creating a seat until the registry contains both
 `wl_seat` and `wl_data_device_manager`; NixBench exposed only the former. The
 compositor did not post a protocol error, the shell remained alive, and normal
 exit restored the console and cleared the recovery record. A minimal version-1
-data-device discovery skeleton is therefore the next protocol increment;
-clipboard and drag-and-drop behavior remain explicitly out of scope for it.
+data-device discovery skeleton is now implemented: it provides inert source
+and device resources and sends an empty selection before keyboard focus. It
+does not claim clipboard or drag-and-drop transfer behavior. The repeat Midori
+probe will identify the next protocol or rendering boundary.
 
 The older all-root smoke harness remains useful only for bounded research and
 does not become an application launcher.
