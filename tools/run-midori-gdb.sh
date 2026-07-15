@@ -24,6 +24,24 @@ export WEBKIT_DISABLE_COMPOSITING_MODE
 if [ "${NIXBENCH_TRACE_WAYLAND:-0}" = 1 ]; then
     WAYLAND_DEBUG=client
     export WAYLAND_DEBUG
+    trace_log=${NIXBENCH_TRACE_WAYLAND_LOG:-${TMPDIR:-/tmp}/nixbench-midori-wayland-$$.log}
+    echo "NixBench Midori diagnostic: writing Wayland trace to $trace_log" >&2
+    exec "$gdb" --quiet --nx --batch \
+        -ex 'set pagination off' \
+        -ex 'set confirm off' \
+        -ex 'set startup-with-shell off' \
+        -ex 'set follow-fork-mode parent' \
+        -ex 'set detach-on-fork on' \
+        -ex 'set print thread-events off' \
+        -ex 'handle SIGPIPE nostop noprint pass' \
+        -ex run \
+        -ex 'echo \n===== NixBench Midori GDB backtrace =====\n' \
+        -ex 'info program' \
+        -ex 'bt 64' \
+        -ex 'thread apply all bt 12' \
+        -ex 'echo \n===== Loaded shared libraries =====\n' \
+        -ex 'info sharedlibrary' \
+        --args "$midori" >"$trace_log" 2>&1
 fi
 
 echo "NixBench Midori diagnostic: software compositing under ordinary-user GDB" >&2
