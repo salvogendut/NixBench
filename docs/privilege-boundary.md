@@ -205,6 +205,13 @@ session available to terminate the printed supervisor PID or run:
 sudo /var/run/nixbench-wsdisplay-session --recover
 ```
 
+`NIXBENCH_EXPECT_SUPERVISOR_TERM=1` selects the forced-supervisor recovery
+gate. In that mode the launcher requires SIGTERM to initiate shutdown and
+returns success only after independent supervisor faults are excluded, worker
+and core liveness are cleared, console restoration is verified, and the
+recovery record is removed. The guided script additionally verifies record
+absence and return to the original active VT.
+
 The exact opt-in targets build natively on the NetBSD test host and all 45
 device-free tests pass. Dynamic-link inspection reports only NetBSD libc for
 the root launcher, while SDL3 and Wayland remain on the ordinary-user side.

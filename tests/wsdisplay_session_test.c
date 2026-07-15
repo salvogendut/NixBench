@@ -34,6 +34,10 @@ static void test_actions(void)
     char *preflight[] = {"session", "--preflight"};
     char *recover[] = {"session", "--recover"};
     char *run[] = {"session", "--acknowledge-console-takeover"};
+    char *sigterm_run[] = {
+        "session", "--acknowledge-console-takeover",
+        "--require-supervisor-sigterm"
+    };
     char *core[] = {
         "session", "--core", "/opt/nixbench/core",
         "--acknowledge-console-takeover"
@@ -48,6 +52,11 @@ static void test_actions(void)
     CHECK(parse(2, run, &options));
     CHECK(options.action == NB_WSDISPLAY_SESSION_ACTION_RUN);
     CHECK(options.acknowledge_console_takeover);
+    CHECK(!options.require_supervisor_sigterm);
+    CHECK(parse(3, sigterm_run, &options));
+    CHECK(options.action == NB_WSDISPLAY_SESSION_ACTION_RUN);
+    CHECK(options.acknowledge_console_takeover);
+    CHECK(options.require_supervisor_sigterm);
     CHECK(parse(4, core, &options));
     CHECK(strcmp(options.core_path, "/opt/nixbench/core") == 0);
 }
@@ -71,6 +80,17 @@ static void test_rejections(void)
         "session", "--acknowledge-console-takeover",
         "--acknowledge-console-takeover"
     };
+    char *action_sigterm[] = {
+        "session", "--preflight", "--require-supervisor-sigterm"
+    };
+    char *sigterm_without_ack[] = {
+        "session", "--require-supervisor-sigterm"
+    };
+    char *duplicate_sigterm[] = {
+        "session", "--acknowledge-console-takeover",
+        "--require-supervisor-sigterm",
+        "--require-supervisor-sigterm"
+    };
 
     CHECK(!parse(1, none, &options));
     CHECK(!parse(2, unknown, &options));
@@ -79,6 +99,9 @@ static void test_rejections(void)
     CHECK(!parse(4, relative_core, &options));
     CHECK(!parse(3, missing_core, &options));
     CHECK(!parse(3, duplicate_ack, &options));
+    CHECK(!parse(3, action_sigterm, &options));
+    CHECK(!parse(2, sigterm_without_ack, &options));
+    CHECK(!parse(4, duplicate_sigterm, &options));
     CHECK(!nb_wsdisplay_session_parse_options(0, NULL, &options, NULL));
     CHECK(!nb_wsdisplay_session_parse_options(1, none, NULL, NULL));
 }
@@ -107,6 +130,43 @@ static void test_core_paths(void)
         "/session", "/", path, error));
     CHECK(!nb_wsdisplay_session_derive_core_path(
         "/session", NULL, NULL, error));
+}
+
+static void test_sigterm_gate(void)
+{
+    struct nb_wsdisplay_session_sigterm_gate gate = {
+        .sigterm_received = true,
+        .sigterm_drove_shutdown = true,
+        .independent_failure = false,
+        .worker_gone = true,
+        .core_session_gone = true,
+        .console_restored = true,
+        .recovery_record_removed = true
+    };
+
+    CHECK(nb_wsdisplay_session_sigterm_gate_passes(&gate));
+    CHECK(!nb_wsdisplay_session_sigterm_gate_passes(NULL));
+
+    gate.sigterm_received = false;
+    CHECK(!nb_wsdisplay_session_sigterm_gate_passes(&gate));
+    gate.sigterm_received = true;
+    gate.sigterm_drove_shutdown = false;
+    CHECK(!nb_wsdisplay_session_sigterm_gate_passes(&gate));
+    gate.sigterm_drove_shutdown = true;
+    gate.independent_failure = true;
+    CHECK(!nb_wsdisplay_session_sigterm_gate_passes(&gate));
+    gate.independent_failure = false;
+    gate.worker_gone = false;
+    CHECK(!nb_wsdisplay_session_sigterm_gate_passes(&gate));
+    gate.worker_gone = true;
+    gate.core_session_gone = false;
+    CHECK(!nb_wsdisplay_session_sigterm_gate_passes(&gate));
+    gate.core_session_gone = true;
+    gate.console_restored = false;
+    CHECK(!nb_wsdisplay_session_sigterm_gate_passes(&gate));
+    gate.console_restored = true;
+    gate.recovery_record_removed = false;
+    CHECK(!nb_wsdisplay_session_sigterm_gate_passes(&gate));
 }
 
 static void test_frame_completion_across_vt_cycles(void)
@@ -143,6 +203,7 @@ int main(void)
     test_actions();
     test_rejections();
     test_core_paths();
+    test_sigterm_gate();
     test_frame_completion_across_vt_cycles();
 
     if (failures != 0) {

@@ -1267,6 +1267,13 @@ if(BUILD_TESTING)
       COMMAND
         sh -n "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-wsdisplay-session.sh"
     )
+    add_test(
+      NAME nixbench.wsdisplay.session-runner-script
+      COMMAND
+        sh
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/wsdisplay_session_runner_script_test.sh"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-wsdisplay-session.sh"
+    )
   endif()
   if(UNIX AND EXISTS "/usr/bin/timeout")
     add_test(

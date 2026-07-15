@@ -22,7 +22,21 @@ struct nb_wsdisplay_session_options {
     const char *program_path;
     const char *core_path;
     bool acknowledge_console_takeover;
+    bool require_supervisor_sigterm;
 };
+
+struct nb_wsdisplay_session_sigterm_gate {
+    bool sigterm_received;
+    bool sigterm_drove_shutdown;
+    bool independent_failure;
+    bool worker_gone;
+    bool core_session_gone;
+    bool console_restored;
+    bool recovery_record_removed;
+};
+
+bool nb_wsdisplay_session_sigterm_gate_passes(
+    const struct nb_wsdisplay_session_sigterm_gate *gate);
 
 enum nb_wsdisplay_session_frame_completion {
     NB_WSDISPLAY_SESSION_FRAME_CURRENT,

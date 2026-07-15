@@ -47,6 +47,7 @@ bool nb_wsdisplay_session_parse_options(
     bool action_seen = false;
     bool core_seen = false;
     bool acknowledge_seen = false;
+    bool require_sigterm_seen = false;
     int index;
 
     if (options != NULL) {
@@ -81,6 +82,16 @@ bool nb_wsdisplay_session_parse_options(
             acknowledge_seen = true;
             parsed.acknowledge_console_takeover = true;
             continue;
+        } else if (strcmp(argv[index],
+                          "--require-supervisor-sigterm") == 0) {
+            if (require_sigterm_seen) {
+                set_error(error,
+                          "duplicate --require-supervisor-sigterm");
+                return false;
+            }
+            require_sigterm_seen = true;
+            parsed.require_supervisor_sigterm = true;
+            continue;
         } else if (strcmp(argv[index], "--core") == 0) {
             if (core_seen || index + 1 >= argc) {
                 set_error(error, core_seen ? "duplicate --core"
@@ -108,9 +119,9 @@ bool nb_wsdisplay_session_parse_options(
     }
 
     if (action_seen &&
-        (acknowledge_seen || core_seen)) {
+        (acknowledge_seen || core_seen || require_sigterm_seen)) {
         set_error(error,
-                  "takeover and core options are valid only for a run");
+                  "run-only options cannot be combined with an action");
         return false;
     }
     if (!action_seen && !acknowledge_seen) {
@@ -120,6 +131,19 @@ bool nb_wsdisplay_session_parse_options(
     }
     *options = parsed;
     return true;
+}
+
+bool nb_wsdisplay_session_sigterm_gate_passes(
+    const struct nb_wsdisplay_session_sigterm_gate *gate)
+{
+    return gate != NULL &&
+           gate->sigterm_received &&
+           gate->sigterm_drove_shutdown &&
+           !gate->independent_failure &&
+           gate->worker_gone &&
+           gate->core_session_gone &&
+           gate->console_restored &&
+           gate->recovery_record_removed;
 }
 
 static bool absolute_path_is_valid(const char *path)
@@ -1230,7 +1254,9 @@ struct supervisor_signal_state {
 
 static void supervisor_signal_handler(int signal_number)
 {
-    supervisor_signal = signal_number;
+    if (supervisor_signal == 0) {
+        supervisor_signal = signal_number;
+    }
 }
 
 static bool prepare_supervisor_signals(
@@ -1339,20 +1365,29 @@ static bool wait_core_session_gone(pid_t core, uint64_t deadline)
     return true;
 }
 
-static void signal_process(pid_t process, int signal_number)
+static bool signal_process(pid_t process, int signal_number)
 {
-    if (process > 0 && kill(process, signal_number) != 0 && errno != ESRCH) {
+    if (process <= 0) {
+        return false;
+    }
+    if (kill(process, signal_number) == 0) {
+        return true;
+    }
+    if (errno != ESRCH) {
         fprintf(stderr,
                 "Could not signal process %ld: %s\n",
                 (long)process,
                 strerror(errno));
     }
+    return false;
 }
 
 struct supervision_result {
     int status;
     bool worker_gone;
     bool core_session_gone;
+    bool sigterm_drove_shutdown;
+    bool independent_failure;
 };
 
 static struct supervision_result supervise_device_worker(
@@ -1366,7 +1401,9 @@ static struct supervision_result supervise_device_worker(
     struct supervision_result outcome = {
         .status = 1,
         .worker_gone = true,
-        .core_session_gone = true
+        .core_session_gone = true,
+        .sigterm_drove_shutdown = false,
+        .independent_failure = true
     };
     int report_pipe[2] = {-1, -1};
     pid_t worker;
@@ -1377,6 +1414,7 @@ static struct supervision_result supervise_device_worker(
     bool report_complete = false;
     bool report_reliable = true;
     bool term_sent = false;
+    bool term_delivered = false;
     bool kill_sent = false;
     bool wait_failed = false;
     uint64_t report_deadline;
@@ -1402,6 +1440,7 @@ static struct supervision_result supervise_device_worker(
     }
     outcome.worker_gone = false;
     outcome.core_session_gone = false;
+    outcome.independent_failure = false;
     if (worker == 0) {
         int result;
 
@@ -1425,6 +1464,7 @@ static struct supervision_result supervise_device_worker(
         report_complete = true;
         report_reliable = false;
         forced = true;
+        outcome.independent_failure = true;
         orderly_deadline = add_milliseconds(
             monotonic_milliseconds(),
             NB_SESSION_WORKER_ORDERLY_GRACE_MS);
@@ -1443,6 +1483,7 @@ static struct supervision_result supervise_device_worker(
             } else if (count == 0) {
                 report_complete = true;
                 report_reliable = false;
+                outcome.independent_failure = true;
                 orderly_deadline = add_milliseconds(
                     monotonic_milliseconds(),
                     NB_SESSION_WORKER_ORDERLY_GRACE_MS);
@@ -1453,6 +1494,7 @@ static struct supervision_result supervise_device_worker(
                 report_complete = true;
                 report_reliable = false;
                 forced = true;
+                outcome.independent_failure = true;
                 orderly_deadline = add_milliseconds(
                     monotonic_milliseconds(),
                     NB_SESSION_WORKER_ORDERLY_GRACE_MS);
@@ -1465,6 +1507,7 @@ static struct supervision_result supervise_device_worker(
                 report_complete = true;
                 report_reliable = false;
                 forced = true;
+                outcome.independent_failure = true;
                 orderly_deadline = add_milliseconds(
                     monotonic_milliseconds(),
                     NB_SESSION_WORKER_ORDERLY_GRACE_MS);
@@ -1479,10 +1522,14 @@ static struct supervision_result supervise_device_worker(
                     strerror(errno));
             forced = true;
             wait_failed = true;
+            outcome.independent_failure = true;
             break;
         }
         if (supervisor_signal != 0) {
             forced = true;
+            if (!reaped && supervisor_signal == SIGTERM) {
+                outcome.sigterm_drove_shutdown = true;
+            }
         }
         now = monotonic_milliseconds();
         if (!report_complete && now >= report_deadline) {
@@ -1492,6 +1539,7 @@ static struct supervision_result supervise_device_worker(
             report_complete = true;
             report_reliable = false;
             forced = true;
+            outcome.independent_failure = true;
             orderly_deadline = add_milliseconds(
                 now,
                 NB_SESSION_WORKER_ORDERLY_GRACE_MS);
@@ -1505,14 +1553,17 @@ static struct supervision_result supervise_device_worker(
                 continue;
             }
             if (!term_sent) {
-                signal_process(worker, SIGTERM);
-                signal_process(worker, SIGCONT);
+                term_delivered = signal_process(worker, SIGTERM);
+                (void)signal_process(worker, SIGCONT);
+                if (!term_delivered) {
+                    outcome.independent_failure = true;
+                }
                 term_sent = true;
                 escalation_deadline = add_milliseconds(
                     now,
                     NB_SESSION_WORKER_SIGNAL_GRACE_MS);
             } else if (!kill_sent && now >= escalation_deadline) {
-                signal_process(worker, SIGKILL);
+                (void)signal_process(worker, SIGKILL);
                 kill_sent = true;
                 escalation_deadline = add_milliseconds(
                     now,
@@ -1526,7 +1577,21 @@ static struct supervision_result supervise_device_worker(
     if (report_pipe[0] >= 0) {
         (void)close(report_pipe[0]);
     }
+    outcome.sigterm_drove_shutdown =
+        outcome.sigterm_drove_shutdown && term_delivered;
     outcome.worker_gone = reaped;
+    if (reaped) {
+        if (WIFEXITED(status)) {
+            if (WEXITSTATUS(status) != 0) {
+                outcome.independent_failure = true;
+            }
+        } else if (!WIFSIGNALED(status) ||
+                   !outcome.sigterm_drove_shutdown ||
+                   (WTERMSIG(status) != SIGTERM &&
+                    WTERMSIG(status) != SIGKILL)) {
+            outcome.independent_failure = true;
+        }
+    }
     if (reaped && WIFEXITED(status) &&
         WEXITSTATUS(status) !=
             NB_SESSION_WORKER_CLEANUP_INCOMPLETE_EXIT) {
@@ -1556,7 +1621,7 @@ static struct supervision_result supervise_device_worker(
     if (supervisor_signal != 0) {
         forced = true;
     }
-    if (!wait_failed && outcome.worker_gone &&
+    if (!wait_failed && !outcome.independent_failure && outcome.worker_gone &&
         outcome.core_session_gone && !forced && WIFEXITED(status) &&
         WEXITSTATUS(status) == 0) {
         outcome.status = 0;
@@ -1570,13 +1635,21 @@ int nb_wsdisplay_session_run(
     struct nb_wsdisplay_console_state state;
     struct nb_session_credentials credentials;
     struct supervisor_signal_state signals;
-    struct supervision_result supervision;
+    struct supervision_result supervision = {
+        .status = 1,
+        .worker_gone = true,
+        .core_session_gone = true,
+        .sigterm_drove_shutdown = false,
+        .independent_failure = true
+    };
     char credential_error[NB_SESSION_CREDENTIALS_ERROR_CAPACITY];
     char recovery_error[NB_WSDISPLAY_RECOVERY_ERROR_CAPACITY];
     char core_path[NB_WSDISPLAY_SESSION_PATH_CAPACITY];
     char nixclock_path[NB_WSDISPLAY_SESSION_PATH_CAPACITY];
     int session_lock_fd;
     int result = 1;
+    bool console_restored = false;
+    bool recovery_record_removed = false;
     bool signals_prepared = false;
 
     credential_error[0] = '\0';
@@ -1691,6 +1764,7 @@ int nb_wsdisplay_session_run(
         result = 1;
         goto release_lock;
     }
+    console_restored = true;
     if (!supervision.core_session_gone) {
         fputs("CORE/APPLICATION LIVENESS WAS NOT CLEARED. The console was "
               "restored, but the recovery record was retained.\n",
@@ -1705,12 +1779,43 @@ int nb_wsdisplay_session_run(
     } else {
         puts("Supervisor verified console restoration and cleared the "
              "recovery record.");
+        recovery_record_removed = true;
     }
 
 release_lock:
-    if (options->action == NB_WSDISPLAY_SESSION_ACTION_RUN &&
-        supervisor_signal != 0) {
-        result = 1;
+    if (options->action == NB_WSDISPLAY_SESSION_ACTION_RUN) {
+        if (options->require_supervisor_sigterm) {
+            const struct nb_wsdisplay_session_sigterm_gate gate = {
+                .sigterm_received = supervisor_signal == SIGTERM,
+                .sigterm_drove_shutdown =
+                    supervision.sigterm_drove_shutdown,
+                .independent_failure = supervision.independent_failure,
+                .worker_gone = supervision.worker_gone,
+                .core_session_gone = supervision.core_session_gone,
+                .console_restored = console_restored,
+                .recovery_record_removed = recovery_record_removed
+            };
+
+            if (nb_wsdisplay_session_sigterm_gate_passes(&gate)) {
+                puts("Required supervisor SIGTERM was received; worker and "
+                     "core cleanup, console restoration, and recovery-record "
+                     "removal completed.");
+                result = 0;
+            } else {
+                if (supervisor_signal == 0) {
+                    fputs("Required supervisor SIGTERM was not received.\n",
+                          stderr);
+                } else if (supervisor_signal != SIGTERM) {
+                    fprintf(stderr,
+                            "Required supervisor SIGTERM, but signal %d was "
+                            "received.\n",
+                            (int)supervisor_signal);
+                }
+                result = 1;
+            }
+        } else if (supervisor_signal != 0) {
+            result = 1;
+        }
     }
     if (signals_prepared) {
         restore_supervisor_signals(&signals, true);

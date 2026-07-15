@@ -8,7 +8,8 @@ static void print_usage(const char *program)
            "  %s --help\n"
            "  sudo %s --preflight\n"
            "  sudo %s --recover\n"
-           "  sudo %s --acknowledge-console-takeover [--core ABSOLUTE]\n\n",
+           "  sudo %s --acknowledge-console-takeover [--core ABSOLUTE]\n"
+           "       [--require-supervisor-sigterm]\n\n",
            program,
            program,
            program,
@@ -19,6 +20,7 @@ static void print_usage(const char *program)
     puts("  --preflight                    inspect the fixed console without takeover");
     puts("  --recover                      restore /var/run/nixbench-wsdisplay-session.state");
     puts("  --acknowledge-console-takeover start the supervised session");
+    puts("  --require-supervisor-sigterm   require caught SIGTERM and verified recovery");
     puts("  --help                         show this help without device access");
     puts("\nThe default core is the nixbench-session-core sibling of this executable.");
 }

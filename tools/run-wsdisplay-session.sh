@@ -17,6 +17,13 @@ fi
 
 jobs=${NIXBENCH_JOBS:-4}
 build_type=${NIXBENCH_BUILD_TYPE:-RelWithDebInfo}
+expect_supervisor_term=${NIXBENCH_EXPECT_SUPERVISOR_TERM:-0}
+case "$expect_supervisor_term" in
+    0|1) ;;
+    *)
+        fail "NIXBENCH_EXPECT_SUPERVISOR_TERM must be 0 or 1"
+        ;;
+esac
 
 script_path=$0
 case "$script_path" in
@@ -98,24 +105,27 @@ if [ "${#original_vt}" -gt 3 ] || [ "$original_vt" -gt 256 ]; then
     fail "active wsdisplay VT number is outside the supported range"
 fi
 
-away_vt=${NIXBENCH_VT_AWAY:-}
-if [ -z "$away_vt" ]; then
-    if [ "$original_vt" -eq 2 ]; then
-        away_vt=1
-    else
-        away_vt=2
+away_vt=
+if [ "$expect_supervisor_term" -eq 0 ]; then
+    away_vt=${NIXBENCH_VT_AWAY:-}
+    if [ -z "$away_vt" ]; then
+        if [ "$original_vt" -eq 2 ]; then
+            away_vt=1
+        else
+            away_vt=2
+        fi
     fi
-fi
-case "$away_vt" in
-    ''|0|0*|*[!0-9]*)
-        fail "NIXBENCH_VT_AWAY must be a positive one-based VT number"
-        ;;
-esac
-if [ "${#away_vt}" -gt 3 ] || [ "$away_vt" -gt 256 ]; then
-    fail "NIXBENCH_VT_AWAY is outside the supported range"
-fi
-if [ "$away_vt" -eq "$original_vt" ]; then
-    fail "NIXBENCH_VT_AWAY must differ from active VT $original_vt"
+    case "$away_vt" in
+        ''|0|0*|*[!0-9]*)
+            fail "NIXBENCH_VT_AWAY must be a positive one-based VT number"
+            ;;
+    esac
+    if [ "${#away_vt}" -gt 3 ] || [ "$away_vt" -gt 256 ]; then
+        fail "NIXBENCH_VT_AWAY is outside the supported range"
+    fi
+    if [ "$away_vt" -eq "$original_vt" ]; then
+        fail "NIXBENCH_VT_AWAY must differ from active VT $original_vt"
+    fi
 fi
 
 cat <<EOF
@@ -130,8 +140,25 @@ receive no framebuffer, keyboard, mouse, recovery, or VT descriptor.
 
 NixClock will open automatically. Its menus are installed into the global bar:
 use NixClock -> Quit to close the clock, and Settings -> Show seconds to toggle
-the seconds hand. After closing it, use the desktop's NixBench -> Quit command,
-or press Escape when no Wayland client owns keyboard focus, to end the session.
+the seconds hand.
+EOF
+
+if [ "$expect_supervisor_term" -eq 1 ]; then
+    cat <<EOF
+This is the supervised SIGTERM recovery gate. Once the desktop is visible, do
+not quit it and do not switch VTs. In the retained second SSH session, run the
+exact sudo kill -TERM command printed with the supervisor PID after takeover.
+
+The privileged launcher succeeds only if SIGTERM drives the shutdown, no
+independent supervision failure occurs, the worker and ordinary-user
+core/application session are gone, the saved console state is restored and
+verified, and the recovery record is removed. A normal desktop exit, a
+different signal, or incomplete recovery fails this trial.
+EOF
+else
+    cat <<EOF
+After closing NixClock, use the desktop's NixBench -> Quit command, or press
+Escape when no Wayland client owns keyboard focus, to end the session.
 
 For the VT lifecycle gate, once the desktop is visible use the second SSH
 session to switch away and back (these are one-based VT numbers):
@@ -143,7 +170,10 @@ Pause long enough to see VT $away_vt before returning to VT $original_vt. If VT
 $away_vt is not a configured idle text console, cancel before takeover and set
 NIXBENCH_VT_AWAY to one that is. On normal exit, the launcher reports completed
 release/acquire counts; this trial should report 1 and 1.
+EOF
+fi
 
+cat <<EOF
 Keep a second SSH session open. The launcher prints its supervisor PID and an
 exact SIGTERM command. If orderly cancellation fails, verify that no
 nixbench-wsdisplay-session helper remains, then recover with:
@@ -163,7 +193,12 @@ fi
 
 echo "==> Starting NixBench and NixClock"
 set +e
-sudo -n "$staged_session" --acknowledge-console-takeover --core "$core"
+if [ "$expect_supervisor_term" -eq 1 ]; then
+    sudo -n "$staged_session" --acknowledge-console-takeover \
+        --core "$core" --require-supervisor-sigterm
+else
+    sudo -n "$staged_session" --acknowledge-console-takeover --core "$core"
+fi
 run_status=$?
 set -e
 
@@ -180,15 +215,27 @@ Only after it has exited, restore with:
 EOF
     exit 1
 fi
+if ! sudo -n /bin/test ! -e "$state_path"; then
+    fail "could not independently verify recovery-record removal"
+fi
 
 echo "==> Verifying the restored console independently"
 sudo -n "$staged_session" --preflight
 
 echo "==> Active wsdisplay VT (one-based)"
-sudo -n /usr/sbin/wsconscfg -g
+restored_vt=$(sudo -n /usr/sbin/wsconscfg -g) ||
+    fail "could not query the restored wsdisplay VT"
+echo "$restored_vt"
+if [ "$restored_vt" != "$original_vt" ]; then
+    fail "active VT changed from $original_vt to $restored_vt"
+fi
 
 if [ "$run_status" -ne 0 ]; then
     fail "the session returned status $run_status, but restoration completed"
 fi
 
-echo "==> Success: NixBench exited and console restoration was verified"
+if [ "$expect_supervisor_term" -eq 1 ]; then
+    echo "==> Success: supervisor SIGTERM recovery and console restoration were verified"
+else
+    echo "==> Success: NixBench exited and console restoration was verified"
+fi

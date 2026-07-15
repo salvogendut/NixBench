@@ -431,6 +431,20 @@ deadline: exit from the desktop menu, press Escape while no Wayland client owns
 keyboard focus, or use the printed supervisor `SIGTERM` command from the
 retained second SSH session.
 
+For the explicit supervisor-termination recovery gate, run:
+
+```sh
+NIXBENCH_EXPECT_SUPERVISOR_TERM=1 ./tools/run-wsdisplay-session.sh
+```
+
+That mode omits the VT-switch instructions and requires the operator to send
+the exact printed `sudo kill -TERM` command from the second SSH session. It
+reports success only when SIGTERM drove the shutdown without an independent
+supervision fault, the worker and ordinary-user session are gone, the console
+was independently restored, the recovery record is absent, and the original
+VT is active again. A normal desktop exit or any nonzero gated-launch result is
+reported as a failed trial.
+
 Before any privileged device is opened, the launcher reserves standard file
 descriptors 0, 1, and 2 so a closed standard stream cannot accidentally become
 an inherited device capability. A root-owned mode-0600 flock at
