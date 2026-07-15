@@ -502,6 +502,8 @@ accelerated buffers, and generic GTK global-menu integration remain incomplete.
 
 Set `NIXBENCH_TRACE_WAYLAND=1` when invoking `./tools/run-wsdisplay-session.sh`
 if you need a client-side protocol trace for the first failing interaction.
+When rerunning tests after one of those probes, `./tools/run-clean-env.sh`
+clears the `NIXBENCH_*` launch variables first.
 
 For the explicit supervisor-termination recovery gate, run:
 

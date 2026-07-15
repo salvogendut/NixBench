@@ -532,6 +532,8 @@ boundaries.
 
 Set `NIXBENCH_TRACE_WAYLAND=1` when invoking `./tools/run-wsdisplay-session.sh`
 if you need a client-side protocol trace for a failing interaction.
+Use `./tools/run-clean-env.sh` before rerunning tests after one of those
+probes; it clears the `NIXBENCH_*` launch variables first.
 
 It configures and builds the opt-in targets, runs device-free tests, stages the
 privileged launcher as the root-owned, non-writable
