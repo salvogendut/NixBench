@@ -63,10 +63,14 @@ toolkits while NixBench owns window management and composition:
 The current implementation is an early protocol slice. It advertises
 `wl_compositor`, `wl_shm`, one logical `wl_output`, a pointer-and-keyboard
 `wl_seat`, and stable `xdg_wm_base`; accepts ARGB/XRGB shared-memory buffers;
-and maps an `xdg_toplevel` into an internal NixBench window. The logical output
-tracks the SDL renderer size and mapped surfaces receive output membership
-events. SDL pointer motion and buttons are routed to client content with
-surface-coordinate scaling and an implicit button grab.
+and maps an `xdg_toplevel` into an internal NixBench window. A first
+`xdg_positioner`/`xdg_popup` slice configures shared-memory popups relative to
+their parent, accepts GTK's valid pre-map popup grab, and CPU-composites popup
+pixels into the parent snapshot. Parent unmap and teardown recursively dismiss
+dependent popups so their lifetime cannot outlive the surface relationship.
+The logical output tracks the SDL renderer size and mapped surfaces receive
+output membership events. SDL pointer motion and buttons are routed to client
+content with surface-coordinate scaling and an implicit button grab.
 
 Keyboard focus follows the active NixBench window. The compositor publishes an
 XKB keymap, repeat settings, held-key state, and modifiers, and converts SDL's
@@ -86,7 +90,8 @@ focused input and protocol probe.
 Socket-pair protocol tests cover configure/acknowledge, mapping, pixels, frame
 completion, output state and membership, application-menu transactions and
 command delivery, XKB keymap delivery, pointer and keyboard events, grabs,
-focus cleanup, close, and unmap without requiring a running display server.
+focus cleanup, popup configure/map/composition/teardown, close, and unmap
+without requiring a running display server.
 
 X.org is a transitional development platform, not the final runtime
 architecture. It lets the project validate the shell, interaction model, and
@@ -217,14 +222,17 @@ This keeps the shell, focus, and Wayland policy independent of the eventual
 Neither the in-process event/request contract nor the Wayland integration is a
 stable public API yet. The Wayland slice currently has one scale-1 logical
 output and no touch capability, pointer-axis scrolling, client cursor
-rendering, buffer scale/transform or input-region handling, popups,
-subsurfaces, clipboard, accelerated buffers, resize negotiation,
+rendering, buffer scale/transform or input-region handling, subsurfaces,
+clipboard, accelerated buffers, resize negotiation,
 desktop-managed application launching, or general toolkit bridge for
-application menus. NixClock exercises the first private application-menu
-protocol. Existing GTK/SDL Wayland clients are not supported yet; the
-standalone initial-application selector permits diagnostic compatibility
-probes that are expected to expose those missing protocols. NixBench also does
-not yet offer a supported production direct-console login session.
+application menus. Its popup support is deliberately narrow: full pointer
+routing into popups, outside-click dismissal policy, and positioner constraint
+adjustment are not implemented yet. NixClock exercises the first private
+application-menu protocol. Existing GTK/SDL Wayland clients are not supported
+yet; the standalone initial-application selector permits diagnostic
+compatibility probes that are expected to expose those missing protocols.
+NixBench also does not yet offer a supported production direct-console login
+session.
 
 The initial chrome uses an original palette and geometry while exploring a
 classic beveled Workbench/AROS-inspired vocabulary. AROS was studied as a design
@@ -487,7 +495,8 @@ credential-dropped core performs the actual `exec` without a shell. This is
 not an application sandbox: the selected program retains the invoking user's
 home-directory and group access. Use Midori only with blank or otherwise
 trusted content during this first probe. A main window may expose the next
-compatibility boundary rather than be fully usable: `xdg_popup`, pointer-axis
+compatibility boundary rather than be fully usable: popup pointer routing,
+outside-click dismissal and positioner constraint adjustment, pointer-axis
 scrolling, subsurfaces, clipboard/data transfer beyond the discovery skeleton,
 accelerated buffers, and generic GTK global-menu integration remain incomplete.
 
@@ -643,6 +652,18 @@ repeatable on the physical console. Standalone clients also receive
 the private display and EGL selection. A supervised per-session D-Bus remains
 future work; the current accessibility and GApplication bus warnings are
 non-fatal.
+
+The first physical address-bar input trial then proved that Control+L reaches
+GTK and focuses Midori's URL entry. Typing the first character (`d`) caused
+GTK 3.24's `GtkEntryCompletion` to request and map its one-character
+completion dropdown as an `xdg_popup`. NixBench's former fatal "popup not
+implemented" protocol response disconnected the client, after which Midori
+terminated with `SIGSEGV`; this was a compositor protocol gap, not a failed
+letter mapping. NixBench now implements the basic positioner/popup lifecycle,
+accepts GTK's valid pre-map popup grab, CPU-composites the popup, and safely
+dismisses descendants when their parent disappears. The NetBSD device-free
+suite passes all 50 tests with this slice. A physical Control+L, type/edit, and
+Return retry remains the acceptance gate.
 
 The opt-in `wsdisplay` presentation harness must run as root. Start with its
 query-only preflight:
@@ -820,8 +841,9 @@ acknowledges release, reacquires and reconfigures, reopens input, and then
 completes a full redraw. It also rejects lifecycle timestamp regressions,
 missing timing samples, and a missing post-acquire frame. The complete release/
 acquire cycle and Escape exit have passed on the X220; the new full PC-XT text
-profile has deterministic reducer and XKB tests and awaits its focused Midori
-address-bar trial.
+profile has deterministic reducer and XKB tests. Control+L and the first text
+key reached Midori on hardware; the focused type/edit/Return retry now awaits
+physical validation of the new popup path.
 
 Interactive input is acquired only by the framebuffer worker. Both mux
 descriptors are closed and held button/keyboard state is discarded before an

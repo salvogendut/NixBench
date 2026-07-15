@@ -524,9 +524,11 @@ invoking user's home-directory and group access.
 
 The initial Midori run is diagnostic and should use only blank or trusted
 content. A toplevel may appear before the browser is fully usable. Missing
-`xdg_popup`, pointer-axis scrolling, subsurfaces, clipboard/data transfer
-beyond the discovery skeleton, accelerated buffer sharing, and a generic GTK
-global-menu bridge are the expected first compatibility boundaries.
+full popup pointer routing, outside-click dismissal policy, positioner
+constraint adjustment, pointer-axis scrolling, subsurfaces, clipboard/data
+transfer beyond the discovery skeleton, accelerated buffer sharing, and a
+generic GTK global-menu bridge are the expected first compatibility
+boundaries.
 
 It configures and builds the opt-in targets, runs device-free tests, stages the
 privileged launcher as the root-owned, non-writable
@@ -627,6 +629,21 @@ composition failure. The dedicated content wrapper above makes the same check
 available on the physical console. Missing user-session D-Bus services still
 produce non-fatal accessibility and GApplication diagnostics; one supervised
 ordinary-user D-Bus session for the complete desktop remains future work.
+
+The first physical keyboard trial subsequently delivered Control+L and focused
+Midori's URL entry. GTK 3.24 then created its `GtkEntryCompletion` dropdown as
+an `xdg_popup` as soon as the first character (`d`) was typed. The compositor's
+former fatal "popup not implemented" response disconnected the client, and
+Midori terminated with `SIGSEGV` while tearing down; the typed letter itself
+had traversed the wscons and Wayland keyboard paths correctly. The embedded
+server now implements a basic `xdg_positioner`/`xdg_popup` lifecycle: it sends
+the initial configure sequence, accepts GTK's valid pre-map popup grab, copies
+and CPU-composites shared-memory popup pixels into the parent snapshot, and
+recursively dismisses descendants when a parent unmaps or is destroyed. The
+NetBSD device-free suite passes 50/50 tests with that implementation. Full
+pointer routing into popups, outside-click dismissal policy, and positioner
+constraint adjustment remain incomplete. A physical Control+L, type/edit, and
+Return retry is still pending.
 
 The older all-root smoke harness remains useful only for bounded research and
 does not become an application launcher.

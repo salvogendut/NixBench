@@ -212,11 +212,20 @@ Reducer tests cover
 Shift/Control sequences, Backspace versus Delete, repeats, out-of-range input,
 and deterministic `ALL_KEYS_UP` release of fifty simultaneous keys; the
 Wayland keymap test proves `AC01` resolves to `a` and Shift+`AC01` to `A`.
-Physical Midori address-bar validation remains the acceptance gate.
+The first physical address-bar run proved Control+L focus and delivery of the
+first letter, but that letter caused GTK 3.24 `GtkEntryCompletion` to map its
+one-character dropdown. NixBench's former fatal rejection of `xdg_popup`
+disconnected Midori, which then terminated with `SIGSEGV`. The new basic
+`xdg_positioner`/`xdg_popup` slice configures and maps shared-memory popups,
+accepts GTK's valid pre-map popup grab, CPU-composites popup pixels, and
+recursively dismisses descendants during parent teardown. The NetBSD
+device-free suite passes 50/50 tests. Physical Control+L, text editing, and
+Return validation remains the acceptance gate; full popup pointer routing,
+outside-click policy, and constraint adjustment remain later work.
 Malformed protocol, harder supervisor/worker failures, and repeated-session
 validation remain. Installation and launching managed by the desktop,
-popup/subsurface/data transfer, broader toolkit trials, and application-menu
-bridges also remain outstanding.
+complete popup interaction policy, subsurface/data transfer, broader toolkit
+trials, and application-menu bridges also remain outstanding.
 
 ## Milestone 6: Package and validate the hosted prototype
 
@@ -402,8 +411,9 @@ acceptance trials.
 The PC-XT/US profile and published XKB map now cover basic GTK text and
 shortcuts in device-free tests. National-layout reconciliation, LEDs, unknown
 keyboard types, heterogeneous mux devices, and full seat/hotplug handling
-remain in the broader input gate. A focused physical Midori address-bar trial
-is the next acceptance check.
+remain in the broader input gate. The first focused Midori trial delivered
+Control+L and one letter before exposing the now-implemented popup protocol
+gap; a physical type/edit/Return retry is the next acceptance check.
 The detailed design and source references are in
 [`docs/standalone-backend.md`](docs/standalone-backend.md).
 
