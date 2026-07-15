@@ -393,46 +393,55 @@ void nb_nixinfo_init(struct nb_nixinfo *nixinfo,
         (struct nb_menu_item_spec){"New Window",
                                    NB_NIXINFO_COMMAND_NEW_WINDOW,
                                    NB_MENU_ITEM_COMMAND,
-                                   true};
+                                   true,
+                                   false};
     nixinfo->project_items[PROJECT_REFRESH_INDEX] =
         (struct nb_menu_item_spec){"Refresh",
                                    NB_NIXINFO_COMMAND_REFRESH,
                                    NB_MENU_ITEM_COMMAND,
+                                   false,
                                    false};
     nixinfo->project_items[2] =
         (struct nb_menu_item_spec){NULL,
                                    NB_MENU_COMMAND_NONE,
                                    NB_MENU_ITEM_SEPARATOR,
+                                   false,
                                    false};
     nixinfo->project_items[PROJECT_ABOUT_INDEX] =
         (struct nb_menu_item_spec){"About NixInfo",
                                    NB_NIXINFO_COMMAND_ABOUT,
                                    NB_MENU_ITEM_COMMAND,
-                                   true};
+                                   true,
+                                   false};
     nixinfo->project_items[4] =
         (struct nb_menu_item_spec){NULL,
                                    NB_MENU_COMMAND_NONE,
                                    NB_MENU_ITEM_SEPARATOR,
+                                   false,
                                    false};
     nixinfo->project_items[PROJECT_QUIT_INDEX] =
         (struct nb_menu_item_spec){"Quit NixInfo",
                                    NB_NIXINFO_COMMAND_QUIT,
                                    NB_MENU_ITEM_COMMAND,
-                                   true};
+                                   true,
+                                   false};
     nixinfo->view_items[VIEW_VERSION_INDEX] =
         (struct nb_menu_item_spec){"Show Kernel Version",
                                    NB_NIXINFO_COMMAND_TOGGLE_VERSION,
                                    NB_MENU_ITEM_COMMAND,
+                                   false,
                                    false};
     nixinfo->window_items[WINDOW_CLOSE_INDEX] =
         (struct nb_menu_item_spec){"Close Window",
                                    NB_NIXINFO_COMMAND_CLOSE_WINDOW,
                                    NB_MENU_ITEM_COMMAND,
+                                   false,
                                    false};
     nixinfo->window_items[WINDOW_CLOSE_OTHERS_INDEX] =
         (struct nb_menu_item_spec){"Close Other Windows",
                                    NB_NIXINFO_COMMAND_CLOSE_OTHER_WINDOWS,
                                    NB_MENU_ITEM_COMMAND,
+                                   false,
                                    false};
 
     nixinfo->menus[0] =

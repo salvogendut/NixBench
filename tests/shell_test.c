@@ -26,7 +26,7 @@ enum {
 };
 
 static const struct nb_menu_item_spec desktop_items[] = {
-    {"Desktop action", DESKTOP_COMMAND, NB_MENU_ITEM_COMMAND, true}
+    {"Desktop action", DESKTOP_COMMAND, NB_MENU_ITEM_COMMAND, true, false}
 };
 static const struct nb_menu_spec desktop_menus[] = {
     {"NixBench", desktop_items, 1}
@@ -34,13 +34,13 @@ static const struct nb_menu_spec desktop_menus[] = {
 static const struct nb_menu_model desktop_model = {desktop_menus, 1};
 
 static const struct nb_menu_item_spec items_a[] = {
-    {"Action A", COMMAND_A, NB_MENU_ITEM_COMMAND, true}
+    {"Action A", COMMAND_A, NB_MENU_ITEM_COMMAND, true, false}
 };
 static const struct nb_menu_spec menus_a[] = {{"Alpha", items_a, 1}};
 static const struct nb_menu_model model_a = {menus_a, 1};
 
 static const struct nb_menu_item_spec items_a_updated[] = {
-    {"Updated A", COMMAND_A_UPDATED, NB_MENU_ITEM_COMMAND, true}
+    {"Updated A", COMMAND_A_UPDATED, NB_MENU_ITEM_COMMAND, true, false}
 };
 static const struct nb_menu_spec menus_a_updated[] = {
     {"Alpha 2", items_a_updated, 1}
@@ -48,13 +48,13 @@ static const struct nb_menu_spec menus_a_updated[] = {
 static const struct nb_menu_model model_a_updated = {menus_a_updated, 1};
 
 static const struct nb_menu_item_spec items_b[] = {
-    {"Action B", COMMAND_B, NB_MENU_ITEM_COMMAND, true}
+    {"Action B", COMMAND_B, NB_MENU_ITEM_COMMAND, true, false}
 };
 static const struct nb_menu_spec menus_b[] = {{"Beta", items_b, 1}};
 static const struct nb_menu_model model_b = {menus_b, 1};
 
 static const struct nb_menu_item_spec items_b_updated[] = {
-    {"Updated B", COMMAND_B_UPDATED, NB_MENU_ITEM_COMMAND, true}
+    {"Updated B", COMMAND_B_UPDATED, NB_MENU_ITEM_COMMAND, true, false}
 };
 static const struct nb_menu_spec menus_b_updated[] = {
     {"Beta 2", items_b_updated, 1}

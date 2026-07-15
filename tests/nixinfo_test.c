@@ -24,7 +24,7 @@ enum {
 };
 
 static const struct nb_menu_item_spec desktop_items[] = {
-    {"Desktop", DESKTOP_COMMAND, NB_MENU_ITEM_COMMAND, true}
+    {"Desktop", DESKTOP_COMMAND, NB_MENU_ITEM_COMMAND, true, false}
 };
 static const struct nb_menu_spec desktop_menus[] = {
     {"NixBench", desktop_items, 1}
@@ -32,7 +32,7 @@ static const struct nb_menu_spec desktop_menus[] = {
 static const struct nb_menu_model desktop_model = {desktop_menus, 1};
 
 static const struct nb_menu_item_spec foreign_items[] = {
-    {"Foreign", FOREIGN_COMMAND, NB_MENU_ITEM_COMMAND, true}
+    {"Foreign", FOREIGN_COMMAND, NB_MENU_ITEM_COMMAND, true, false}
 };
 static const struct nb_menu_spec foreign_menus[] = {
     {"Foreign", foreign_items, 1}

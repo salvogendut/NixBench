@@ -115,7 +115,7 @@ static bool copy_menu_snapshot(
             } else if (source_item->kind == NB_MENU_ITEM_SEPARATOR) {
                 if (source_item->label != NULL ||
                     source_item->command != NB_MENU_COMMAND_NONE ||
-                    source_item->enabled) {
+                    source_item->enabled || source_item->checked) {
                     memset(destination, 0, sizeof(*destination));
                     return false;
                 }
@@ -128,6 +128,7 @@ static bool copy_menu_snapshot(
             destination_item->command = source_item->command;
             destination_item->kind = source_item->kind;
             destination_item->enabled = source_item->enabled;
+            destination_item->checked = source_item->checked;
         }
     }
 

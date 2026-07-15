@@ -126,7 +126,8 @@ static int panel_natural_width(const struct nb_menu_spec *spec)
         const struct nb_menu_item_spec *item = &spec->items[index];
         const int item_width =
             (int)(bounded_text_length(item->label) * MENU_GLYPH_WIDTH) +
-            (2 * MENU_ITEM_PADDING_X) + (2 * MENU_PANEL_BORDER);
+            NB_MENU_ITEM_GUTTER_WIDTH + (2 * MENU_ITEM_PADDING_X) +
+            (2 * MENU_PANEL_BORDER);
 
         if (item_width > width) {
             width = item_width;

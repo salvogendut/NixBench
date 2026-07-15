@@ -31,10 +31,10 @@ enum nb_preview_command {
 
 static const struct nb_menu_item_spec desktop_items[] = {
     {"About NixBench", NB_PREVIEW_COMMAND_ABOUT,
-     NB_MENU_ITEM_COMMAND, true},
-    {NULL, NB_MENU_COMMAND_NONE, NB_MENU_ITEM_SEPARATOR, false},
+     NB_MENU_ITEM_COMMAND, true, false},
+    {NULL, NB_MENU_COMMAND_NONE, NB_MENU_ITEM_SEPARATOR, false, false},
     {"Exit Preview", NB_PREVIEW_COMMAND_EXIT,
-     NB_MENU_ITEM_COMMAND, true}
+     NB_MENU_ITEM_COMMAND, true, false}
 };
 
 static const struct nb_menu_spec desktop_menus[] = {
@@ -49,19 +49,19 @@ static const struct nb_menu_model desktop_menu_model = {
 
 static const struct nb_menu_item_spec project_items[] = {
     {"About Preview", NB_PREVIEW_COMMAND_ABOUT,
-     NB_MENU_ITEM_COMMAND, true},
-    {NULL, NB_MENU_COMMAND_NONE, NB_MENU_ITEM_SEPARATOR, false},
+     NB_MENU_ITEM_COMMAND, true, false},
+    {NULL, NB_MENU_COMMAND_NONE, NB_MENU_ITEM_SEPARATOR, false, false},
     {"Exit Preview", NB_PREVIEW_COMMAND_EXIT,
-     NB_MENU_ITEM_COMMAND, true}
+     NB_MENU_ITEM_COMMAND, true, false}
 };
 
 static const struct nb_menu_item_spec view_items[] = {
-    {"Refresh", NB_PREVIEW_COMMAND_REFRESH, NB_MENU_ITEM_COMMAND, true}
+    {"Refresh", NB_PREVIEW_COMMAND_REFRESH, NB_MENU_ITEM_COMMAND, true, false}
 };
 
 static const struct nb_menu_item_spec window_items[] = {
     {"Close Window", NB_PREVIEW_COMMAND_CLOSE,
-     NB_MENU_ITEM_COMMAND, true}
+     NB_MENU_ITEM_COMMAND, true, false}
 };
 
 static const struct nb_menu_spec application_menus[] = {

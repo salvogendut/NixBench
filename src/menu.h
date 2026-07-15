@@ -12,7 +12,8 @@ enum {
     NB_MENU_CLOCK_AREA_WIDTH = 72,
     NB_MENU_MAX_MENUS = 8,
     NB_MENU_MAX_ITEMS = 16,
-    NB_MENU_TEXT_CAPACITY = 32
+    NB_MENU_TEXT_CAPACITY = 32,
+    NB_MENU_ITEM_GUTTER_WIDTH = 18
 };
 
 typedef uint32_t nb_menu_command;
@@ -29,6 +30,8 @@ struct nb_menu_item_spec {
     nb_menu_command command;
     enum nb_menu_item_kind kind;
     bool enabled;
+    /* Command state; validated separator descriptors require false. */
+    bool checked;
 };
 
 struct nb_menu_spec {

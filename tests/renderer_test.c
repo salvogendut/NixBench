@@ -4,6 +4,7 @@
 #include <SDL3/SDL.h>
 
 #include "desktop_renderer.h"
+#include "menu_renderer.h"
 
 static int failures;
 
@@ -40,6 +41,29 @@ static SDL_Rect sdl_rect(struct nb_rect rect)
     };
 
     return converted;
+}
+
+static bool pixel_equals(SDL_Surface *surface,
+                         int x,
+                         int y,
+                         Uint8 expected_red,
+                         Uint8 expected_green,
+                         Uint8 expected_blue)
+{
+    Uint8 red = 0;
+    Uint8 green = 0;
+    Uint8 blue = 0;
+    Uint8 alpha = 0;
+
+    return SDL_ReadSurfacePixel(surface,
+                                x,
+                                y,
+                                &red,
+                                &green,
+                                &blue,
+                                &alpha) &&
+           red == expected_red && green == expected_green &&
+           blue == expected_blue && alpha == SDL_ALPHA_OPAQUE;
 }
 
 static bool record_content(SDL_Renderer *renderer,
@@ -188,9 +212,65 @@ static void test_content_callback_and_clip_restoration(void)
     SDL_DestroySurface(surface);
 }
 
+static void test_checked_menu_item_gutter(void)
+{
+    const struct nb_rect viewport = {0, 0, 220, 100};
+    struct nb_menu_item_spec items[] = {
+        {"Show seconds", 1, NB_MENU_ITEM_COMMAND, true, false}
+    };
+    const struct nb_menu_spec menus[] = {
+        {"Settings", items, 1}
+    };
+    const struct nb_menu_model model = {menus, 1};
+    struct nb_menu menu;
+    struct nb_rect label;
+    struct nb_rect item;
+    SDL_Surface *surface = SDL_CreateSurface(220,
+                                             100,
+                                             SDL_PIXELFORMAT_RGBA32);
+    SDL_Renderer *renderer = NULL;
+    int mark_x;
+    int mark_y;
+
+    CHECK(surface != NULL);
+    if (surface == NULL) {
+        return;
+    }
+    renderer = SDL_CreateSoftwareRenderer(surface);
+    CHECK(renderer != NULL);
+    if (renderer == NULL) {
+        SDL_DestroySurface(surface);
+        return;
+    }
+
+    nb_menu_init(&menu);
+    nb_menu_set_model(&menu, &model);
+    label = nb_menu_label_rect(&menu, viewport, 0);
+    CHECK(nb_menu_pointer_down(&menu, label.x + 1, label.y + 1, viewport));
+    CHECK(nb_menu_pointer_up(&menu, label.x + 1, label.y + 1, viewport) ==
+          NB_MENU_COMMAND_NONE);
+    CHECK(nb_menu_is_open(&menu));
+    item = nb_menu_item_rect(&menu, viewport, 0);
+    mark_x = item.x + 4;
+    mark_y = item.y + (item.height / 2);
+
+    CHECK(nb_menu_render(renderer, &menu, viewport, ""));
+    CHECK(SDL_RenderPresent(renderer));
+    CHECK(pixel_equals(surface, mark_x, mark_y, 213, 219, 211));
+
+    items[0].checked = true;
+    CHECK(nb_menu_render(renderer, &menu, viewport, ""));
+    CHECK(SDL_RenderPresent(renderer));
+    CHECK(pixel_equals(surface, mark_x, mark_y, 18, 28, 33));
+
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroySurface(surface);
+}
+
 int main(void)
 {
     test_content_callback_and_clip_restoration();
+    test_checked_menu_item_gutter();
 
     if (failures != 0) {
         fprintf(stderr, "%d renderer check(s) failed\n", failures);

@@ -189,6 +189,48 @@ static bool render_separator(SDL_Renderer *renderer, struct nb_rect rect)
            SDL_RenderLine(renderer, left, middle + 1.0f, right, middle + 1.0f);
 }
 
+static bool render_check_mark(SDL_Renderer *renderer,
+                              struct nb_rect rect,
+                              struct color color)
+{
+    const float left = (float)(rect.x + 4);
+    const float middle = (float)(rect.x + 8);
+    const float right = (float)(rect.x + 14);
+    const float center = (float)(rect.y + (rect.height / 2));
+
+    if (rect.width < NB_MENU_ITEM_GUTTER_WIDTH || rect.height < 12) {
+        return true;
+    }
+    return set_color(renderer, color) &&
+           SDL_RenderLine(renderer, left, center, middle, center + 4.0f) &&
+           SDL_RenderLine(renderer,
+                          left,
+                          center + 1.0f,
+                          middle,
+                          center + 5.0f) &&
+           SDL_RenderLine(renderer,
+                          middle,
+                          center + 4.0f,
+                          right,
+                          center - 4.0f) &&
+           SDL_RenderLine(renderer,
+                          middle,
+                          center + 5.0f,
+                          right,
+                          center - 3.0f);
+}
+
+static bool render_item_label(SDL_Renderer *renderer,
+                              struct nb_rect rect,
+                              struct color color,
+                              const char *label)
+{
+    rect.x += NB_MENU_ITEM_GUTTER_WIDTH;
+    rect.width = rect.width > NB_MENU_ITEM_GUTTER_WIDTH ?
+                 rect.width - NB_MENU_ITEM_GUTTER_WIDTH : 0;
+    return render_text(renderer, rect, 10, color, label, false);
+}
+
 static bool render_panel(SDL_Renderer *renderer,
                          const struct nb_menu *menu,
                          struct nb_rect viewport)
@@ -216,6 +258,9 @@ static bool render_panel(SDL_Renderer *renderer,
             nb_menu_item_rect(menu, viewport, index);
         const bool actionable = nb_menu_item_is_actionable(item);
         const bool hot = index == menu->hot_item && actionable;
+        const struct color item_color =
+            hot ? selected_text_color :
+            (actionable ? text_color : disabled_text_color);
 
         if (item->kind == NB_MENU_ITEM_SEPARATOR) {
             if (!render_separator(renderer, item_rect)) {
@@ -227,13 +272,14 @@ static bool render_panel(SDL_Renderer *renderer,
         if (hot && !fill_rect(renderer, item_rect, selection_color)) {
             return false;
         }
-        if (!render_text(renderer,
-                         item_rect,
-                         10,
-                         hot ? selected_text_color :
-                         (actionable ? text_color : disabled_text_color),
-                         item->label,
-                         false)) {
+        if (item->checked &&
+            !render_check_mark(renderer, item_rect, item_color)) {
+            return false;
+        }
+        if (!render_item_label(renderer,
+                               item_rect,
+                               item_color,
+                               item->label)) {
             return false;
         }
     }

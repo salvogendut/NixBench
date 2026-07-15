@@ -23,14 +23,14 @@ enum {
 };
 
 static const struct nb_menu_item_spec project_items[] = {
-    {"Open", COMMAND_OPEN, NB_MENU_ITEM_COMMAND, true},
-    {NULL, NB_MENU_COMMAND_NONE, NB_MENU_ITEM_SEPARATOR, false},
-    {"Disabled", COMMAND_DISABLED, NB_MENU_ITEM_COMMAND, false},
-    {"Quit", COMMAND_QUIT, NB_MENU_ITEM_COMMAND, true}
+    {"Open", COMMAND_OPEN, NB_MENU_ITEM_COMMAND, true, true},
+    {NULL, NB_MENU_COMMAND_NONE, NB_MENU_ITEM_SEPARATOR, false, false},
+    {"Disabled", COMMAND_DISABLED, NB_MENU_ITEM_COMMAND, false, false},
+    {"Quit", COMMAND_QUIT, NB_MENU_ITEM_COMMAND, true, false}
 };
 
 static const struct nb_menu_item_spec window_items[] = {
-    {"Close", COMMAND_CLOSE, NB_MENU_ITEM_COMMAND, true}
+    {"Close", COMMAND_CLOSE, NB_MENU_ITEM_COMMAND, true, false}
 };
 
 static const struct nb_menu_spec menus[] = {

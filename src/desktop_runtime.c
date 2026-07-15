@@ -54,12 +54,12 @@ enum {
 
 static const struct nb_menu_item_spec desktop_items[] = {
     {"About NixBench", NIXBENCH_DESKTOP_COMMAND_ABOUT,
-     NB_MENU_ITEM_COMMAND, true},
+     NB_MENU_ITEM_COMMAND, true, false},
     {"Open NixInfo", NIXBENCH_DESKTOP_COMMAND_OPEN_NIXINFO,
-     NB_MENU_ITEM_COMMAND, true},
-    {NULL, NB_MENU_COMMAND_NONE, NB_MENU_ITEM_SEPARATOR, false},
+     NB_MENU_ITEM_COMMAND, true, false},
+    {NULL, NB_MENU_COMMAND_NONE, NB_MENU_ITEM_SEPARATOR, false, false},
     {"Quit NixBench", NIXBENCH_DESKTOP_COMMAND_QUIT,
-     NB_MENU_ITEM_COMMAND, true}
+     NB_MENU_ITEM_COMMAND, true, false}
 };
 
 static const struct nb_menu_spec desktop_menus[] = {
@@ -74,7 +74,7 @@ static const struct nb_menu_model desktop_menu_model = {
 
 static const struct nb_menu_item_spec about_items[] = {
     {"Close About", NIXBENCH_ABOUT_COMMAND_CLOSE,
-     NB_MENU_ITEM_COMMAND, true}
+     NB_MENU_ITEM_COMMAND, true, false}
 };
 
 static const struct nb_menu_spec about_menus[] = {
@@ -90,7 +90,7 @@ static const struct nb_menu_model about_menu_model = {
 #if NIXBENCH_HAS_WAYLAND
 static const struct nb_menu_item_spec wayland_items[] = {
     {"Close Application", NIXBENCH_WAYLAND_COMMAND_CLOSE,
-     NB_MENU_ITEM_COMMAND, true}
+     NB_MENU_ITEM_COMMAND, true, false}
 };
 
 static const struct nb_menu_spec wayland_menus[] = {

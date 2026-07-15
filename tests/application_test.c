@@ -27,7 +27,7 @@ enum {
 };
 
 static const struct nb_menu_item_spec desktop_items[] = {
-    {"Desktop", DESKTOP_COMMAND, NB_MENU_ITEM_COMMAND, true}
+    {"Desktop", DESKTOP_COMMAND, NB_MENU_ITEM_COMMAND, true, false}
 };
 static const struct nb_menu_spec desktop_menus[] = {
     {"NixBench", desktop_items, 1}
@@ -43,13 +43,13 @@ static char initial_item_labels[][NB_MENU_TEXT_CAPACITY] = {
     "Try foreign close"
 };
 static struct nb_menu_item_spec initial_items[] = {
-    {initial_item_labels[0], COMMAND_PUBLISH, NB_MENU_ITEM_COMMAND, true},
-    {initial_item_labels[1], COMMAND_CLOSE, NB_MENU_ITEM_COMMAND, true},
+    {initial_item_labels[0], COMMAND_PUBLISH, NB_MENU_ITEM_COMMAND, true, true},
+    {initial_item_labels[1], COMMAND_CLOSE, NB_MENU_ITEM_COMMAND, true, false},
     {initial_item_labels[2], COMMAND_ACTIVATE_FIRST,
-     NB_MENU_ITEM_COMMAND, true},
-    {initial_item_labels[3], COMMAND_EXIT, NB_MENU_ITEM_COMMAND, true},
+     NB_MENU_ITEM_COMMAND, true, false},
+    {initial_item_labels[3], COMMAND_EXIT, NB_MENU_ITEM_COMMAND, true, false},
     {initial_item_labels[4], COMMAND_CLOSE_FOREIGN,
-     NB_MENU_ITEM_COMMAND, true}
+     NB_MENU_ITEM_COMMAND, true, false}
 };
 static struct nb_menu_spec initial_menus[] = {
     {initial_menu_label, initial_items,
@@ -59,13 +59,13 @@ static struct nb_menu_model initial_model = {initial_menus, 1};
 
 static char updated_item_label[] = "Close current window";
 static struct nb_menu_item_spec updated_items[] = {
-    {"Publish menus", COMMAND_PUBLISH, NB_MENU_ITEM_COMMAND, true},
-    {updated_item_label, COMMAND_CLOSE, NB_MENU_ITEM_COMMAND, false},
+    {"Publish menus", COMMAND_PUBLISH, NB_MENU_ITEM_COMMAND, true, false},
+    {updated_item_label, COMMAND_CLOSE, NB_MENU_ITEM_COMMAND, false, true},
     {"Activate first", COMMAND_ACTIVATE_FIRST,
-     NB_MENU_ITEM_COMMAND, true},
-    {"Exit", COMMAND_EXIT, NB_MENU_ITEM_COMMAND, true},
+     NB_MENU_ITEM_COMMAND, true, false},
+    {"Exit", COMMAND_EXIT, NB_MENU_ITEM_COMMAND, true, false},
     {"Try foreign close", COMMAND_CLOSE_FOREIGN,
-     NB_MENU_ITEM_COMMAND, true}
+     NB_MENU_ITEM_COMMAND, true, false}
 };
 static const struct nb_menu_spec updated_menus[] = {
     {"Project", updated_items,
@@ -276,7 +276,7 @@ static const struct nb_application_event *last_event_of_type(
 static void test_menu_and_request_validation(void)
 {
     struct nb_menu_item_spec item = {
-        "Action", 1, NB_MENU_ITEM_COMMAND, true
+        "Action", 1, NB_MENU_ITEM_COMMAND, true, false
     };
     struct nb_menu_spec menu = {"Menu", &item, 1};
     struct nb_menu_model model = {&menu, 1};
@@ -318,14 +318,18 @@ static void test_menu_and_request_validation(void)
     item.label = NULL;
     item.command = NB_MENU_COMMAND_NONE;
     item.enabled = false;
+    item.checked = false;
     CHECK(nb_application_menu_model_is_valid(&model));
     item.enabled = true;
+    CHECK(!nb_application_menu_model_is_valid(&model));
+    item.enabled = false;
+    item.checked = true;
     CHECK(!nb_application_menu_model_is_valid(&model));
 
     {
         struct nb_menu_item_spec duplicate_items[] = {
-            {"First", 7, NB_MENU_ITEM_COMMAND, true},
-            {"Second", 7, NB_MENU_ITEM_COMMAND, true}
+            {"First", 7, NB_MENU_ITEM_COMMAND, true, false},
+            {"Second", 7, NB_MENU_ITEM_COMMAND, true, false}
         };
         const struct nb_menu_spec duplicate_menu = {
             "Duplicate", duplicate_items, 2
@@ -355,6 +359,7 @@ static void test_menu_and_request_validation(void)
     item.label = "Action";
     item.command = 1;
     item.enabled = true;
+    item.checked = false;
     nb_application_request_batch_init(&batch);
     CHECK(nb_application_request_publish_menus(&batch, &model));
     CHECK(!nb_application_request_publish_menus(&batch, &model));
@@ -412,13 +417,17 @@ static void test_registration_limits_and_copy(void)
     CHECK(owned != NULL);
     CHECK(strcmp(owned->menus[0].label, "Project") == 0);
     CHECK(strcmp(owned->menus[0].items[0].label, "Publish menus") == 0);
+    CHECK(owned->menus[0].items[0].checked);
 
     initial_menu_label[0] = 'X';
     initial_item_labels[0][0] = 'X';
+    initial_items[0].checked = false;
     CHECK(strcmp(owned->menus[0].label, "Project") == 0);
     CHECK(strcmp(owned->menus[0].items[0].label, "Publish menus") == 0);
+    CHECK(owned->menus[0].items[0].checked);
     initial_menu_label[0] = 'P';
     initial_item_labels[0][0] = 'P';
+    initial_items[0].checked = true;
 
     for (index = 1; index < NB_APPLICATION_MAX_APPLICATIONS; ++index) {
         ids[index] = nb_application_host_register(&host, &spec);
@@ -555,6 +564,7 @@ static void test_lifecycle_routing_and_dynamic_menus(void)
     owned_menu = nb_application_host_menu_model(&host, app_a);
     CHECK(owned_menu != &initial_model);
     CHECK(!owned_menu->menus[0].items[1].enabled);
+    CHECK(owned_menu->menus[0].items[1].checked);
     CHECK(strcmp(owned_menu->menus[0].items[1].label,
                  "Close current window") == 0);
     CHECK(shell_menu_for_window(&shell, state_a.first_window) == owned_menu);
