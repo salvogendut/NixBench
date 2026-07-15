@@ -611,6 +611,20 @@ if(
   nixbench_configure_c_target(nixbench_session_credentials)
 
   add_library(
+    nixbench_host_privsep_client STATIC
+    src/host_privsep_client.c
+  )
+  target_include_directories(
+    nixbench_host_privsep_client
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  )
+  target_link_libraries(
+    nixbench_host_privsep_client
+    PUBLIC nixbench_host nixbench_privsep_protocol
+  )
+  nixbench_configure_c_target(nixbench_host_privsep_client)
+
+  add_library(
     nixbench_wsdisplay_recovery STATIC
     src/wsdisplay_recovery.c
   )
@@ -866,6 +880,16 @@ if(BUILD_TESTING)
     nixbench_configure_c_target(nixbench_session_credentials_tests)
 
     add_executable(
+      nixbench_host_privsep_client_tests
+      tests/session_core_test.c
+    )
+    target_link_libraries(
+      nixbench_host_privsep_client_tests
+      PRIVATE nixbench_host_privsep_client
+    )
+    nixbench_configure_c_target(nixbench_host_privsep_client_tests)
+
+    add_executable(
       nixbench_wsdisplay_recovery_tests
       tests/wsdisplay_recovery_test.c
     )
@@ -1069,6 +1093,10 @@ if(BUILD_TESTING)
     add_test(
       NAME nixbench.session.credentials
       COMMAND nixbench_session_credentials_tests
+    )
+    add_test(
+      NAME nixbench.privsep.core-host
+      COMMAND nixbench_host_privsep_client_tests
     )
     add_test(
       NAME nixbench.wsdisplay.recovery-record
