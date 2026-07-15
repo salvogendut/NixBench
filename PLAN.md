@@ -279,9 +279,13 @@ preview remains output-only. A separate explicit `--interactive-preview` mode
 composes a small wscons research provider with the same output adapter. It owns
 the fixed `/dev/wskbd` and `/dev/wsmouse` mux aliases only for the bounded
 worker lifetime, draws a software cursor, routes the left button to menus and
-window dragging, and lets Escape request an early clean exit. Both preview
-modes use SDL only for an in-memory software surface; neither initializes SDL
-video nor opens X11 or Wayland. An additional explicit `--runtime-preview`
+window dragging, and discovers Escape, F10, arrows, Return, and keypad Enter
+from the active wscons map. Those bounded controls drive the existing global
+menu keyboard path and let Escape request an early clean exit. Repeated downs
+are flagged and `ALL_KEYS_UP` queues deterministic releases for every held
+binding. Both preview modes use SDL only for an in-memory software surface;
+neither initializes SDL video nor opens X11 or Wayland. An additional explicit
+`--runtime-preview`
 mode now connects the same host and input provider to the shared desktop
 runtime used by the SDL frontend, including the real NixInfo application and
 application-owned global menus; Wayland publication remains disabled. Its
@@ -311,6 +315,10 @@ and latency timestamps remain the post-read `CLOCK_MONOTONIC` value; native
 realtime is private to acceleration. A realtime step can reset history or
 briefly distort acceleration, but cannot alter latency measurements. Hosted
 SDL coordinates are never scaled.
+Keyboard diagnostics add the current binding count and raw, emitted, repeat,
+ignored, `ALL_KEYS_UP`, and synthesized-release events. VT diagnostics add
+release/acquire requests and completions, input suspend/resume counts, timing
+regressions, and acknowledge/suspended timing distributions.
 The first measured runtime averaged 176 ms per input-associated frame. A
 canonical 32-bit fast path and optimized hardware build reduced this to 36 ms,
 with 2 ms in rendering and 34 ms in full mapped-framebuffer presentation. The
@@ -323,6 +331,9 @@ This is still a bounded hardware-validation mode rather than a desktop session:
 broader hardware validation, complete wscons keymap/seat/hotplug support,
 failure-injection tests, privilege separation, and a separate privileged
 watchdog that can recover after a compositor crash are the next safety gates.
+The active-map controls are shell navigation only; general text, modifiers,
+client keymap reconciliation, and multi-device seat handling remain in that
+broader input gate.
 The detailed design and source references are in
 [`docs/standalone-backend.md`](docs/standalone-backend.md).
 
@@ -336,8 +347,14 @@ forking. The diagnostic pattern remains the default; `--desktop-preview`
 selects the bounded output-only shell scene, while `--interactive-preview`
 adds the fixed wscons muxes explicitly. `--runtime-preview` uses those muxes
 with the shared desktop runtime, and the guided hardware script now selects
-that mode. It retains its typed confirmation and outer timeout and never
-extends the harness beyond the 30000 ms hard maximum. Input descriptors are
+that mode. Its opt-in `--vt-cycle` form supplies `--require-vt-cycle`, defaults
+to the 30000 ms hard maximum, and fails unless a balanced release/acquire plus
+input suspend/resume completes with clean lifecycle timing and a post-acquire
+frame. The runner captures the originating one-based VT, chooses a distinct
+away VT (overridable with `NIXBENCH_VT_AWAY`), and prints the exact second-SSH
+switch-away and return commands.
+The script retains its typed confirmation and outer timeout and never extends
+the harness beyond the hard maximum. Input descriptors are
 closed and held state is cancelled before every acknowledged VT release and
 cleanup. The framebuffer worker maps and presents; an unmapped parent
 enforces the deadline, reaps the worker, and independently restores and
@@ -384,6 +401,9 @@ A first guided `--runtime-preview` X220 trial completed on 2026-07-14. The
 physical console displayed the shared runtime and real NixInfo application
 through `wsdisplay` and wscons without X11, Wayland publication, or SDL video;
 the user confirmed it worked, and the guided postflight restored the console.
+The active-map keyboard menu controls and required VT-cycle path are implemented
+with device-free reducer/parser coverage but still await their X220 physical
+trial.
 
 ## Milestone 8: Add standalone X11 compatibility
 

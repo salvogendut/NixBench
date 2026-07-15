@@ -674,6 +674,21 @@ struct nb_smoke_event_wait_stats {
     uint64_t interruptions;
 };
 
+struct nb_smoke_vt_lifecycle_stats {
+    struct nb_smoke_duration_stats release_acknowledge;
+    struct nb_smoke_duration_stats suspended;
+    struct nb_smoke_duration_stats acquire_acknowledge;
+    uint64_t release_requests;
+    uint64_t release_completions;
+    uint64_t acquire_requests;
+    uint64_t acquire_completions;
+    uint64_t input_suspends;
+    uint64_t input_resumes;
+    uint64_t suspended_since_milliseconds;
+    uint64_t timing_regressions;
+    bool suspended_timing_valid;
+};
+
 struct nb_smoke_worker {
     const struct nb_wsdisplay_smoke_options *options;
     struct nb_host *host;
@@ -682,6 +697,7 @@ struct nb_smoke_worker {
     struct nb_smoke_input_latency input_latency;
     struct nb_smoke_frame_pipeline frame_pipeline;
     struct nb_smoke_event_wait_stats event_wait;
+    struct nb_smoke_vt_lifecycle_stats vt_lifecycle;
     struct nb_host_output output;
     uint64_t next_serial;
     uint64_t pending_serial;
@@ -689,6 +705,8 @@ struct nb_smoke_worker {
     bool redraw_needed;
     bool user_exit_requested;
 };
+
+static void increment_counter(uint64_t *counter);
 
 static bool preview_content(enum nb_wsdisplay_smoke_content content)
 {
@@ -841,6 +859,21 @@ static void add_duration_sample(struct nb_smoke_duration_stats *stats,
     }
 }
 
+static void add_timestamped_duration(
+    struct nb_smoke_duration_stats *stats,
+    uint64_t start_milliseconds,
+    uint64_t end_milliseconds,
+    uint64_t *regressions)
+{
+    if (end_milliseconds < start_milliseconds) {
+        if (*regressions != UINT64_MAX) {
+            ++*regressions;
+        }
+        return;
+    }
+    add_duration_sample(stats, end_milliseconds - start_milliseconds);
+}
+
 static void add_frame_pipeline_sample(
     struct nb_smoke_worker *worker,
     uint64_t completion_milliseconds,
@@ -979,6 +1012,15 @@ static void print_input_stats(const struct nb_smoke_worker *worker)
     printf("  native: read=%llu untranslated=%llu\n",
            (unsigned long long)stats.native_events_read,
            (unsigned long long)stats.untranslated_native_events);
+    printf("  keyboard: bindings=%llu events=%llu emitted=%llu repeats=%llu "
+           "ignored=%llu all-keys-up=%llu synthesized-releases=%llu\n",
+           (unsigned long long)stats.keyboard_binding_count,
+           (unsigned long long)stats.keyboard_events,
+           (unsigned long long)stats.keyboard_emitted_events,
+           (unsigned long long)stats.keyboard_repeat_events,
+           (unsigned long long)stats.keyboard_ignored_events,
+           (unsigned long long)stats.keyboard_all_keys_up_events,
+           (unsigned long long)stats.keyboard_synthesized_release_events);
     printf("  motion: relative=%llu unit=%llu emitted=%llu "
            "suppressed=%llu clamped=%llu\n",
            (unsigned long long)stats.relative_events,
@@ -1036,6 +1078,38 @@ static void print_input_stats(const struct nb_smoke_worker *worker)
                              &worker->frame_pipeline.present_to_complete);
         print_duration_stats("completion-queue",
                              &worker->frame_pipeline.completion_queue);
+    }
+}
+
+static void print_vt_lifecycle_stats(const struct nb_smoke_worker *worker)
+{
+    const struct nb_smoke_vt_lifecycle_stats *stats =
+        &worker->vt_lifecycle;
+
+    if (!worker->options->wscons_input_stats &&
+        !worker->options->require_vt_cycle) {
+        return;
+    }
+    printf("vt lifecycle: release-requests/completions=%llu/%llu "
+           "acquire-requests/completions=%llu/%llu "
+           "input-suspends/resumes=%llu/%llu timing-regressions=%llu\n",
+           (unsigned long long)stats->release_requests,
+           (unsigned long long)stats->release_completions,
+           (unsigned long long)stats->acquire_requests,
+           (unsigned long long)stats->acquire_completions,
+           (unsigned long long)stats->input_suspends,
+           (unsigned long long)stats->input_resumes,
+           (unsigned long long)stats->timing_regressions);
+    if (stats->release_acknowledge.samples != 0) {
+        print_duration_stats("release-acknowledge",
+                             &stats->release_acknowledge);
+    }
+    if (stats->suspended.samples != 0) {
+        print_duration_stats("suspended-away", &stats->suspended);
+    }
+    if (stats->acquire_acknowledge.samples != 0) {
+        print_duration_stats("acquire-acknowledge",
+                             &stats->acquire_acknowledge);
     }
 }
 
@@ -1337,30 +1411,62 @@ static bool process_worker_host_event(struct nb_smoke_worker *worker,
         }
         return true;
     case NB_HOST_EVENT_CONSOLE_RELEASE_REQUESTED:
+        increment_counter(&worker->vt_lifecycle.release_requests);
         if (runtime_content(worker->options->content)) {
             nb_desktop_runtime_cancel_input(worker->source.runtime,
                                             event->milliseconds);
         } else if (worker->input != NULL) {
             (void)nb_desktop_preview_cancel_input(worker->source.desktop);
         }
-        if (worker->input != NULL) {
+        if (worker->input != NULL &&
+            nb_wscons_input_is_active(worker->input)) {
             nb_wscons_input_suspend(worker->input);
+            increment_counter(&worker->vt_lifecycle.input_suspends);
         }
         clear_input_latency_associations(worker);
         worker->pending_serial = 0;
+        worker->frame_completed = false;
         worker->redraw_needed = true;
         result = nb_host_complete_console_release(worker->host);
         if (result != NB_HOST_RESULT_OK) {
             print_host_error(worker->host, "Could not release the console");
             return false;
         }
+        handled_milliseconds =
+            nb_host_monotonic_milliseconds(worker->host);
+        increment_counter(&worker->vt_lifecycle.release_completions);
+        add_timestamped_duration(
+            &worker->vt_lifecycle.release_acknowledge,
+            event->milliseconds,
+            handled_milliseconds,
+            &worker->vt_lifecycle.timing_regressions);
+        worker->vt_lifecycle.suspended_since_milliseconds =
+            handled_milliseconds;
+        worker->vt_lifecycle.suspended_timing_valid = true;
         return true;
     case NB_HOST_EVENT_CONSOLE_ACQUIRE_REQUESTED:
+        increment_counter(&worker->vt_lifecycle.acquire_requests);
+        if (worker->vt_lifecycle.suspended_timing_valid) {
+            add_timestamped_duration(
+                &worker->vt_lifecycle.suspended,
+                worker->vt_lifecycle.suspended_since_milliseconds,
+                event->milliseconds,
+                &worker->vt_lifecycle.timing_regressions);
+            worker->vt_lifecycle.suspended_timing_valid = false;
+        }
         result = nb_host_complete_console_acquire(worker->host);
         if (result != NB_HOST_RESULT_OK) {
             print_host_error(worker->host, "Could not reacquire the console");
             return false;
         }
+        handled_milliseconds =
+            nb_host_monotonic_milliseconds(worker->host);
+        increment_counter(&worker->vt_lifecycle.acquire_completions);
+        add_timestamped_duration(
+            &worker->vt_lifecycle.acquire_acknowledge,
+            event->milliseconds,
+            handled_milliseconds,
+            &worker->vt_lifecycle.timing_regressions);
         if (!configure_content(worker)) {
             return false;
         }
@@ -1369,6 +1475,9 @@ static bool process_worker_host_event(struct nb_smoke_worker *worker,
             print_input_error(worker->input,
                               "Could not reacquire wscons input");
             return false;
+        }
+        if (worker->input != NULL) {
+            increment_counter(&worker->vt_lifecycle.input_resumes);
         }
         return true;
     case NB_HOST_EVENT_OUTPUT_CHANGED:
@@ -1446,6 +1555,28 @@ static void increment_counter(uint64_t *counter)
     if (*counter != UINT64_MAX) {
         ++*counter;
     }
+}
+
+static bool required_vt_cycle_completed(
+    const struct nb_smoke_worker *worker)
+{
+    const struct nb_smoke_vt_lifecycle_stats *stats =
+        &worker->vt_lifecycle;
+    const struct nb_wsdisplay_smoke_vt_cycle_observation observation = {
+        .release_requests = stats->release_requests,
+        .release_completions = stats->release_completions,
+        .acquire_requests = stats->acquire_requests,
+        .acquire_completions = stats->acquire_completions,
+        .input_suspends = stats->input_suspends,
+        .input_resumes = stats->input_resumes,
+        .release_timing_samples = stats->release_acknowledge.samples,
+        .suspended_timing_samples = stats->suspended.samples,
+        .acquire_timing_samples = stats->acquire_acknowledge.samples,
+        .timing_regressions = stats->timing_regressions,
+        .post_acquire_frame_completed = worker->frame_completed
+    };
+
+    return nb_wsdisplay_smoke_vt_cycle_complete(&observation);
 }
 
 static void add_counter(uint64_t *counter, uint64_t amount)
@@ -1621,9 +1752,17 @@ static int run_worker(const struct nb_wsdisplay_smoke_options *options,
                 "No %s frame completion was observed\n",
                 content_description(options->content));
     }
+    if (options->require_vt_cycle &&
+        !required_vt_cycle_completed(&worker)) {
+        fputs("Required balanced VT/input cycle, clean lifecycle timing, "
+              "and post-acquire frame did not complete\n",
+              stderr);
+        success = false;
+    }
 
 cleanup:
     clear_input_latency_associations(&worker);
+    print_vt_lifecycle_stats(&worker);
     print_input_stats(&worker);
     if (worker.input != NULL) {
         nb_wscons_input_destroy(worker.input);

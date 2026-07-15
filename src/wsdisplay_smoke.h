@@ -44,6 +44,21 @@ struct nb_wsdisplay_smoke_options {
     bool acknowledge_console_takeover;
     bool acknowledge_no_crash_watchdog;
     bool wscons_input_stats;
+    bool require_vt_cycle;
+};
+
+struct nb_wsdisplay_smoke_vt_cycle_observation {
+    uint64_t release_requests;
+    uint64_t release_completions;
+    uint64_t acquire_requests;
+    uint64_t acquire_completions;
+    uint64_t input_suspends;
+    uint64_t input_resumes;
+    uint64_t release_timing_samples;
+    uint64_t suspended_timing_samples;
+    uint64_t acquire_timing_samples;
+    uint64_t timing_regressions;
+    bool post_acquire_frame_completed;
 };
 
 struct nb_wsdisplay_smoke_image {
@@ -67,6 +82,9 @@ bool nb_wsdisplay_smoke_parse_options(
 bool nb_wsdisplay_screen_index_to_vt_number(
     int screen_index,
     int *vt_number);
+
+bool nb_wsdisplay_smoke_vt_cycle_complete(
+    const struct nb_wsdisplay_smoke_vt_cycle_observation *observation);
 
 bool nb_wsdisplay_smoke_image_create(
     struct nb_wsdisplay_smoke_image *image,

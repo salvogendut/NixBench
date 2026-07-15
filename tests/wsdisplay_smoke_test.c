@@ -436,6 +436,110 @@ static void test_vt_number_translation(void)
     CHECK(!nb_wsdisplay_screen_index_to_vt_number(0, NULL));
 }
 
+static void test_parser_required_vt_cycle(void)
+{
+    struct nb_wsdisplay_smoke_options options;
+    char error[NB_WSDISPLAY_SMOKE_ERROR_CAPACITY];
+    char *runtime[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--runtime-preview",
+        "--require-vt-cycle"
+    };
+    char *duplicate[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--runtime-preview",
+        "--require-vt-cycle", "--require-vt-cycle"
+    };
+    char *diagnostic[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--require-vt-cycle"
+    };
+    char *preflight[] = {
+        "smoke", "--preflight-only", "--require-vt-cycle"
+    };
+
+    CHECK(parse((int)(sizeof(runtime) / sizeof(runtime[0])),
+                runtime,
+                &options,
+                error));
+    CHECK(options.require_vt_cycle);
+    CHECK(!parse((int)(sizeof(duplicate) / sizeof(duplicate[0])),
+                 duplicate,
+                 &options,
+                 error));
+    CHECK(!parse((int)(sizeof(diagnostic) / sizeof(diagnostic[0])),
+                 diagnostic,
+                 &options,
+                 error));
+    CHECK(!parse((int)(sizeof(preflight) / sizeof(preflight[0])),
+                 preflight,
+                 &options,
+                 error));
+}
+
+static void test_vt_cycle_completion(void)
+{
+    struct nb_wsdisplay_smoke_vt_cycle_observation observation;
+
+    memset(&observation, 0, sizeof(observation));
+    CHECK(!nb_wsdisplay_smoke_vt_cycle_complete(NULL));
+    CHECK(!nb_wsdisplay_smoke_vt_cycle_complete(&observation));
+
+    observation.release_requests = 1;
+    observation.release_completions = 1;
+    observation.acquire_requests = 1;
+    observation.acquire_completions = 1;
+    observation.input_suspends = 1;
+    observation.input_resumes = 1;
+    observation.release_timing_samples = 1;
+    observation.suspended_timing_samples = 1;
+    observation.acquire_timing_samples = 1;
+    observation.post_acquire_frame_completed = true;
+    CHECK(nb_wsdisplay_smoke_vt_cycle_complete(&observation));
+
+    observation.post_acquire_frame_completed = false;
+    CHECK(!nb_wsdisplay_smoke_vt_cycle_complete(&observation));
+    observation.post_acquire_frame_completed = true;
+
+    observation.input_suspends = 0;
+    CHECK(!nb_wsdisplay_smoke_vt_cycle_complete(&observation));
+    observation.input_suspends = 1;
+    observation.input_resumes = 0;
+    CHECK(!nb_wsdisplay_smoke_vt_cycle_complete(&observation));
+    observation.input_resumes = 1;
+
+    observation.release_timing_samples = 0;
+    CHECK(!nb_wsdisplay_smoke_vt_cycle_complete(&observation));
+    observation.release_timing_samples = 1;
+    observation.suspended_timing_samples = 0;
+    CHECK(!nb_wsdisplay_smoke_vt_cycle_complete(&observation));
+    observation.suspended_timing_samples = 1;
+    observation.acquire_timing_samples = 0;
+    CHECK(!nb_wsdisplay_smoke_vt_cycle_complete(&observation));
+    observation.acquire_timing_samples = 1;
+    observation.timing_regressions = 1;
+    CHECK(!nb_wsdisplay_smoke_vt_cycle_complete(&observation));
+    observation.timing_regressions = 0;
+
+    observation.acquire_requests = 0;
+    observation.acquire_completions = 0;
+    observation.input_resumes = 0;
+    observation.suspended_timing_samples = 0;
+    observation.acquire_timing_samples = 0;
+    CHECK(!nb_wsdisplay_smoke_vt_cycle_complete(&observation));
+
+    observation.release_requests = 2;
+    observation.release_completions = 2;
+    observation.input_suspends = 2;
+    observation.release_timing_samples = 2;
+    observation.acquire_requests = 1;
+    observation.acquire_completions = 1;
+    observation.input_resumes = 1;
+    observation.suspended_timing_samples = 1;
+    observation.acquire_timing_samples = 1;
+    CHECK(!nb_wsdisplay_smoke_vt_cycle_complete(&observation));
+}
+
 static void test_pattern(void)
 {
     struct nb_wsdisplay_smoke_image image;
@@ -497,7 +601,9 @@ int main(void)
     test_parser_takeover();
     test_parser_wscons_tuning();
     test_parser_rejections();
+    test_parser_required_vt_cycle();
     test_vt_number_translation();
+    test_vt_cycle_completion();
     test_pattern();
 
     if (failures != 0) {

@@ -285,6 +285,12 @@ bool nb_wsdisplay_smoke_parse_options(
                 return false;
             }
             options->wscons_input_stats = true;
+        } else if (strcmp(argv[index], "--require-vt-cycle") == 0) {
+            if (options->require_vt_cycle) {
+                set_error(error, "Duplicate --require-vt-cycle option");
+                return false;
+            }
+            options->require_vt_cycle = true;
         } else if (strcmp(argv[index], "--status-device") == 0) {
             if (status_selected ||
                 !option_value(argc,
@@ -342,18 +348,19 @@ bool nb_wsdisplay_smoke_parse_options(
          options->acknowledge_no_crash_watchdog || duration_selected ||
          content_selected || pointer_profile_selected ||
          pointer_sensitivity_selected ||
-         options->wscons_input_stats)) {
+         options->wscons_input_stats || options->require_vt_cycle)) {
         set_error(error,
                   "Run acknowledgements, content, duration, and wscons options apply only to takeover");
         return false;
     }
     if (options->action == NB_WSDISPLAY_SMOKE_ACTION_RUN &&
         (pointer_profile_selected || pointer_sensitivity_selected ||
-         options->wscons_input_stats) &&
+         options->wscons_input_stats || options->require_vt_cycle) &&
         options->content != NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW &&
         options->content != NB_WSDISPLAY_SMOKE_CONTENT_RUNTIME_PREVIEW) {
         set_error(error,
-                  "wscons tuning requires --interactive-preview or --runtime-preview");
+                  "wscons and VT-cycle options require "
+                  "--interactive-preview or --runtime-preview");
         return false;
     }
     if ((options->action == NB_WSDISPLAY_SMOKE_ACTION_HELP ||
@@ -380,6 +387,33 @@ bool nb_wsdisplay_screen_index_to_vt_number(
     }
     *vt_number = screen_index + 1;
     return true;
+}
+
+bool nb_wsdisplay_smoke_vt_cycle_complete(
+    const struct nb_wsdisplay_smoke_vt_cycle_observation *observation)
+{
+    if (observation == NULL) {
+        return false;
+    }
+    return observation->post_acquire_frame_completed &&
+           observation->release_completions != 0 &&
+           observation->release_requests ==
+               observation->release_completions &&
+           observation->acquire_requests ==
+               observation->acquire_completions &&
+           observation->release_completions ==
+               observation->acquire_completions &&
+           observation->input_suspends ==
+               observation->release_completions &&
+           observation->input_resumes ==
+               observation->acquire_completions &&
+           observation->timing_regressions == 0 &&
+           observation->release_timing_samples ==
+               observation->release_completions &&
+           observation->suspended_timing_samples ==
+               observation->acquire_completions &&
+           observation->acquire_timing_samples ==
+               observation->acquire_completions;
 }
 
 static void fill_rect(struct nb_wsdisplay_smoke_image *image,

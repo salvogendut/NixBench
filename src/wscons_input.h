@@ -23,6 +23,28 @@ enum nb_wscons_pointer_profile {
 };
 
 /*
+ * Bounded control-key vocabulary needed by the standalone shell. Bindings are
+ * discovered from the active wscons keymap and retain the host API's existing
+ * XKB physical-key names; general layout and text translation remain separate.
+ */
+enum nb_wscons_control_key {
+    NB_WSCONS_CONTROL_KEY_ESCAPE,
+    NB_WSCONS_CONTROL_KEY_F10,
+    NB_WSCONS_CONTROL_KEY_UP,
+    NB_WSCONS_CONTROL_KEY_DOWN,
+    NB_WSCONS_CONTROL_KEY_LEFT,
+    NB_WSCONS_CONTROL_KEY_RIGHT,
+    NB_WSCONS_CONTROL_KEY_RETURN,
+    NB_WSCONS_CONTROL_KEY_KP_ENTER,
+    NB_WSCONS_CONTROL_KEY_COUNT
+};
+
+struct nb_wscons_control_key_state {
+    int keycode;
+    bool pressed;
+};
+
+/*
  * Portable wscons-event vocabulary used by the reducer and its device-free
  * tests. The NetBSD reader translates the native wscons_event constants into
  * these values before updating the normalized pointer and keyboard state.
@@ -58,15 +80,24 @@ enum nb_wscons_reduce_result {
 };
 
 /*
- * Cumulative diagnostics for raw relative pointer input. Normalized host-event
- * time is captured after userspace read with CLOCK_MONOTONIC; native motion
- * time may additionally drive adaptive grouping. Portable reducer tests may
- * supply either timestamp. Distances are unsigned path lengths rather than
- * signed displacement. Counters saturate instead of wrapping.
+ * Diagnostics for bounded keyboard translation and raw relative pointer input.
+ * Normalized host-event time is captured after userspace read with
+ * CLOCK_MONOTONIC; native motion time may additionally drive adaptive grouping.
+ * Portable reducer tests may supply either timestamp. Distances are unsigned
+ * path lengths rather than signed displacement. Counters saturate instead of
+ * wrapping; keyboard_binding_count is the one current-state gauge.
  */
 struct nb_wscons_input_stats {
     uint64_t native_events_read;
     uint64_t untranslated_native_events;
+    uint64_t keyboard_events;
+    uint64_t keyboard_emitted_events;
+    uint64_t keyboard_repeat_events;
+    uint64_t keyboard_ignored_events;
+    uint64_t keyboard_all_keys_up_events;
+    uint64_t keyboard_synthesized_release_events;
+    /* Current discovered binding count rather than a cumulative counter. */
+    uint64_t keyboard_binding_count;
     uint64_t relative_events;
     uint64_t unit_relative_events;
     uint64_t emitted_motion_events;
@@ -107,7 +138,10 @@ struct nb_wscons_input_reducer {
     int logical_height;
     int pointer_x;
     int pointer_y;
-    int escape_keycode;
+    struct nb_wscons_control_key_state
+        control_keys[NB_WSCONS_CONTROL_KEY_COUNT];
+    uint32_t pending_key_release_mask;
+    uint64_t pending_key_release_milliseconds;
     uint32_t pressed_buttons;
     enum nb_wscons_pointer_profile pointer_profile;
     unsigned int pointer_sensitivity_percent;
@@ -122,7 +156,6 @@ struct nb_wscons_input_reducer {
     uint64_t adaptive_filtered_velocity_counts_per_second;
     unsigned int adaptive_gain_percent;
     struct nb_wscons_input_stats stats;
-    bool escape_pressed;
     bool adaptive_group_valid;
     bool adaptive_group_uses_native_timestamp;
 };
@@ -137,6 +170,10 @@ bool nb_wscons_input_reducer_set_bounds(
 bool nb_wscons_input_reducer_set_escape_keycode(
     struct nb_wscons_input_reducer *reducer,
     int escape_keycode);
+bool nb_wscons_input_reducer_set_control_keycode(
+    struct nb_wscons_input_reducer *reducer,
+    enum nb_wscons_control_key key,
+    int keycode);
 /* Configures flat raw-relative wscons gain, never hosted SDL input. */
 bool nb_wscons_input_reducer_set_pointer_sensitivity(
     struct nb_wscons_input_reducer *reducer,
@@ -157,6 +194,10 @@ bool nb_wscons_input_reducer_get_stats(
 enum nb_wscons_reduce_result nb_wscons_input_reducer_apply(
     struct nb_wscons_input_reducer *reducer,
     const struct nb_wscons_raw_event *raw_event,
+    struct nb_host_event *event);
+/* Drain deterministic releases queued by one ALL_KEYS_UP event. */
+enum nb_wscons_reduce_result nb_wscons_input_reducer_poll_pending(
+    struct nb_wscons_input_reducer *reducer,
     struct nb_host_event *event);
 
 /*

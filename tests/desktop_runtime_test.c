@@ -250,6 +250,67 @@ static void test_software_pointer_and_escape(void)
     nb_desktop_runtime_destroy(runtime);
 }
 
+static void test_keyboard_menu_path(void)
+{
+    struct nb_desktop_runtime *runtime = create_runtime(false);
+    struct nb_desktop_runtime_update update;
+    struct nb_host_event event;
+    struct nb_host_frame frame;
+    uint64_t closed_hash;
+    uint64_t open_hash;
+
+    CHECK(runtime != NULL);
+    if (runtime == NULL) {
+        return;
+    }
+    CHECK(nb_desktop_runtime_window_count(runtime) == 1);
+    CHECK(nb_desktop_runtime_render(runtime, "12:34", 1, &frame));
+    closed_hash = frame_hash(&frame);
+
+    event = key_event("FK10", true, 30);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    CHECK(update.redraw);
+    CHECK(!update.quit_requested);
+    CHECK(nb_desktop_runtime_render(runtime, "12:34", 2, &frame));
+    open_hash = frame_hash(&frame);
+    CHECK(open_hash != closed_hash);
+
+    event = key_event("DOWN", true, 31);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    CHECK(!update.quit_requested);
+    event.data.key.repeat = true;
+    event.milliseconds = 32;
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    CHECK(!update.quit_requested);
+
+    event = key_event("ESC", true, 33);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    CHECK(!update.quit_requested);
+    CHECK(!nb_desktop_runtime_quit_requested(runtime));
+    CHECK(nb_desktop_runtime_render(runtime, "12:34", 3, &frame));
+    CHECK(frame_hash(&frame) == closed_hash);
+
+    event = key_event("FK10", true, 34);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RTRN", true, 35);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    CHECK(!update.quit_requested);
+    CHECK(nb_desktop_runtime_dispatch(runtime, &update));
+    CHECK(nb_desktop_runtime_window_count(runtime) == 2);
+
+    event = key_event("FK10", true, 36);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("KPEN", true, 37);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    CHECK(!update.quit_requested);
+
+    event = key_event("ESC", true, 38);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    CHECK(update.quit_requested);
+    CHECK(nb_desktop_runtime_quit_requested(runtime));
+    nb_desktop_runtime_destroy(runtime);
+}
+
 static void test_defensive_api(void)
 {
     struct nb_desktop_runtime_options invalid_options;
@@ -333,6 +394,7 @@ int main(void)
     test_creation_render_and_nixinfo();
     test_drag_cancel_and_resize();
     test_software_pointer_and_escape();
+    test_keyboard_menu_path();
     test_defensive_api();
 
     if (failures != 0) {

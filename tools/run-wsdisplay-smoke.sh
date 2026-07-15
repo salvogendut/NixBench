@@ -3,7 +3,16 @@
 set -eu
 
 state_path=/var/run/nixbench-wsdisplay-smoke.state
-duration_ms=${1:-3000}
+require_vt_cycle=0
+if [ "${1:-}" = "--vt-cycle" ]; then
+    require_vt_cycle=1
+    shift
+fi
+default_duration_ms=3000
+if [ "$require_vt_cycle" -eq 1 ]; then
+    default_duration_ms=30000
+fi
+duration_ms=${1:-$default_duration_ms}
 jobs=${NIXBENCH_JOBS:-4}
 build_type=${NIXBENCH_BUILD_TYPE:-RelWithDebInfo}
 timeout_margin_seconds=10
@@ -15,7 +24,7 @@ fail()
 }
 
 if [ "$#" -gt 1 ]; then
-    fail "usage: $0 [duration-ms]"
+    fail "usage: $0 [--vt-cycle] [duration-ms]"
 fi
 
 case "$duration_ms" in
@@ -89,6 +98,41 @@ ctest --test-dir "$build_dir" --output-on-failure
 echo "==> Query-only console preflight"
 sudo -n "$smoke" --preflight-only
 
+original_vt=
+away_vt=
+if [ "$require_vt_cycle" -eq 1 ]; then
+    original_vt=$(sudo -n /usr/sbin/wsconscfg -g) ||
+        fail "could not query the active wsdisplay VT"
+    case "$original_vt" in
+        ''|0|0*|*[!0-9]*)
+            fail "active wsdisplay VT is not a positive one-based number: $original_vt"
+            ;;
+    esac
+    if [ "${#original_vt}" -gt 3 ] || [ "$original_vt" -gt 256 ]; then
+        fail "active wsdisplay VT number is outside the supported range"
+    fi
+
+    away_vt=${NIXBENCH_VT_AWAY:-}
+    if [ -z "$away_vt" ]; then
+        if [ "$original_vt" -eq 2 ]; then
+            away_vt=1
+        else
+            away_vt=2
+        fi
+    fi
+    case "$away_vt" in
+        ''|0|0*|*[!0-9]*)
+            fail "NIXBENCH_VT_AWAY must be a positive one-based VT number"
+            ;;
+    esac
+    if [ "${#away_vt}" -gt 3 ] || [ "$away_vt" -gt 256 ]; then
+        fail "NIXBENCH_VT_AWAY is outside the supported range"
+    fi
+    if [ "$away_vt" -eq "$original_vt" ]; then
+        fail "NIXBENCH_VT_AWAY must differ from the active VT $original_vt"
+    fi
+fi
+
 cat <<EOF
 
 Ready to show the shared NixBench desktop runtime on the active wsdisplay
@@ -96,18 +140,20 @@ console for at most $duration_ms ms.
 
 The supervised worker will temporarily open /dev/wskbd and /dev/wsmouse.
 Move the software cursor, drag the NixInfo window by its title bar, or use its
-application menus in the global bar. Press Escape to finish early. Console
-keyboard translation, including the usual keyboard VT-switch shortcuts, is
-unavailable while the worker owns /dev/wskbd; input is closed before every
-acknowledged VT release and on exit.
+application menus in the global bar. F10 opens the global menu; use the arrows,
+Return or keypad Enter, and Escape to navigate or dismiss it. Press Escape with
+no menu open to finish early. General console text translation and the usual
+keyboard VT-switch shortcuts remain unavailable while the worker owns
+/dev/wskbd; input is closed before every acknowledged VT release and on exit.
 
 This trial enables the adaptive profile only for raw wscons relative motion;
 hosted SDL input is unchanged. It also uses the readiness-driven blocking input
 wait. At exit it prints wait calls, input and signal-pipe readiness,
 simultaneous readiness, host events, timeouts, and interruptions alongside raw-
-motion and adaptive-gain statistics, then splits userspace-read-to-framebuffer-
-copy-complete time into render, present, and event-delivery stages for
-comparison with later trials.
+motion, adaptive-gain, active-keymap control, and keyboard-event statistics. It
+also reports VT release/acquire and input suspend/resume counts and timing, then
+splits userspace-read-to-framebuffer-copy-complete time into render, present,
+and event-delivery stages for comparison with later trials.
 
 Keep a second SSH session open. If this script does not restore the console,
 wait for its timeout, verify no nixbench-wsdisplay-smoke process remains, then
@@ -119,13 +165,43 @@ By continuing, you acknowledge the console takeover and that failure of the
 supervisor itself can require the manual recovery command above.
 EOF
 
+if [ "$require_vt_cycle" -eq 1 ]; then
+    cat <<EOF
+
+This run must observe a complete VT release and reacquire. Once the desktop is
+visible, use the second SSH session to switch away and back (the arguments are
+one-based USL VT numbers):
+
+  sudo -n /usr/sbin/wsconscfg -s $away_vt
+  sudo -n /usr/sbin/wsconscfg -s $original_vt
+
+Pause long enough between the commands to see VT $away_vt. This script captured
+VT $original_vt as the originating console; set NIXBENCH_VT_AWAY before starting
+the script if VT $away_vt is not a configured, idle text console. The worker
+closes wscons input before acknowledging release, then remaps, redraws, and
+reopens input after acquisition. The run fails if that complete cycle is not
+recorded together with a post-acquire frame.
+EOF
+fi
+
 printf "Type TAKEOVER to continue: "
 answer=
 if ! IFS= read -r answer || [ "$answer" != TAKEOVER ]; then
     fail "cancelled without changing display state"
 fi
+if [ "$require_vt_cycle" -eq 1 ]; then
+    confirmed_vt=$(sudo -n /usr/sbin/wsconscfg -g) ||
+        fail "could not re-query the active wsdisplay VT"
+    if [ "$confirmed_vt" != "$original_vt" ]; then
+        fail "active VT changed from $original_vt to $confirmed_vt while awaiting confirmation; no takeover was started"
+    fi
+fi
 
 echo "==> Presenting the shared NixBench desktop runtime"
+required_vt_cycle_option=
+if [ "$require_vt_cycle" -eq 1 ]; then
+    required_vt_cycle_option=--require-vt-cycle
+fi
 set +e
 sudo -n /usr/bin/timeout -s SIGTERM -k 15s "${outer_timeout_seconds}s" \
     "$smoke" \
@@ -134,6 +210,7 @@ sudo -n /usr/bin/timeout -s SIGTERM -k 15s "${outer_timeout_seconds}s" \
     --runtime-preview \
     --wscons-pointer-profile adaptive \
     --wscons-input-stats \
+    $required_vt_cycle_option \
     --duration-ms "$duration_ms"
 run_status=$?
 set -e
@@ -156,7 +233,7 @@ echo "==> Verifying the restored console independently"
 sudo -n "$smoke" --preflight-only
 
 echo "==> Active wsdisplay VT (one-based)"
-sudo -n wsconscfg -g
+sudo -n /usr/sbin/wsconscfg -g
 
 if [ "$run_status" -ne 0 ]; then
     fail "the harness returned status $run_status, but no recovery record remains"

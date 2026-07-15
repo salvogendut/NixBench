@@ -9,6 +9,17 @@
 
 static int failures;
 
+static const char *const control_key_names[NB_WSCONS_CONTROL_KEY_COUNT] = {
+    [NB_WSCONS_CONTROL_KEY_ESCAPE] = "ESC",
+    [NB_WSCONS_CONTROL_KEY_F10] = "FK10",
+    [NB_WSCONS_CONTROL_KEY_UP] = "UP",
+    [NB_WSCONS_CONTROL_KEY_DOWN] = "DOWN",
+    [NB_WSCONS_CONTROL_KEY_LEFT] = "LEFT",
+    [NB_WSCONS_CONTROL_KEY_RIGHT] = "RGHT",
+    [NB_WSCONS_CONTROL_KEY_RETURN] = "RTRN",
+    [NB_WSCONS_CONTROL_KEY_KP_ENTER] = "KPEN"
+};
+
 #define CHECK(expression)                                                     \
     do {                                                                      \
         if (!(expression)) {                                                  \
@@ -53,9 +64,25 @@ static enum nb_wscons_reduce_result apply_with_motion_nanoseconds(
     return nb_wscons_input_reducer_apply(reducer, &raw, event);
 }
 
+static void configure_control_keys(
+    struct nb_wscons_input_reducer *reducer,
+    int first_keycode)
+{
+    size_t index;
+
+    for (index = 0; index < NB_WSCONS_CONTROL_KEY_COUNT; ++index) {
+        CHECK(nb_wscons_input_reducer_set_control_keycode(
+            reducer,
+            (enum nb_wscons_control_key)index,
+            first_keycode + (int)index));
+    }
+}
+
 static void test_initialization_and_bounds(void)
 {
     struct nb_wscons_input_reducer reducer;
+    struct nb_wscons_input_stats stats;
+    size_t key_index;
     int x = -1;
     int y = -1;
 
@@ -73,6 +100,15 @@ static void test_initialization_and_bounds(void)
     CHECK(reducer.adaptive_gain_percent ==
           NB_WSCONS_POINTER_ADAPTIVE_MIN_GAIN_PERCENT);
     CHECK(!reducer.adaptive_group_valid);
+    for (key_index = 0; key_index < NB_WSCONS_CONTROL_KEY_COUNT;
+         ++key_index) {
+        CHECK(reducer.control_keys[key_index].keycode == -1);
+        CHECK(!reducer.control_keys[key_index].pressed);
+    }
+    CHECK(reducer.pending_key_release_mask == 0);
+    CHECK(reducer.pending_key_release_milliseconds == 0);
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.keyboard_binding_count == 0);
     CHECK(nb_wscons_input_reducer_get_position(&reducer, &x, &y));
     CHECK(x == 49);
     CHECK(y == 39);
@@ -89,7 +125,42 @@ static void test_initialization_and_bounds(void)
     CHECK(y == 9);
     CHECK(!nb_wscons_input_reducer_set_escape_keycode(&reducer, -1));
     CHECK(nb_wscons_input_reducer_set_escape_keycode(&reducer, 42));
-    CHECK(reducer.escape_keycode == 42);
+    CHECK(reducer.control_keys[NB_WSCONS_CONTROL_KEY_ESCAPE].keycode == 42);
+    CHECK(!nb_wscons_input_reducer_set_control_keycode(
+        NULL,
+        NB_WSCONS_CONTROL_KEY_F10,
+        43));
+    CHECK(!nb_wscons_input_reducer_set_control_keycode(
+        &reducer,
+        (enum nb_wscons_control_key)-1,
+        43));
+    CHECK(!nb_wscons_input_reducer_set_control_keycode(
+        &reducer,
+        NB_WSCONS_CONTROL_KEY_COUNT,
+        43));
+    CHECK(!nb_wscons_input_reducer_set_control_keycode(
+        &reducer,
+        NB_WSCONS_CONTROL_KEY_F10,
+        -1));
+    CHECK(nb_wscons_input_reducer_set_control_keycode(
+        &reducer,
+        NB_WSCONS_CONTROL_KEY_F10,
+        43));
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.keyboard_binding_count == 2);
+    CHECK(!nb_wscons_input_reducer_set_control_keycode(
+        &reducer,
+        NB_WSCONS_CONTROL_KEY_UP,
+        42));
+    CHECK(reducer.control_keys[NB_WSCONS_CONTROL_KEY_UP].keycode == -1);
+    CHECK(reducer.control_keys[NB_WSCONS_CONTROL_KEY_F10].keycode == 43);
+    CHECK(nb_wscons_input_reducer_set_control_keycode(
+        &reducer,
+        NB_WSCONS_CONTROL_KEY_F10,
+        44));
+    CHECK(reducer.control_keys[NB_WSCONS_CONTROL_KEY_F10].keycode == 44);
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.keyboard_binding_count == 2);
     CHECK(!nb_wscons_input_reducer_set_pointer_sensitivity(NULL, 100));
     CHECK(!nb_wscons_input_reducer_set_pointer_sensitivity(
         &reducer,
@@ -1758,8 +1829,324 @@ static void test_escape_translation(void)
                 &event) == NB_WSCONS_REDUCE_EVENT);
     CHECK(event.data.key.pressed);
     CHECK(strcmp(event.data.key.xkb_key_name, "ESC") == 0);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_ASCII,
+                0x1b,
+                310,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.data.key.repeat);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_ALL_KEYS_UP,
+                0,
+                311,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(!event.data.key.pressed);
+    CHECK(!event.data.key.repeat);
+    CHECK(strcmp(event.data.key.xkb_key_name, "ESC") == 0);
     nb_wscons_input_reducer_reset(&reducer);
-    CHECK(!reducer.escape_pressed);
+    CHECK(!reducer.control_keys[NB_WSCONS_CONTROL_KEY_ESCAPE].pressed);
+}
+
+static void test_control_key_translation_and_diagnostics(void)
+{
+    struct nb_wscons_input_reducer reducer;
+    struct nb_wscons_input_stats stats;
+    struct nb_host_event event;
+    const int first_keycode = 100;
+    size_t index;
+
+    CHECK(nb_wscons_input_reducer_init(&reducer, 100, 80));
+    configure_control_keys(&reducer, first_keycode);
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.keyboard_binding_count == NB_WSCONS_CONTROL_KEY_COUNT);
+
+    for (index = 0; index < NB_WSCONS_CONTROL_KEY_COUNT; ++index) {
+        const int keycode = first_keycode + (int)index;
+
+        CHECK(apply(&reducer,
+                    NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                    keycode,
+                    UINT64_C(400) + index * UINT64_C(10),
+                    &event) == NB_WSCONS_REDUCE_EVENT);
+        CHECK(event.type == NB_HOST_EVENT_KEY);
+        CHECK(strcmp(event.data.key.xkb_key_name,
+                     control_key_names[index]) == 0);
+        CHECK(event.data.key.pressed);
+        CHECK(!event.data.key.repeat);
+        CHECK(nb_host_event_is_valid(&event));
+        CHECK(reducer.control_keys[index].pressed);
+
+        CHECK(apply(&reducer,
+                    NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                    keycode,
+                    UINT64_C(401) + index * UINT64_C(10),
+                    &event) == NB_WSCONS_REDUCE_EVENT);
+        CHECK(event.data.key.pressed);
+        CHECK(event.data.key.repeat);
+        CHECK(nb_host_event_is_valid(&event));
+
+        CHECK(apply(&reducer,
+                    NB_WSCONS_RAW_EVENT_KEY_UP,
+                    keycode,
+                    UINT64_C(402) + index * UINT64_C(10),
+                    &event) == NB_WSCONS_REDUCE_EVENT);
+        CHECK(strcmp(event.data.key.xkb_key_name,
+                     control_key_names[index]) == 0);
+        CHECK(!event.data.key.pressed);
+        CHECK(!event.data.key.repeat);
+        CHECK(nb_host_event_is_valid(&event));
+        CHECK(!reducer.control_keys[index].pressed);
+
+        CHECK(apply(&reducer,
+                    NB_WSCONS_RAW_EVENT_KEY_UP,
+                    keycode,
+                    UINT64_C(403) + index * UINT64_C(10),
+                    &event) == NB_WSCONS_REDUCE_IGNORED);
+        CHECK(event.type == NB_HOST_EVENT_NONE);
+    }
+
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                first_keycode - 1,
+                500,
+                &event) == NB_WSCONS_REDUCE_IGNORED);
+    CHECK(event.type == NB_HOST_EVENT_NONE);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                -1,
+                501,
+                &event) == NB_WSCONS_REDUCE_IGNORED);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_ASCII,
+                'x',
+                502,
+                &event) == NB_WSCONS_REDUCE_IGNORED);
+
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.keyboard_events ==
+          (uint64_t)NB_WSCONS_CONTROL_KEY_COUNT * UINT64_C(4) +
+              UINT64_C(3));
+    CHECK(stats.keyboard_emitted_events ==
+          (uint64_t)NB_WSCONS_CONTROL_KEY_COUNT * UINT64_C(3));
+    CHECK(stats.keyboard_repeat_events ==
+          (uint64_t)NB_WSCONS_CONTROL_KEY_COUNT);
+    CHECK(stats.keyboard_ignored_events ==
+          (uint64_t)NB_WSCONS_CONTROL_KEY_COUNT + UINT64_C(3));
+    CHECK(stats.keyboard_all_keys_up_events == 0);
+    CHECK(stats.keyboard_synthesized_release_events == 0);
+    CHECK(stats.keyboard_binding_count == NB_WSCONS_CONTROL_KEY_COUNT);
+    nb_wscons_input_reducer_reset(&reducer);
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.keyboard_events ==
+          (uint64_t)NB_WSCONS_CONTROL_KEY_COUNT * UINT64_C(4) +
+              UINT64_C(3));
+    CHECK(stats.keyboard_binding_count == NB_WSCONS_CONTROL_KEY_COUNT);
+}
+
+static void test_all_keys_up_pending_releases(void)
+{
+    struct nb_wscons_input_reducer reducer;
+    struct nb_wscons_input_stats stats;
+    struct nb_host_event event;
+    const int first_keycode = 200;
+    int pointer_x;
+
+    CHECK(nb_wscons_input_reducer_init(&reducer, 100, 80));
+    configure_control_keys(&reducer, first_keycode);
+
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                first_keycode + NB_WSCONS_CONTROL_KEY_RIGHT,
+                600,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                first_keycode + NB_WSCONS_CONTROL_KEY_ESCAPE,
+                601,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                first_keycode + NB_WSCONS_CONTROL_KEY_F10,
+                602,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    pointer_x = reducer.pointer_x;
+
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_ALL_KEYS_UP,
+                0,
+                603,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(strcmp(event.data.key.xkb_key_name, "ESC") == 0);
+    CHECK(!event.data.key.pressed);
+    CHECK(event.milliseconds == 603);
+    CHECK(reducer.pending_key_release_mask != 0);
+    CHECK(!reducer.control_keys[NB_WSCONS_CONTROL_KEY_ESCAPE].pressed);
+    CHECK(!reducer.control_keys[NB_WSCONS_CONTROL_KEY_F10].pressed);
+    CHECK(!reducer.control_keys[NB_WSCONS_CONTROL_KEY_RIGHT].pressed);
+
+    CHECK(!nb_wscons_input_reducer_set_control_keycode(
+        &reducer,
+        NB_WSCONS_CONTROL_KEY_UP,
+        999));
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                10,
+                604,
+                &event) == NB_WSCONS_REDUCE_ERROR);
+    CHECK(event.type == NB_HOST_EVENT_NONE);
+    CHECK(reducer.pointer_x == pointer_x);
+
+    CHECK(nb_wscons_input_reducer_poll_pending(&reducer, &event) ==
+          NB_WSCONS_REDUCE_EVENT);
+    CHECK(strcmp(event.data.key.xkb_key_name, "FK10") == 0);
+    CHECK(!event.data.key.pressed);
+    CHECK(event.milliseconds == 603);
+    CHECK(nb_wscons_input_reducer_poll_pending(&reducer, &event) ==
+          NB_WSCONS_REDUCE_EVENT);
+    CHECK(strcmp(event.data.key.xkb_key_name, "RGHT") == 0);
+    CHECK(!event.data.key.pressed);
+    CHECK(event.milliseconds == 603);
+    CHECK(reducer.pending_key_release_mask == 0);
+    CHECK(reducer.pending_key_release_milliseconds == 0);
+    CHECK(nb_wscons_input_reducer_poll_pending(&reducer, &event) ==
+          NB_WSCONS_REDUCE_IGNORED);
+    CHECK(event.type == NB_HOST_EVENT_NONE);
+
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.keyboard_events == 4);
+    CHECK(stats.keyboard_emitted_events == 6);
+    CHECK(stats.keyboard_repeat_events == 0);
+    CHECK(stats.keyboard_ignored_events == 0);
+    CHECK(stats.keyboard_all_keys_up_events == 1);
+    CHECK(stats.keyboard_synthesized_release_events == 3);
+    CHECK(stats.keyboard_binding_count == NB_WSCONS_CONTROL_KEY_COUNT);
+
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_ALL_KEYS_UP,
+                0,
+                605,
+                &event) == NB_WSCONS_REDUCE_IGNORED);
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.keyboard_events == 5);
+    CHECK(stats.keyboard_ignored_events == 1);
+    CHECK(stats.keyboard_all_keys_up_events == 2);
+    CHECK(stats.keyboard_synthesized_release_events == 3);
+
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                first_keycode + NB_WSCONS_CONTROL_KEY_UP,
+                606,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                first_keycode + NB_WSCONS_CONTROL_KEY_DOWN,
+                607,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_ALL_KEYS_UP,
+                0,
+                608,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(strcmp(event.data.key.xkb_key_name, "UP") == 0);
+    CHECK(reducer.pending_key_release_mask != 0);
+    nb_wscons_input_reducer_reset(&reducer);
+    CHECK(reducer.pending_key_release_mask == 0);
+    CHECK(reducer.pending_key_release_milliseconds == 0);
+    CHECK(nb_wscons_input_reducer_poll_pending(&reducer, &event) ==
+          NB_WSCONS_REDUCE_IGNORED);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_MOUSE_DELTA_X,
+                1,
+                609,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.type == NB_HOST_EVENT_POINTER_MOTION);
+}
+
+static void test_ascii_escape_without_keycode(void)
+{
+    struct nb_wscons_input_reducer reducer;
+    struct nb_wscons_input_stats stats;
+    struct nb_host_event event;
+
+    CHECK(nb_wscons_input_reducer_init(&reducer, 100, 80));
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_ASCII,
+                0x1b,
+                700,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(strcmp(event.data.key.xkb_key_name, "ESC") == 0);
+    CHECK(event.data.key.pressed);
+    CHECK(!event.data.key.repeat);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_ASCII,
+                0x1b,
+                701,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.data.key.repeat);
+    CHECK(!nb_wscons_input_reducer_set_escape_keycode(&reducer, 42));
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_ALL_KEYS_UP,
+                0,
+                702,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(strcmp(event.data.key.xkb_key_name, "ESC") == 0);
+    CHECK(!event.data.key.pressed);
+    CHECK(nb_wscons_input_reducer_poll_pending(&reducer, &event) ==
+          NB_WSCONS_REDUCE_IGNORED);
+    CHECK(nb_wscons_input_reducer_set_escape_keycode(&reducer, 42));
+
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.keyboard_events == 3);
+    CHECK(stats.keyboard_emitted_events == 3);
+    CHECK(stats.keyboard_repeat_events == 1);
+    CHECK(stats.keyboard_ignored_events == 0);
+    CHECK(stats.keyboard_all_keys_up_events == 1);
+    CHECK(stats.keyboard_synthesized_release_events == 1);
+    CHECK(stats.keyboard_binding_count == 1);
+}
+
+static void test_keyboard_counter_saturation(void)
+{
+    struct nb_wscons_input_reducer reducer;
+    struct nb_wscons_input_stats stats;
+    struct nb_host_event event;
+
+    CHECK(nb_wscons_input_reducer_init(&reducer, 100, 80));
+    CHECK(nb_wscons_input_reducer_set_escape_keycode(&reducer, 42));
+    reducer.stats.keyboard_events = UINT64_MAX;
+    reducer.stats.keyboard_emitted_events = UINT64_MAX;
+    reducer.stats.keyboard_repeat_events = UINT64_MAX;
+    reducer.stats.keyboard_ignored_events = UINT64_MAX;
+    reducer.stats.keyboard_all_keys_up_events = UINT64_MAX;
+    reducer.stats.keyboard_synthesized_release_events = UINT64_MAX;
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                42,
+                800,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                42,
+                801,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_ALL_KEYS_UP,
+                0,
+                802,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_UP,
+                42,
+                803,
+                &event) == NB_WSCONS_REDUCE_IGNORED);
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.keyboard_events == UINT64_MAX);
+    CHECK(stats.keyboard_emitted_events == UINT64_MAX);
+    CHECK(stats.keyboard_repeat_events == UINT64_MAX);
+    CHECK(stats.keyboard_ignored_events == UINT64_MAX);
+    CHECK(stats.keyboard_all_keys_up_events == UINT64_MAX);
+    CHECK(stats.keyboard_synthesized_release_events == UINT64_MAX);
+    CHECK(stats.keyboard_binding_count == 1);
 }
 
 static void test_defensive_reducer(void)
@@ -1773,6 +2160,10 @@ static void test_defensive_reducer(void)
     struct nb_host_event event;
 
     CHECK(nb_wscons_input_reducer_init(&reducer, 10, 10));
+    CHECK(nb_wscons_input_reducer_poll_pending(NULL, &event) ==
+          NB_WSCONS_REDUCE_ERROR);
+    CHECK(nb_wscons_input_reducer_poll_pending(&reducer, NULL) ==
+          NB_WSCONS_REDUCE_ERROR);
     CHECK(nb_wscons_input_reducer_apply(NULL, &raw, &event) ==
           NB_WSCONS_REDUCE_ERROR);
     CHECK(nb_wscons_input_reducer_apply(&reducer, NULL, &event) ==
@@ -1789,6 +2180,32 @@ static void test_defensive_reducer(void)
     reducer.pointer_direction_x = 0;
     reducer.pointer_direction_y = -2;
     CHECK(nb_wscons_input_reducer_apply(&reducer, &raw, &event) ==
+          NB_WSCONS_REDUCE_ERROR);
+    reducer.pointer_direction_y = 0;
+    reducer.control_keys[NB_WSCONS_CONTROL_KEY_ESCAPE].keycode = 42;
+    reducer.control_keys[NB_WSCONS_CONTROL_KEY_F10].keycode = 42;
+    CHECK(nb_wscons_input_reducer_apply(&reducer, &raw, &event) ==
+          NB_WSCONS_REDUCE_ERROR);
+    reducer.control_keys[NB_WSCONS_CONTROL_KEY_F10].keycode = -1;
+    reducer.pending_key_release_mask =
+        UINT32_C(1) << (unsigned int)NB_WSCONS_CONTROL_KEY_COUNT;
+    CHECK(nb_wscons_input_reducer_poll_pending(&reducer, &event) ==
+          NB_WSCONS_REDUCE_ERROR);
+    reducer.pending_key_release_mask = 0;
+    reducer.pending_key_release_milliseconds = 1;
+    CHECK(nb_wscons_input_reducer_poll_pending(&reducer, &event) ==
+          NB_WSCONS_REDUCE_ERROR);
+
+    CHECK(nb_wscons_input_reducer_init(&reducer, 10, 10));
+    CHECK(nb_wscons_input_reducer_set_escape_keycode(&reducer, 42));
+    reducer.stats.keyboard_binding_count = 0;
+    CHECK(nb_wscons_input_reducer_apply(&reducer, &raw, &event) ==
+          NB_WSCONS_REDUCE_ERROR);
+    reducer.stats.keyboard_binding_count = 1;
+    reducer.control_keys[NB_WSCONS_CONTROL_KEY_ESCAPE].pressed = true;
+    reducer.pending_key_release_mask =
+        UINT32_C(1) << (unsigned int)NB_WSCONS_CONTROL_KEY_ESCAPE;
+    CHECK(nb_wscons_input_reducer_poll_pending(&reducer, &event) ==
           NB_WSCONS_REDUCE_ERROR);
 }
 
@@ -1901,6 +2318,10 @@ int main(void)
     test_pointer_statistics();
     test_pointer_buttons();
     test_escape_translation();
+    test_control_key_translation_and_diagnostics();
+    test_all_keys_up_pending_releases();
+    test_ascii_escape_without_keycode();
+    test_keyboard_counter_saturation();
     test_defensive_reducer();
     test_live_provider_without_devices();
 

@@ -117,8 +117,12 @@ source now renders the real menu bar, clock, and managed-window chrome into the
 same canonical CPU frame without initializing SDL video. A separate,
 explicit `--interactive-preview` research mode temporarily owns the fixed
 `/dev/wskbd` and `/dev/wsmouse` mux aliases, adds a software cursor, routes the
-left button to menus and window dragging, and accepts Escape as an orderly
-early exit. A new explicit `--runtime-preview` replaces that lightweight scene
+left button to menus and window dragging, and queries the active wscons keymap
+for the bounded shell controls Escape, F10, the four arrows, Return, and keypad
+Enter. F10 and those navigation keys drive the global menu path; Escape also
+provides an orderly early exit. Repeated downs are marked as repeats and
+`ALL_KEYS_UP` synthesizes every held control release. A new explicit
+`--runtime-preview` replaces that lightweight scene
 with the same shared desktop runtime used by the hosted SDL frontend, including
 the real NixInfo application and application-owned global menus. It keeps
 Wayland publication disabled and still uses only the software canvas,
@@ -241,7 +245,8 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
   timestamp events and no fallback or clock-source reset. The user reported
   that the result was all good. The subsequent readiness-driven blocking-wait
   trial also felt good: all 1232 waits woke for wscons input, with no timeout,
-  interruption, lifecycle race, or clock regression. Input read through
+  interruption or clock regression; that normal input-driven trial observed no
+  lifecycle activity. Input read through
   framebuffer-copy completion averaged 6 ms and reached 24 ms at most, and the
   supervisor restored and independently verified the console. The successful
   interaction trials do not turn this research harness into a production
@@ -356,21 +361,23 @@ building, tests, preflight, the bounded presentation, and postflight checks in
 one guided command. Run it over SSH while watching the physical console:
 
 ```sh
-./tools/run-wsdisplay-smoke.sh
+./tools/run-wsdisplay-smoke.sh [--vt-cycle] [duration-ms]
 ```
 
-It defaults to 3000 ms; an alternate safe duration can be passed as its sole
-argument, up to `./tools/run-wsdisplay-smoke.sh 30000`. Thirty seconds is the
-hard harness maximum. The script derives its outer timeout from that duration
-and still requires typing `TAKEOVER` before it supplies the harness
+Normal trials default to 3000 ms. `--vt-cycle` defaults to 30000 ms so there is
+time to switch away and back; either form accepts an explicit duration through
+the same 30000 ms hard maximum. The script derives its outer timeout from that
+duration and still requires typing `TAKEOVER` before it supplies the harness
 acknowledgements. It explicitly selects `--runtime-preview`: the shared desktop
 runtime, real NixInfo application, application-owned global menu bar, clock,
 managed-window chrome, and software cursor are rendered into an SDL software
 surface without initializing SDL video or opening X11 or Wayland. The worker
 temporarily opens only the fixed `/dev/wskbd` and `/dev/wsmouse` mux aliases.
-Relative pointer motion and the left button exercise menus and window dragging;
-Escape requests an orderly early exit. Absolute-only pointer devices are not
-translated by this first research provider.
+Relative pointer motion and the left button exercise menus and window dragging.
+The active-map F10, arrow, Return, keypad-Enter, and Escape bindings exercise
+the keyboard menu path; Escape requests an orderly early exit when no menu is
+open. Absolute-only pointer devices are not translated by this first research
+provider, and these bounded controls are not general text or modifier input.
 
 The guided hardware run configures `RelWithDebInfo` by default so its pointer
 measurements are not dominated by unoptimized per-pixel diagnostic code. Set
@@ -438,7 +445,13 @@ pipeline also separates time waiting to render, SDL software rendering,
 synchronous host presentation, the framebuffer-copy-complete timestamp, and
 event delivery. Blocking-wait calls, input and signal-pipe readiness,
 simultaneous readiness, host events, timeouts, and interruptions are reported
-alongside that pipeline.
+alongside that pipeline. Keyboard diagnostics report the current discovered
+binding count plus raw, emitted, repeated, ignored, `ALL_KEYS_UP`, and
+synthesized-release events. VT diagnostics report release/acquire requests and
+completions, input suspend/resume counts, timing regressions, and min/average/
+max release-acknowledge, suspended-away, and acquire-acknowledge durations.
+Those durations measure userspace observation and handling, not exact kernel
+switch or display-scanout latency.
 
 The first measured X220 runtime averaged 176 ms from input read through the
 framebuffer copy. A canonical 32-bit conversion fast path reduced that to
@@ -475,12 +488,35 @@ sudo -n /usr/bin/timeout -s SIGTERM -k 15s 10s \
   --duration-ms 3000
 ```
 
+The opt-in guided VT checkpoint requires a balanced release/reacquire and
+input suspend/resume pair, clean lifecycle timing, and a post-acquire frame:
+
+```sh
+./tools/run-wsdisplay-smoke.sh --vt-cycle
+```
+
+Before takeover, the runner captures the originating one-based VT. It chooses
+VT 2 as the idle away console unless VT 2 is the origin, in which case it
+chooses VT 1, and prints the exact switch-away and return commands for the
+retained second SSH session. Set `NIXBENCH_VT_AWAY` to another configured,
+idle text console before starting if that default is unsuitable. Pause until
+the away console is visible before running the printed return command.
+
+This supplies the harness `--require-vt-cycle` option, which is accepted only
+for an interactive/runtime preview and fails unless the worker closes input,
+acknowledges release, reacquires and redraws, then reopens input. It also
+rejects lifecycle timestamp regressions, missing timing samples, and a missing
+post-acquire frame. The keyboard navigation and complete VT-cycle paths still
+require physical validation.
+
 Interactive input is acquired only by the framebuffer worker. Both mux
 descriptors are closed and held button/keyboard state is discarded before an
 acknowledged VT release and again during every cleanup path. The display
 adapter itself remains output-only. While `/dev/wskbd` is owned by the worker,
-normal console key translation, including the usual keyboard VT-switch
-shortcuts, is unavailable; this is another reason to keep SSH recovery open.
+normal console text translation and the usual keyboard VT-switch shortcuts are
+unavailable. NixBench's bounded active-map shell controls remain available,
+but general text/modifier translation does not; this is another reason to keep
+SSH recovery open.
 
 Before forking the framebuffer worker, the parent records the console state in
 the root-only `/var/run/nixbench-wsdisplay-smoke.state`. The parent stays
@@ -495,8 +531,9 @@ sudo ./build/nixbench-wsdisplay-smoke --recover
 
 This supervisor is a development safeguard, not the production privileged
 helper/watchdog. The worker still runs privileged, and its fixed-mux input is a
-short-lived research path rather than production seat, keymap, hotplug, repeat,
-or session support. The second acknowledgement recognizes that supervisor
+short-lived research path rather than a general text/modifier keymap, hotplug,
+multi-device, production seat, or session implementation. The second
+acknowledgement recognizes that supervisor
 failure still needs manual recovery. CTest exercises parsers, reducers,
 rendering, help, and refusal with synthetic input only; automated tests never
 open wscons devices or perform a console takeover.

@@ -113,7 +113,9 @@ supported 1366x768, 32-bit RGB framebuffer with a 5504-byte stride. This
 establishes both DRM/KMS and software `wsdisplay` as candidates. The bounded
 software path has since mapped and presented successfully for 2000 ms, then
 restored and verified the saved console state. DRM/KMS takeover, page flips,
-input, and VT-switch testing remain unvalidated.
+and page flips remain unvalidated. Physical pointer/runtime input is validated;
+the bounded keyboard controls and a complete VT release/reacquire cycle await
+the next guided trial.
 
 The CMake setting `NIXBENCH_LIBDRM=AUTO|ON|OFF` controls this detailed layer.
 `AUTO`, the default, enables it when all headers and the library are found and
@@ -173,8 +175,12 @@ the same output-only `wsdisplay` host submits the resulting XRGB frame.
 `--interactive-preview` is a separate, explicit research mode. It renders the
 same shell scene plus a software cursor and temporarily owns NetBSD's fixed
 `/dev/wskbd` and `/dev/wsmouse` mux aliases. Pointer motion and the left button
-exercise menus and managed-window dragging; Escape requests an orderly early
-exit. The provider closes both device descriptors and clears held input before
+exercise menus and managed-window dragging. On every keyboard open or reopen,
+the provider queries the active wscons map for Escape, F10, the four arrows,
+Return, and keypad Enter. Those controls use the normalized XKB names already
+consumed by the global menu path; Escape requests an orderly early exit when no
+menu is open. Repeated downs are flagged, and `ALL_KEYS_UP` queues releases for
+every held binding. The provider closes both device descriptors and clears held input before
 every acknowledged VT release and on all cleanup paths. It does not turn SDL
 into the display or input backend: rendering remains an in-memory SDL software
 surface, `wsdisplay` remains the sole display owner, and no X11, Wayland, or SDL
@@ -240,7 +246,13 @@ matching the wsdisplay completion clock. The metric excludes time already
 spent in the device/kernel queue and does not measure scanout or glass latency.
 An input-frame pipeline breakdown separates the wait to render, SDL software
 rendering, the synchronous present call and copy-complete timestamp, and
-completion-event delivery.
+completion-event delivery. Keyboard diagnostics add the current discovered
+binding count and raw, emitted, repeat, ignored, `ALL_KEYS_UP`, and synthesized-
+release events. VT diagnostics add release/acquire request and completion
+counts, input suspend/resume counts, timing regressions, and min/average/max
+release-acknowledge, suspended-away, and acquire-acknowledge durations.
+These durations measure when userspace observes and handles lifecycle events;
+they are not exact kernel-switch or display-scanout latency.
 
 The interactive worker no longer wakes on a fixed 10 ms input slice. It blocks
 in `poll(2)` on the wsdisplay lifecycle self-pipe and active keyboard/mouse
@@ -274,6 +286,19 @@ deadline is the requested duration rounded up to seconds plus a ten-second
 restoration margin. A direct `--desktop-preview` invocation remains the
 compatible output-only shell preview, while `--interactive-preview` retains the
 previous lightweight interactive scene as a fallback.
+
+Its optional `--vt-cycle` form defaults to 30000 ms and supplies the direct
+harness `--require-vt-cycle` option. Before takeover, it captures the
+originating one-based VT, chooses a distinct away VT (VT 2 unless that is the
+origin), and prints the exact commands for the retained second SSH session.
+`NIXBENCH_VT_AWAY` can select another configured, idle text console. The
+operator pauses until the away console is visible before running the printed
+return command. Required-cycle mode is valid only with an interactive/runtime
+preview and fails unless release/acquire and input suspend/resume counts form a
+complete balanced cycle, lifecycle timing has no regressions or missing
+samples, and a post-acquire frame completes. The implementation and
+device-free tests are ready; physical keyboard navigation and VT-cycle
+validation remain pending.
 
 The hardware runner selects `RelWithDebInfo` unless
 `NIXBENCH_BUILD_TYPE` overrides it. Debug builds remain useful for correctness
@@ -349,7 +374,8 @@ source reset. Input-to-framebuffer-copy completion averaged 8 ms with a 22 ms
 maximum, and console restoration passed. The subsequent readiness-driven wait
 was then physically validated with lifecycle priority and bounded input
 batches intact. All 1232 waits were input-ready, with no timeout,
-interruption, lifecycle race, or clock regression. Input-to-copy completion
+interruption or clock regression; the input-driven trial observed no lifecycle
+activity. Input-to-copy completion
 averaged 6 ms with a 24 ms maximum, the interaction felt good, and console
 restoration passed again.
 
@@ -393,9 +419,12 @@ events. The interactive smoke mode now exercises the intended separation with
 a narrow provider that translates the fixed `/dev/wskbd` and `/dev/wsmouse`
 mux streams into normalized events. The `wsdisplay` adapter never opens those
 devices. The research provider covers a software pointer driven by relative
-motion, the left button, and Escape only; absolute-device calibration is
-deliberately deferred. It is not a general keymap, repeat, hotplug,
-multi-device, or seat implementation. This separation permits device-free
+motion and the left button plus active-map bindings for Escape, F10, arrows,
+Return, and keypad Enter. It propagates repeated downs and synthesizes held
+control releases on `ALL_KEYS_UP`; absolute-device calibration is deliberately
+deferred. This bounded navigation lookup is not a general text/modifier or
+client XKB keymap, hotplug, multi-device, or seat implementation. This
+separation permits device-free
 reducer tests and later lets the aggregate host facade compose production
 display, session, and input providers.
 Consult [`wskbd(4)`][wskbd], [`wsmouse(4)`][wsmouse], and the versioned event
@@ -418,8 +447,12 @@ On release request, NixBench stops accepting frames, cancels focus, held input,
 and pointer capture, then acknowledges through
 `nb_host_complete_console_release()`. On acquire, it acknowledges through
 `nb_host_complete_console_acquire()`, re-queries output state, remaps or
-recreates invalid resources, and performs a full redraw before resuming.
-Lifecycle requests must not be lost behind a full ordinary event queue.
+recreates invalid resources, performs a full redraw, reopens wscons input, and
+re-queries the active control bindings before resuming. Lifecycle requests must
+not be lost behind a full ordinary event queue. Required-cycle mode records
+acknowledgement and suspended-away timing and enforces balanced release/acquire
+and input suspend/resume counts, complete non-regressing timing samples, and a
+post-acquire frame.
 
 The watchdog records enough original state to restore emulation mode, video
 state, and automatic VT handling. Restoration is ordered, best-effort, and
