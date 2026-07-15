@@ -50,6 +50,10 @@ static void test_actions(void)
         "session", "--core", "/opt/nixbench/core",
         "--acknowledge-console-takeover"
     };
+    char *application[] = {
+        "session", "--acknowledge-console-takeover",
+        "--application", "/opt/Midori Browser/bin/midori"
+    };
 
     CHECK(parse(2, help, &options));
     CHECK(options.action == NB_WSDISPLAY_SESSION_ACTION_HELP);
@@ -60,6 +64,7 @@ static void test_actions(void)
     CHECK(parse(2, run, &options));
     CHECK(options.action == NB_WSDISPLAY_SESSION_ACTION_RUN);
     CHECK(options.acknowledge_console_takeover);
+    CHECK(options.application_path == NULL);
     CHECK(!options.require_supervisor_sigterm);
     CHECK(parse(3, sigterm_run, &options));
     CHECK(options.action == NB_WSDISPLAY_SESSION_ACTION_RUN);
@@ -77,6 +82,10 @@ static void test_actions(void)
           NB_WSDISPLAY_SESSION_CORE_FAILURE_HANG);
     CHECK(parse(4, core, &options));
     CHECK(strcmp(options.core_path, "/opt/nixbench/core") == 0);
+    CHECK(parse(4, application, &options));
+    CHECK(strcmp(options.application_path,
+                 "/opt/Midori Browser/bin/midori") == 0);
+    CHECK(options.core_path == NULL);
 }
 
 static void test_rejections(void)
@@ -93,6 +102,33 @@ static void test_rejections(void)
     };
     char *missing_core[] = {
         "session", "--acknowledge-console-takeover", "--core"
+    };
+    char *relative_application[] = {
+        "session", "--acknowledge-console-takeover",
+        "--application", "midori"
+    };
+    char *missing_application[] = {
+        "session", "--acknowledge-console-takeover", "--application"
+    };
+    char *duplicate_application[] = {
+        "session", "--acknowledge-console-takeover",
+        "--application", "/usr/pkg/bin/midori",
+        "--application", "/usr/pkg/bin/gtk3-demo"
+    };
+    char *directory_application[] = {
+        "session", "--acknowledge-console-takeover",
+        "--application", "/usr/pkg/bin/"
+    };
+    char *root_application[] = {
+        "session", "--acknowledge-console-takeover",
+        "--application", "/"
+    };
+    char *control_application[] = {
+        "session", "--acknowledge-console-takeover",
+        "--application", "/usr/pkg/bin/midori\nspoof"
+    };
+    char *action_application[] = {
+        "session", "--preflight", "--application", "/usr/pkg/bin/midori"
     };
     char *duplicate_ack[] = {
         "session", "--acknowledge-console-takeover",
@@ -127,6 +163,15 @@ static void test_rejections(void)
         "session", "--acknowledge-console-takeover",
         "--require-core-hang", "--require-core-hang"
     };
+    char oversized_application[NB_WSDISPLAY_SESSION_PATH_CAPACITY + 1U];
+    char *oversized_application_arguments[] = {
+        "session", "--acknowledge-console-takeover",
+        "--application", oversized_application
+    };
+
+    memset(oversized_application, 'a', sizeof(oversized_application));
+    oversized_application[0] = '/';
+    oversized_application[sizeof(oversized_application) - 1U] = '\0';
 
     CHECK(!parse(1, none, &options));
     CHECK(!parse(2, unknown, &options));
@@ -134,6 +179,14 @@ static void test_rejections(void)
     CHECK(!parse(3, action_ack, &options));
     CHECK(!parse(4, relative_core, &options));
     CHECK(!parse(3, missing_core, &options));
+    CHECK(!parse(4, relative_application, &options));
+    CHECK(!parse(3, missing_application, &options));
+    CHECK(!parse(6, duplicate_application, &options));
+    CHECK(!parse(4, directory_application, &options));
+    CHECK(!parse(4, root_application, &options));
+    CHECK(!parse(4, control_application, &options));
+    CHECK(!parse(4, action_application, &options));
+    CHECK(!parse(4, oversized_application_arguments, &options));
     CHECK(!parse(3, duplicate_ack, &options));
     CHECK(!parse(3, action_sigterm, &options));
     CHECK(!parse(2, sigterm_without_ack, &options));

@@ -18,6 +18,16 @@ case "${0##*/}" in
         ;;
     sudo)
         printf '%s\n' "$*" >>"$NB_TEST_LOG"
+        previous_argument=
+        for argument do
+            if [ "$previous_argument" = application ]; then
+                printf 'application-argument=%s\n' "$argument" \
+                    >>"$NB_TEST_LOG"
+                previous_argument=
+            elif [ "$argument" = --application ]; then
+                previous_argument=application
+            fi
+        done
         case "$*" in
             "-n /bin/test -e "*)
                 exit 1
@@ -53,9 +63,13 @@ ln -s stub "$temporary/bin/uname"
 ln -s stub "$temporary/bin/cmake"
 ln -s stub "$temporary/bin/ctest"
 ln -s stub "$temporary/bin/sudo"
+test_application="$temporary/Midori Browser"
+touch "$test_application"
+chmod +x "$test_application"
 
 unset NIXBENCH_EXPECT_SUPERVISOR_TERM || :
 unset NIXBENCH_EXPECT_CORE_FAILURE || :
+unset NIXBENCH_APPLICATION || :
 
 run_session()
 {
@@ -66,6 +80,7 @@ run_session()
     restored_vt=$5
     log=$6
     output=$7
+    application=${8-}
 
     printf '%s\n' START-NIXBENCH |
         env PATH="$temporary/bin:/usr/bin:/bin" \
@@ -73,6 +88,7 @@ run_session()
             NIXBENCH_BUILD_DIR="$temporary/build" \
             NIXBENCH_EXPECT_SUPERVISOR_TERM="$supervisor_mode" \
             NIXBENCH_EXPECT_CORE_FAILURE="$core_failure" \
+            NIXBENCH_APPLICATION="$application" \
             NB_LAUNCH_STATUS="$launch_status" \
             NB_ABSENCE_STATUS="$absence_status" \
             NB_INITIAL_VT=1 \
@@ -84,8 +100,11 @@ run_session()
 
 expected_log=$temporary/expected.log
 expected_output=$temporary/expected.out
-run_session 1 '' 0 0 1 "$expected_log" "$expected_output"
+run_session 1 '' 0 0 1 "$expected_log" "$expected_output" \
+    "$test_application"
 grep -F -- '--require-supervisor-sigterm' "$expected_log" >/dev/null
+grep -F -- "application-argument=$test_application" "$expected_log" \
+    >/dev/null
 grep -F -- 'Success: supervisor SIGTERM recovery' "$expected_output" >/dev/null
 if grep -F -- '/usr/sbin/wsconscfg -s' "$expected_output" >/dev/null; then
     echo "supervisor-termination trial printed VT-switch instructions" >&2
@@ -121,11 +140,34 @@ if grep -F -- '--require-core-' "$normal_log" >/dev/null; then
     echo "normal standalone session required a core-failure gate" >&2
     exit 1
 fi
+if grep -F -- '--application' "$normal_log" >/dev/null; then
+    echo "default standalone session selected a custom application" >&2
+    exit 1
+fi
+
+application_log=$temporary/application.log
+application_output=$temporary/application.out
+run_session 0 '' 0 0 1 "$application_log" "$application_output" \
+    "$test_application"
+grep -F -- "--application $test_application" "$application_log" >/dev/null
+grep -F -- "application-argument=$test_application" "$application_log" \
+    >/dev/null
+grep -F -- 'selected initial application will open automatically' \
+    "$application_output" >/dev/null
+grep -F -- 'execution occurs only after the desktop core has dropped privileges' \
+    "$application_output" >/dev/null
+if grep -F -- 'NixClock will open automatically' \
+    "$application_output" >/dev/null; then
+    echo "custom-application session described NixClock as initial" >&2
+    exit 1
+fi
 
 crash_log=$temporary/crash.log
 crash_output=$temporary/crash.out
-run_session 0 crash 0 0 1 "$crash_log" "$crash_output"
+run_session 0 crash 0 0 1 "$crash_log" "$crash_output" \
+    "$test_application"
 grep -F -- '--require-core-crash' "$crash_log" >/dev/null
+grep -F -- "application-argument=$test_application" "$crash_log" >/dev/null
 grep -F -- 'exact sudo kill -USR1 command' "$crash_output" >/dev/null
 grep -F -- 'Signal the supervisor only' "$crash_output" >/dev/null
 grep -F -- 'Success: core-crash recovery' "$crash_output" >/dev/null
@@ -144,8 +186,10 @@ fi
 
 hang_log=$temporary/hang.log
 hang_output=$temporary/hang.out
-run_session 0 hang 0 0 1 "$hang_log" "$hang_output"
+run_session 0 hang 0 0 1 "$hang_log" "$hang_output" \
+    "$test_application"
 grep -F -- '--require-core-hang' "$hang_log" >/dev/null
+grep -F -- "application-argument=$test_application" "$hang_log" >/dev/null
 grep -F -- 'exact sudo kill -USR1 command' "$hang_output" >/dev/null
 grep -F -- 'do not send SIGCONT' "$hang_output" >/dev/null
 grep -F -- 'Success: core-hang watchdog recovery' "$hang_output" >/dev/null
@@ -204,6 +248,40 @@ if run_session 0 stall 0 0 1 \
 fi
 grep -F -- 'NIXBENCH_EXPECT_CORE_FAILURE must be crash or hang' \
     "$invalid_core_output" >/dev/null
+
+relative_application_log=$temporary/relative-application.log
+relative_application_output=$temporary/relative-application.out
+if run_session 0 '' 0 0 1 \
+    "$relative_application_log" "$relative_application_output" midori; then
+    echo "relative NIXBENCH_APPLICATION was accepted" >&2
+    exit 1
+fi
+grep -F -- 'NIXBENCH_APPLICATION must be an absolute path' \
+    "$relative_application_output" >/dev/null
+
+directory_application_log=$temporary/directory-application.log
+directory_application_output=$temporary/directory-application.out
+if run_session 0 '' 0 0 1 \
+    "$directory_application_log" "$directory_application_output" \
+    /usr/pkg/bin/; then
+    echo "directory NIXBENCH_APPLICATION was accepted" >&2
+    exit 1
+fi
+grep -F -- 'NIXBENCH_APPLICATION must name an absolute executable path' \
+    "$directory_application_output" >/dev/null
+
+nonexecutable_application="$temporary/not-executable"
+touch "$nonexecutable_application"
+nonexecutable_application_log=$temporary/nonexecutable-application.log
+nonexecutable_application_output=$temporary/nonexecutable-application.out
+if run_session 0 '' 0 0 1 \
+    "$nonexecutable_application_log" "$nonexecutable_application_output" \
+    "$nonexecutable_application"; then
+    echo "non-executable NIXBENCH_APPLICATION was accepted" >&2
+    exit 1
+fi
+grep -F -- 'NIXBENCH_APPLICATION must be an executable regular file' \
+    "$nonexecutable_application_output" >/dev/null
 
 conflict_log=$temporary/conflict.log
 conflict_output=$temporary/conflict.out

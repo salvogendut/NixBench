@@ -27,6 +27,7 @@ struct nb_wsdisplay_session_options {
     enum nb_wsdisplay_session_action action;
     const char *program_path;
     const char *core_path;
+    const char *application_path;
     bool acknowledge_console_takeover;
     bool require_supervisor_sigterm;
     enum nb_wsdisplay_session_core_failure required_core_failure;

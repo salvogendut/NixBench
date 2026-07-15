@@ -35,6 +35,25 @@ if [ "$expect_supervisor_term" -eq 1 ] &&
    [ -n "$expect_core_failure" ]; then
     fail "supervisor SIGTERM and core-failure gates are mutually exclusive"
 fi
+application=${NIXBENCH_APPLICATION:-}
+if [ -n "$application" ]; then
+    case "$application" in
+        /|/*/) fail "NIXBENCH_APPLICATION must name an absolute executable path" ;;
+        /*) ;;
+        *) fail "NIXBENCH_APPLICATION must be an absolute path" ;;
+    esac
+    if [ "${#application}" -ge 4096 ]; then
+        fail "NIXBENCH_APPLICATION is too long"
+    fi
+    case "$application" in
+        *[[:cntrl:]]*)
+            fail "NIXBENCH_APPLICATION must not contain control characters"
+            ;;
+    esac
+    if [ ! -f "$application" ] || [ ! -x "$application" ]; then
+        fail "NIXBENCH_APPLICATION must be an executable regular file"
+    fi
+fi
 
 script_path=$0
 case "$script_path" in
@@ -147,13 +166,23 @@ wsdisplay console.
 
 The root recovery parent and device helper retain only wsdisplay, wscons, VT,
 frame presentation, heartbeat, and restoration duties. The NixBench desktop,
-its private Wayland server, and NixClock run as your ordinary sudo user. They
-receive no framebuffer, keyboard, mouse, recovery, or VT descriptor.
+its private Wayland server, and initial application run as your ordinary sudo
+user. They receive no framebuffer, keyboard, mouse, recovery, or VT descriptor.
+EOF
 
+if [ -n "$application" ]; then
+    cat <<EOF
+The selected initial application will open automatically:
+  $application
+Its execution occurs only after the desktop core has dropped privileges.
+EOF
+else
+    cat <<EOF
 NixClock will open automatically. Its menus are installed into the global bar:
 use NixClock -> Quit to close the clock, and Settings -> Show seconds to toggle
 the seconds hand.
 EOF
+fi
 
 if [ "$expect_supervisor_term" -eq 1 ]; then
     cat <<EOF
@@ -202,8 +231,9 @@ trial.
 EOF
 else
     cat <<EOF
-After closing NixClock, use the desktop's NixBench -> Quit command, or press
-Escape when no Wayland client owns keyboard focus, to end the session.
+After closing the initial application, use the desktop's NixBench -> Quit
+command, or press Escape when no Wayland client owns keyboard focus, to end the
+session.
 
 For the VT lifecycle gate, once the desktop is visible use the second SSH
 session to switch away and back (these are one-based VT numbers):
@@ -238,19 +268,32 @@ if ! IFS= read -r answer || [ "$answer" != "START-NIXBENCH" ]; then
     fail "cancelled without changing display state"
 fi
 
-echo "==> Starting NixBench and NixClock"
+if [ -n "$application" ]; then
+    echo "==> Starting NixBench and $application"
+else
+    echo "==> Starting NixBench and NixClock"
+fi
+
+run_privileged_session()
+{
+    if [ -n "$application" ]; then
+        sudo -n "$staged_session" --acknowledge-console-takeover \
+            --core "$core" --application "$application" "$@"
+    else
+        sudo -n "$staged_session" --acknowledge-console-takeover \
+            --core "$core" "$@"
+    fi
+}
+
 set +e
 if [ "$expect_supervisor_term" -eq 1 ]; then
-    sudo -n "$staged_session" --acknowledge-console-takeover \
-        --core "$core" --require-supervisor-sigterm
+    run_privileged_session --require-supervisor-sigterm
 elif [ "$expect_core_failure" = crash ]; then
-    sudo -n "$staged_session" --acknowledge-console-takeover \
-        --core "$core" --require-core-crash
+    run_privileged_session --require-core-crash
 elif [ "$expect_core_failure" = hang ]; then
-    sudo -n "$staged_session" --acknowledge-console-takeover \
-        --core "$core" --require-core-hang
+    run_privileged_session --require-core-hang
 else
-    sudo -n "$staged_session" --acknowledge-console-takeover --core "$core"
+    run_privileged_session
 fi
 run_status=$?
 set -e

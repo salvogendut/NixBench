@@ -28,6 +28,29 @@ static void set_error(char error[NB_WSDISPLAY_SESSION_ERROR_CAPACITY],
     va_end(arguments);
 }
 
+static bool application_path_is_valid(const char *path)
+{
+    size_t length;
+    size_t index;
+
+    if (path == NULL) {
+        return true;
+    }
+    length = strnlen(path, NB_WSDISPLAY_SESSION_PATH_CAPACITY);
+    if (length < 2U || length >= NB_WSDISPLAY_SESSION_PATH_CAPACITY ||
+        path[0] != '/' || path[length - 1U] == '/') {
+        return false;
+    }
+    for (index = 0; index < length; ++index) {
+        const unsigned char character = (unsigned char)path[index];
+
+        if (character < 0x20U || character == 0x7fU) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void nb_wsdisplay_session_options_init(
     struct nb_wsdisplay_session_options *options)
 {
@@ -46,6 +69,7 @@ bool nb_wsdisplay_session_parse_options(
     struct nb_wsdisplay_session_options parsed;
     bool action_seen = false;
     bool core_seen = false;
+    bool application_seen = false;
     bool acknowledge_seen = false;
     bool recovery_gate_seen = false;
     int index;
@@ -118,6 +142,24 @@ bool nb_wsdisplay_session_parse_options(
             }
             core_seen = true;
             continue;
+        } else if (strcmp(argv[index], "--application") == 0) {
+            if (application_seen || index + 1 >= argc) {
+                set_error(error,
+                          application_seen
+                              ? "duplicate --application"
+                              : "--application requires a path");
+                return false;
+            }
+            parsed.application_path = argv[++index];
+            if (!application_path_is_valid(parsed.application_path)) {
+                set_error(error,
+                          "--application must be a bounded absolute "
+                          "path without a trailing slash or control "
+                          "characters");
+                return false;
+            }
+            application_seen = true;
+            continue;
         } else {
             set_error(error, "unknown option: %s", argv[index]);
             return false;
@@ -132,7 +174,8 @@ bool nb_wsdisplay_session_parse_options(
     }
 
     if (action_seen &&
-        (acknowledge_seen || core_seen || recovery_gate_seen)) {
+        (acknowledge_seen || core_seen || application_seen ||
+         recovery_gate_seen)) {
         set_error(error,
                   "run-only options cannot be combined with an action");
         return false;
@@ -555,7 +598,7 @@ static bool derive_sibling(const char *path,
 static bool resolve_program_paths(
     const struct nb_wsdisplay_session_options *options,
     char core[NB_WSDISPLAY_SESSION_PATH_CAPACITY],
-    char nixclock[NB_WSDISPLAY_SESSION_PATH_CAPACITY])
+    char default_application[NB_WSDISPLAY_SESSION_PATH_CAPACITY])
 {
     char program[NB_WSDISPLAY_SESSION_PATH_CAPACITY];
     char candidate[NB_WSDISPLAY_SESSION_PATH_CAPACITY];
@@ -570,13 +613,20 @@ static bool resolve_program_paths(
                                                candidate,
                                                error) ||
         realpath(candidate, core) == NULL ||
-        stat(core, &status) != 0 || !S_ISREG(status.st_mode) ||
-        !derive_sibling(core, "nixclock", candidate) ||
-        realpath(candidate, nixclock) == NULL ||
-        stat(nixclock, &status) != 0 || !S_ISREG(status.st_mode)) {
+        stat(core, &status) != 0 || !S_ISREG(status.st_mode)) {
         fprintf(stderr,
-                "Could not resolve the session core and NixClock: %s\n",
+                "Could not resolve the session core: %s\n",
                 errno != 0 ? strerror(errno) : error);
+        return false;
+    }
+    if (options->application_path == NULL &&
+        (!derive_sibling(core, "nixclock", candidate) ||
+         realpath(candidate, default_application) == NULL ||
+         stat(default_application, &status) != 0 ||
+         !S_ISREG(status.st_mode))) {
+        fprintf(stderr,
+                "Could not resolve the default NixClock application: %s\n",
+                strerror(errno));
         return false;
     }
     return true;
@@ -1179,7 +1229,7 @@ static int run_device_worker(
     const struct nb_wsdisplay_console_state *saved,
     const struct nb_session_credentials *credentials,
     const char *core_path,
-    const char *nixclock_path,
+    const char *application_path,
     int core_report_fd,
     int fault_fd,
     enum nb_wsdisplay_session_core_failure required_core_failure,
@@ -1210,7 +1260,7 @@ static int run_device_worker(
         "--ipc-fd",
         "3",
         "--launch",
-        (char *)nixclock_path,
+        (char *)application_path,
         "--runtime-dir",
         runtime_path,
         NULL
@@ -1801,7 +1851,7 @@ static struct supervision_result supervise_device_worker(
     const struct nb_wsdisplay_console_state *saved,
     const struct nb_session_credentials *credentials,
     const char *core_path,
-    const char *nixclock_path,
+    const char *application_path,
     int session_lock_fd,
     enum nb_wsdisplay_session_core_failure required_core_failure,
     const struct supervisor_signal_state *signals)
@@ -1878,7 +1928,7 @@ static struct supervision_result supervise_device_worker(
         result = run_device_worker(saved,
                                    credentials,
                                    core_path,
-                                   nixclock_path,
+                                   application_path,
                                    report_pipe[1],
                                    fault_pipe[0],
                                    required_core_failure,
@@ -2180,7 +2230,8 @@ int nb_wsdisplay_session_run(
     char credential_error[NB_SESSION_CREDENTIALS_ERROR_CAPACITY];
     char recovery_error[NB_WSDISPLAY_RECOVERY_ERROR_CAPACITY];
     char core_path[NB_WSDISPLAY_SESSION_PATH_CAPACITY];
-    char nixclock_path[NB_WSDISPLAY_SESSION_PATH_CAPACITY];
+    char default_application_path[NB_WSDISPLAY_SESSION_PATH_CAPACITY];
+    const char *application_path;
     int session_lock_fd;
     int result = 1;
     bool console_restored = false;
@@ -2198,7 +2249,8 @@ int nb_wsdisplay_session_run(
             NB_WSDISPLAY_SESSION_CORE_FAILURE_HANG ||
         (options->require_supervisor_sigterm &&
          options->required_core_failure !=
-             NB_WSDISPLAY_SESSION_CORE_FAILURE_NONE)) {
+             NB_WSDISPLAY_SESSION_CORE_FAILURE_NONE) ||
+        !application_path_is_valid(options->application_path)) {
         return 2;
     }
     if (!nb_session_credentials_prepare_parent_stdio()) {
@@ -2258,12 +2310,17 @@ int nb_wsdisplay_session_run(
         !options->acknowledge_console_takeover ||
         !nb_session_credentials_resolve_sudo(&credentials,
                                              credential_error) ||
-        !resolve_program_paths(options, core_path, nixclock_path)) {
+        !resolve_program_paths(options,
+                               core_path,
+                               default_application_path)) {
         if (credential_error[0] != '\0') {
             fprintf(stderr, "%s\n", credential_error);
         }
         goto release_lock;
     }
+    application_path = options->application_path != NULL
+                           ? options->application_path
+                           : default_application_path;
     if (!nb_wsdisplay_recovery_store(&recovery_options,
                                      &state,
                                      recovery_error)) {
@@ -2277,7 +2334,7 @@ int nb_wsdisplay_session_run(
            state.screen_device,
            recovery_path,
            core_path,
-           nixclock_path);
+           application_path);
     printf("Supervisor PID: %ld (second-SSH cancellation: sudo kill -TERM "
            "%ld)\n",
            (long)getpid(),
@@ -2286,7 +2343,7 @@ int nb_wsdisplay_session_run(
     supervision = supervise_device_worker(&state,
                                           &credentials,
                                           core_path,
-                                          nixclock_path,
+                                          application_path,
                                           session_lock_fd,
                                           options->required_core_failure,
                                           &signals);
