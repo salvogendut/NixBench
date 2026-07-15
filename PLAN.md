@@ -166,10 +166,13 @@ or launch external applications: its compositor and desktop run in the
 privileged worker. A separate opt-in `nixbench-wsdisplay-session` milestone now
 implements the audited root supervisor/device-helper and ordinary-user core
 split, publishes a private Wayland display, and launches NixClock after the
-credential drop. Its device-free integration path and first physical
-console-takeover/normal-exit, VT 1 -> 2 -> 1, and supervised SIGTERM recovery
-trials are complete. Further failure injection and repeated-session validation
-remain pending. Desktop-managed installation, popup/subsurface/data protocols,
+credential drop. Its device-free integration path now includes a bounded core
+heartbeat, deterministic crash/hang injection policy, and an ordinary-user
+runtime-directory cleanup sentinel. The first physical console-takeover/normal-
+exit, VT 1 -> 2 -> 1, and supervised SIGTERM recovery trials are complete. The
+new core-crash/core-hang gates still require physical acceptance; malformed
+protocol, harder supervisor/worker failures, and repeated-session validation
+follow them. Desktop-managed installation, popup/subsurface/data protocols,
 toolkit trials, and broader application-menu bridges also remain outstanding.
 
 ## Milestone 6: Package and validate the hosted prototype
@@ -441,9 +444,14 @@ both the supervisor and live device worker, creates the recovery record
 exclusively, and supervises that worker. The worker retains fixed `wsdisplay`,
 wscons, VT, presentation, and heartbeat authority. Its anonymous bounded
 protocol connects to `nixbench-session-core`, which is executed only after the
-trusted child irreversibly changes to the invoking sudo user. The core publishes
-a private Wayland socket in a session-owned runtime directory and launches
-NixClock. The core and application inherit no console or recovery descriptor.
+trusted child irreversibly changes to the invoking sudo user. A separately
+credential-dropped sibling runs the ordinary-user runtime sentinel. It creates
+and holds the private runtime directory, while the core publishes its Wayland
+socket there and launches NixClock. After the core/application process group is
+gone, the worker requests bounded sentinel cleanup and verifies the sentinel's
+exit. Privileged code never removes entries through the reported user-owned
+path. The core, sentinel, and application inherit no console or recovery
+descriptor.
 
 `tools/run-wsdisplay-session.sh` configures the opt-in targets, builds and tests,
 stages only the privileged launcher as a root-owned `/var/run` executable,
@@ -451,7 +459,7 @@ performs query-only preflight, requires `START-NIXBENCH`, and then runs without
 an automatic deadline under the root recovery supervisor. A second SSH session
 and the printed supervisor cancellation/manual `--recover` commands remain
 mandatory. The exact opt-in configuration now builds on NetBSD and passes all
-46 device-free tests; the staged root launcher links only NetBSD libc, and its
+48 device-free tests; the staged root launcher links only NetBSD libc, and its
 query-only preflight preserved the expected console state. The first physical
 session also launched NixClock on the private Wayland display, exited normally,
 cleared the recovery record, and restored screen 0, emulation mode, automatic
@@ -467,9 +475,11 @@ verified, and the recovery record was cleared. Independent postflight again
 found screen 0 in emulation mode with automatic VT handling, video on, and
 one-based VT 1 active, and the harness reported success. The trial's non-fatal
 NixClock Wayland EOF diagnostic prompted a cleanup-order fix that keeps the
-private display alive until the tracked application exits. Its next gates are
-core crash or hang, malformed protocol, worker or supervisor hard failure, and
-repeated-session validation on the X220.
+private display alive until the tracked application exits. Bounded heartbeat
+and ordinary-user runtime-sentinel policy now support deterministic
+core-crash/core-hang guided gates; those two physical trials are next.
+Malformed protocol, worker or supervisor hard failure, and repeated-session
+validation on the X220 follow them.
 Direct KMS remains a Milestone 7 deliverable but is not on that immediate
 critical path.
 

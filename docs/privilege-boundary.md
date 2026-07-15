@@ -20,11 +20,17 @@ captures and persists the original console state, watches a root device worker,
 and performs final restoration independently. The device worker owns the fixed
 `wsdisplay` and wscons devices, VT lifecycle, frame presentation, and core
 heartbeat. `nixbench-session-core` runs as the invoking ordinary user, publishes
-a private Wayland display, and launches NixClock. Device-free tests exercise the
-split, and physical takeover, normal exit, and VT 1 -> 2 -> 1 trials have
-completed. The physical supervised-SIGTERM recovery gate has also passed. The
-remaining failure-injection and repeated-session matrix is still pending, so
-this is not a production login session.
+a private Wayland display, and launches NixClock. A separately dropped sibling
+of the same internal executable is the ordinary-user runtime sentinel: it owns
+the private runtime directory. On the verified worker path it removes that
+directory only after the complete core/application process group is contained;
+controller loss also triggers its unprivileged cleanup fallback. Device-free
+tests exercise the split, heartbeat timeout, sentinel cleanup, and exact
+crash/hang gate policy.
+Physical takeover, normal exit, VT 1 -> 2 -> 1, and supervised-SIGTERM recovery
+have completed. The physical crash/hang trials and remaining failure-injection
+and repeated-session matrix are still pending, so this is not a production
+login session.
 
 The implemented boundary is:
 
@@ -33,12 +39,11 @@ root recovery supervisor
   exclusive recovery record, worker/core lifetime, final restore/verify
   `-- root device worker
         wsdisplay, wscons, VT lifecycle, presentation, heartbeat
-                         |
-            private fixed-message channel
-                         |
-        ordinary-user NixBench core
-          shell, compositor, private Wayland service, applications, user files
-          canonical software frames
+        |-- private fixed-message channel --> ordinary-user NixBench core
+        |     shell, compositor, private Wayland service, applications
+        |     canonical software frames
+        `-- private READY/CLEAN channel ----> ordinary-user runtime sentinel
+              runtime-directory ownership and bounded cleanup
 ```
 
 The root side owns device authority and recovery: the supervisor retains the
@@ -185,13 +190,16 @@ the core supplies them, they do not authenticate the peer or prove the drop.
 
 ## Implementation and acceptance order
 
-The opt-in milestone implements the first structural slice as three binaries:
+The opt-in milestone implements the first structural slice as three installed
+binaries and five process roles:
 
 - `nixbench-wsdisplay-session` is the root launcher and recovery supervisor;
 - its root device worker owns the fixed console devices and bounded protocol;
+- one `nixbench-session-core` process runs as the ordinary-user runtime
+  sentinel;
+- its sibling `nixbench-session-core` publishes the private Wayland display;
   and
-- `nixbench-session-core` runs as the invoking user, publishes a private
-  Wayland display, and launches the ordinary-user `nixclock` client.
+- the core launches the ordinary-user `nixclock` client.
 
 Device-free tests exercise recovery-record and supervisor policy, protocol
 state, credential selection, standard-descriptor reservation, descriptor
@@ -213,7 +221,17 @@ and core liveness are cleared, console restoration is verified, and the
 recovery record is removed. The guided script additionally verifies record
 absence and return to the original active VT.
 
-The exact opt-in targets build natively on the NetBSD test host and all 46
+`NIXBENCH_EXPECT_CORE_FAILURE=crash` and `hang` select deterministic core-fault
+gates. After the supervisor has received the validated core PID, it prints and
+atomically arms an exact `SIGUSR1` trigger command. The supervisor sends only a
+fixed crash/hang command to the root worker; the worker signals only that known
+positive PID. Crash requires the observed `SIGKILL` death. Hang requires a
+stopped core followed by expiry of its outstanding heartbeat. An early trigger,
+the wrong failure, a second signal, a protocol/device error, incomplete process-
+group or sentinel cleanup, failed restoration, or a retained recovery record
+all fail the gate.
+
+The exact opt-in targets build natively on the NetBSD test host and all 48
 device-free tests pass. Dynamic-link inspection reports only NetBSD libc for
 the root launcher, while SDL3 and Wayland remain on the ordinary-user side.
 The root-owned staged launcher and mode-0600 lock were verified, and query-only
@@ -237,9 +255,13 @@ recovery record was cleared. Independent postflight again found screen 0 in
 emulation mode with automatic VT handling, video on, and active one-based VT 1,
 and the guided harness reported success. The trial's non-fatal NixClock Wayland
 EOF diagnostic prompted a cleanup-order fix that keeps the private display
-alive until the tracked application exits. Remaining NetBSD hardware cases are
-a crashed or hung core, malformed protocol, worker or supervisor hard failure,
-and repeated sessions.
+alive until the tracked application exits. The runtime is now created and
+removed by a separately credential-dropped sentinel, so the root worker only
+coordinates a fixed READY/CLEAN/CLEANED exchange and never performs filesystem
+operations on the user-owned path. Deterministic crash and hang gates are
+implemented but still await their NetBSD physical trials. Remaining later
+hardware cases are malformed protocol, worker or supervisor hard failure, and
+repeated sessions.
 
 Every case must return to the saved screen in emulation mode with video on and
 automatic VT handling, leave no worker or recovery record, and require no

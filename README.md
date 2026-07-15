@@ -145,16 +145,18 @@ The root-helper versus ordinary-user-core decision is detailed in the
 The separate, opt-in `nixbench-wsdisplay-session` milestone now implements that
 process split without changing the old harness. A root recovery supervisor and
 root device worker retain `wsdisplay`, wscons, VT, presentation, heartbeat, and
-restoration authority. The trusted child irreversibly changes to the invoking
-sudo account before it executes `nixbench-session-core`, which creates the
-desktop, publishes a private Wayland display, and launches NixClock. The core
-receives only a bounded anonymous protocol endpoint; NixClock does not receive
-that endpoint, and neither process receives a framebuffer, wscons, recovery,
-or VT descriptor. This new path has device-free coverage but has not yet
-completed the broader failure-injection matrix. Its physical console takeover,
-normal exit, VT 1 -> 2 -> 1 cycle, and supervised SIGTERM recovery gate have
-passed, but it remains an explicitly acknowledged development milestone rather
-than a supported login session.
+restoration authority. Trusted children irreversibly change to the invoking
+sudo account before executing `nixbench-session-core`. An ordinary-user
+runtime sentinel owns cleanup of the private runtime directory; its sibling
+core creates the desktop, publishes the Wayland display there, and launches
+NixClock. The core receives only a bounded anonymous protocol endpoint;
+NixClock does not receive that endpoint, and neither ordinary-user process
+receives a framebuffer, wscons, recovery, or VT descriptor. The heartbeat,
+runtime cleanup, and deterministic core-crash/core-hang gates have device-free
+coverage, but the new fault gates still require physical acceptance. Console
+takeover, normal exit, VT 1 -> 2 -> 1, and supervised SIGTERM recovery have
+passed on hardware. This remains an explicitly acknowledged development
+milestone rather than a supported login session.
 
 The older `nixbench-wsdisplay-smoke` research harness deliberately remains
 available for framebuffer and input experiments. It neither publishes Wayland
@@ -446,6 +448,24 @@ was independently restored, the recovery record is absent, and the original
 VT is active again. A normal desktop exit or any nonzero gated-launch result is
 reported as a failed trial.
 
+The next two recovery gates inject a fault only after the supervisor has
+validated the ordinary-user core:
+
+```sh
+NIXBENCH_EXPECT_CORE_FAILURE=crash ./tools/run-wsdisplay-session.sh
+NIXBENCH_EXPECT_CORE_FAILURE=hang ./tools/run-wsdisplay-session.sh
+```
+
+Wait for the desktop and the launcher's `Required core ... trigger armed`
+message, then run its exact printed `sudo -n /bin/kill -USR1 ...` command from
+the second SSH session. Signal only the supervisor. The crash gate asks the
+device worker to deliver `SIGKILL` to the validated core. The hang gate asks it
+to deliver `SIGSTOP`, then requires the bounded heartbeat watchdog to detect
+the stopped core; do not send `SIGCONT` yourself. Either gate succeeds only for
+the requested failure, with no unrelated supervision error, after the complete
+core/application process group and runtime sentinel have been reaped, console
+restoration has been verified, and the recovery record has been removed.
+
 Before any privileged device is opened, the launcher reserves standard file
 descriptors 0, 1, and 2 so a closed standard stream cannot accidentally become
 an inherited device capability. A root-owned mode-0600 flock at
@@ -459,13 +479,17 @@ and independently verifies the saved console state before removing the record.
 The device worker enforces the core handshake and heartbeat.
 
 The device worker alone opens `wsdisplay` and wscons, owns `VT_PROCESS`, maps
-the framebuffer, and converts canonical frames. The core receives a private
-anonymous socket endpoint after an irreversible `setgid()`/`setuid()`
-transition to the sudo account. It creates a session-owned runtime directory,
-publishes a private Wayland socket, and launches NixClock with the matching
-`XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY`. NixClock participates in the normal
-global-menu path but receives neither the helper protocol descriptor nor any
-console capability.
+the framebuffer, and converts canonical frames. Two sibling children receive
+separate private anonymous socket endpoints after irreversible
+`setgid()`/`setuid()` transitions to the sudo account. The runtime sentinel
+creates and retains descriptor-based ownership of the private runtime
+directory. The core publishes its Wayland socket there and launches NixClock
+with the matching `XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY`. Once the core and
+application process group are gone, the worker asks the ordinary-user sentinel
+to remove direct runtime entries and the directory. Privileged code never
+performs a filesystem operation on the reported user-owned path. NixClock
+participates in the normal global-menu path but receives neither helper
+protocol descriptor nor any console capability.
 
 Keep a second SSH session open throughout the first hardware trials. If the
 launcher leaves the recovery record, first verify that no
@@ -476,7 +500,7 @@ sudo /var/run/nixbench-wsdisplay-session --recover
 ```
 
 `sudo /var/run/nixbench-wsdisplay-session --preflight` is query-only. The new
-targets build natively on the NetBSD test host and all 46 device-free tests
+targets build natively on the NetBSD test host and all 48 device-free tests
 pass there, including the ordinary-user core integration and failed-client
 launch path. `ldd` reports only NetBSD libc for the staged root launcher; SDL3,
 Wayland, and their client-side dependencies are confined to the ordinary-user
@@ -500,10 +524,12 @@ record was removed. Independent postflight again found screen 0 in emulation
 mode with automatic VT handling, video on, and one-based VT 1 active, and the
 guided harness reported success. That successful trial exposed a non-fatal
 NixClock Wayland EOF diagnostic; a follow-up cleanup-order fix now keeps the
-private display alive until the tracked application has exited. Core crash or
-hang, malformed protocol, worker or supervisor hard failure, and repeated
-sessions remain hardware gates. The guided command therefore remains an opt-in
-development test rather than a login-session installation procedure.
+private display alive until the tracked application has exited. Deterministic
+core-crash and core-hang recovery gates are now available but still await their
+physical trials. Malformed protocol, worker or supervisor hard failure, and
+repeated sessions remain later hardware gates. The guided command therefore
+remains an opt-in development test rather than a login-session installation
+procedure.
 
 The opt-in `wsdisplay` presentation harness must run as root. Start with its
 query-only preflight:
