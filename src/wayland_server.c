@@ -40,11 +40,29 @@ enum {
 enum nb_wayland_surface_role {
     NB_WAYLAND_SURFACE_ROLE_NONE,
     NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL,
+    NB_WAYLAND_SURFACE_ROLE_XDG_POPUP,
     NB_WAYLAND_SURFACE_ROLE_CURSOR
 };
 
 struct nb_wayland_server;
 struct nb_wayland_application_menu;
+
+struct nb_wayland_positioner {
+    struct wl_resource *resource;
+    int32_t width;
+    int32_t height;
+    int32_t anchor_x;
+    int32_t anchor_y;
+    int32_t anchor_width;
+    int32_t anchor_height;
+    uint32_t anchor;
+    uint32_t gravity;
+    uint32_t constraint_adjustment;
+    int32_t offset_x;
+    int32_t offset_y;
+    bool size_set;
+    bool anchor_rect_set;
+};
 
 struct nb_wayland_menu_snapshot {
     struct nb_menu_model model;
@@ -89,13 +107,27 @@ struct nb_wayland_surface {
     struct wl_resource *surface_resource;
     struct wl_resource *xdg_surface_resource;
     struct wl_resource *toplevel_resource;
+    struct wl_resource *popup_resource;
     struct wl_resource *wm_base_resource;
+    struct nb_wayland_surface *popup_parent;
+    struct nb_wayland_positioner popup_positioner;
+    int popup_x;
+    int popup_y;
+    uint64_t popup_sequence;
+    bool popup_grabbed;
+    bool popup_dismissed;
+    bool window_geometry_set;
+    int window_geometry_x;
+    int window_geometry_y;
+    int window_geometry_width;
+    int window_geometry_height;
     struct wl_resource *pending_buffer_resource;
     struct wl_listener pending_buffer_destroy;
     bool pending_buffer_listener_attached;
     bool pending_attach;
     bool committed_once;
     uint32_t *pixels;
+    uint32_t *composite_pixels;
     int width;
     int height;
     uint64_t revision;
@@ -167,6 +199,7 @@ struct nb_wayland_server {
     bool redraw_pending;
     struct nb_wayland_surface surfaces[NB_WAYLAND_MAX_SURFACES];
     unsigned int next_window_position;
+    uint64_t next_popup_sequence;
     char display_name[NB_WAYLAND_DISPLAY_NAME_CAPACITY];
 };
 
@@ -176,6 +209,7 @@ static const struct wl_pointer_interface pointer_implementation;
 static const struct wl_keyboard_interface keyboard_implementation;
 static const struct xdg_surface_interface xdg_surface_implementation;
 static const struct xdg_toplevel_interface toplevel_implementation;
+static const struct xdg_popup_interface popup_implementation;
 static const struct nixbench_application_menu_manager_v1_interface
     application_menu_manager_implementation;
 static const struct nixbench_application_menu_v1_interface
@@ -365,6 +399,291 @@ static const struct nb_wayland_surface *find_surface_by_window_const(
         }
     }
     return NULL;
+}
+
+static bool surface_has_xdg_role(
+    const struct nb_wayland_surface *surface)
+{
+    return surface != NULL &&
+           (surface->toplevel_resource != NULL ||
+            surface->popup_resource != NULL);
+}
+
+static struct nb_wayland_surface *surface_root_toplevel(
+    struct nb_wayland_surface *surface)
+{
+    size_t depth = 0;
+
+    while (surface != NULL &&
+           surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_POPUP &&
+           depth < NB_WAYLAND_MAX_SURFACES) {
+        surface = surface->popup_parent;
+        ++depth;
+    }
+    return surface != NULL &&
+                   surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL
+               ? surface
+               : NULL;
+}
+
+static const struct nb_wayland_surface *surface_root_toplevel_const(
+    const struct nb_wayland_surface *surface)
+{
+    size_t depth = 0;
+
+    while (surface != NULL &&
+           surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_POPUP &&
+           depth < NB_WAYLAND_MAX_SURFACES) {
+        surface = surface->popup_parent;
+        ++depth;
+    }
+    return surface != NULL &&
+                   surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL
+               ? surface
+               : NULL;
+}
+
+static bool surface_is_mapped(const struct nb_wayland_surface *surface)
+{
+    if (surface == NULL || surface->pixels == NULL ||
+        surface->surface_resource == NULL) {
+        return false;
+    }
+    if (surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL) {
+        return surface->toplevel_resource != NULL &&
+               surface->window != NB_WINDOW_ID_NONE;
+    }
+    return surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_POPUP &&
+           surface->popup_resource != NULL && surface->configured &&
+           !surface->popup_dismissed &&
+           surface_is_mapped(surface->popup_parent);
+}
+
+static void surface_window_geometry(
+    const struct nb_wayland_surface *surface,
+    int *x,
+    int *y,
+    int *width,
+    int *height)
+{
+    *x = surface->window_geometry_set ? surface->window_geometry_x : 0;
+    *y = surface->window_geometry_set ? surface->window_geometry_y : 0;
+    *width = surface->window_geometry_set
+                 ? surface->window_geometry_width
+                 : surface->width;
+    *height = surface->window_geometry_set
+                  ? surface->window_geometry_height
+                  : surface->height;
+}
+
+static bool surface_buffer_origin_in_root(
+    const struct nb_wayland_surface *surface,
+    int64_t *origin_x,
+    int64_t *origin_y)
+{
+    int parent_geometry_x;
+    int parent_geometry_y;
+    int parent_geometry_width;
+    int parent_geometry_height;
+    int surface_geometry_x;
+    int surface_geometry_y;
+    int surface_geometry_width;
+    int surface_geometry_height;
+
+    if (surface == NULL) {
+        return false;
+    }
+    if (surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL) {
+        *origin_x = 0;
+        *origin_y = 0;
+        return true;
+    }
+    if (surface->role != NB_WAYLAND_SURFACE_ROLE_XDG_POPUP ||
+        surface->popup_parent == NULL ||
+        !surface_buffer_origin_in_root(surface->popup_parent,
+                                       origin_x,
+                                       origin_y)) {
+        return false;
+    }
+    surface_window_geometry(surface->popup_parent,
+                            &parent_geometry_x,
+                            &parent_geometry_y,
+                            &parent_geometry_width,
+                            &parent_geometry_height);
+    surface_window_geometry(surface,
+                            &surface_geometry_x,
+                            &surface_geometry_y,
+                            &surface_geometry_width,
+                            &surface_geometry_height);
+    *origin_x += (int64_t)parent_geometry_x + surface->popup_x -
+                 surface_geometry_x;
+    *origin_y += (int64_t)parent_geometry_y + surface->popup_y -
+                 surface_geometry_y;
+    (void)parent_geometry_width;
+    (void)parent_geometry_height;
+    (void)surface_geometry_width;
+    (void)surface_geometry_height;
+    return true;
+}
+
+static uint32_t blend_premultiplied_argb(uint32_t source,
+                                         uint32_t destination)
+{
+    const uint32_t alpha = source >> 24;
+    const uint32_t inverse = UINT32_C(255) - alpha;
+    const uint32_t source_red = (source >> 16) & UINT32_C(255);
+    const uint32_t source_green = (source >> 8) & UINT32_C(255);
+    const uint32_t source_blue = source & UINT32_C(255);
+    const uint32_t destination_alpha = destination >> 24;
+    const uint32_t destination_red =
+        (destination >> 16) & UINT32_C(255);
+    const uint32_t destination_green =
+        (destination >> 8) & UINT32_C(255);
+    const uint32_t destination_blue = destination & UINT32_C(255);
+    const uint32_t output_alpha =
+        alpha + ((destination_alpha * inverse + 127) / 255);
+    const uint32_t output_red =
+        source_red + ((destination_red * inverse + 127) / 255);
+    const uint32_t output_green =
+        source_green + ((destination_green * inverse + 127) / 255);
+    const uint32_t output_blue =
+        source_blue + ((destination_blue * inverse + 127) / 255);
+
+    return ((output_alpha > 255 ? 255 : output_alpha) << 24) |
+           ((output_red > 255 ? 255 : output_red) << 16) |
+           ((output_green > 255 ? 255 : output_green) << 8) |
+           (output_blue > 255 ? 255 : output_blue);
+}
+
+static void composite_popup(struct nb_wayland_surface *root,
+                            const struct nb_wayland_surface *popup)
+{
+    int64_t origin_x;
+    int64_t origin_y;
+    int source_y;
+
+    if (root->composite_pixels == NULL || !surface_is_mapped(popup) ||
+        popup->role != NB_WAYLAND_SURFACE_ROLE_XDG_POPUP ||
+        !surface_buffer_origin_in_root(popup, &origin_x, &origin_y)) {
+        return;
+    }
+    for (source_y = 0; source_y < popup->height; ++source_y) {
+        const int64_t destination_y = origin_y + source_y;
+        int source_x;
+
+        if (destination_y < 0 || destination_y >= root->height) {
+            continue;
+        }
+        for (source_x = 0; source_x < popup->width; ++source_x) {
+            const int64_t destination_x = origin_x + source_x;
+            size_t destination_index;
+            size_t source_index;
+
+            if (destination_x < 0 || destination_x >= root->width) {
+                continue;
+            }
+            destination_index =
+                (size_t)destination_y * (size_t)root->width +
+                (size_t)destination_x;
+            source_index =
+                (size_t)source_y * (size_t)popup->width +
+                (size_t)source_x;
+            root->composite_pixels[destination_index] =
+                blend_premultiplied_argb(
+                    popup->pixels[source_index],
+                    root->composite_pixels[destination_index]);
+        }
+    }
+}
+
+static void refresh_toplevel_composite(struct nb_wayland_surface *root)
+{
+    uint64_t previous_sequence = 0;
+    size_t pixel_count;
+    bool has_popup = false;
+    size_t index;
+
+    if (root == NULL ||
+        root->role != NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL) {
+        return;
+    }
+    free(root->composite_pixels);
+    root->composite_pixels = NULL;
+    if (root->pixels == NULL || root->width <= 0 || root->height <= 0 ||
+        (size_t)root->width > SIZE_MAX / (size_t)root->height ||
+        (size_t)root->width * (size_t)root->height >
+            SIZE_MAX / sizeof(uint32_t)) {
+        return;
+    }
+    for (index = 0; index < NB_WAYLAND_MAX_SURFACES; ++index) {
+        const struct nb_wayland_surface *candidate =
+            &root->server->surfaces[index];
+
+        if (candidate->occupied && surface_is_mapped(candidate) &&
+            candidate->role == NB_WAYLAND_SURFACE_ROLE_XDG_POPUP &&
+            surface_root_toplevel_const(candidate) == root) {
+            has_popup = true;
+            break;
+        }
+    }
+    if (!has_popup) {
+        return;
+    }
+    pixel_count = (size_t)root->width * (size_t)root->height;
+    root->composite_pixels =
+        malloc(pixel_count * sizeof(*root->composite_pixels));
+    if (root->composite_pixels == NULL) {
+        return;
+    }
+    memcpy(root->composite_pixels,
+           root->pixels,
+           pixel_count * sizeof(*root->composite_pixels));
+    for (;;) {
+        const struct nb_wayland_surface *next = NULL;
+
+        for (index = 0; index < NB_WAYLAND_MAX_SURFACES; ++index) {
+            const struct nb_wayland_surface *candidate =
+                &root->server->surfaces[index];
+
+            if (!candidate->occupied || !surface_is_mapped(candidate) ||
+                candidate->role != NB_WAYLAND_SURFACE_ROLE_XDG_POPUP ||
+                surface_root_toplevel_const(candidate) != root ||
+                candidate->popup_sequence <= previous_sequence ||
+                (next != NULL && candidate->popup_sequence >=
+                                     next->popup_sequence)) {
+                continue;
+            }
+            next = candidate;
+        }
+        if (next == NULL) {
+            break;
+        }
+        composite_popup(root, next);
+        previous_sequence = next->popup_sequence;
+    }
+}
+
+static void advance_surface_revision(struct nb_wayland_surface *surface)
+{
+    ++surface->revision;
+    if (surface->revision == 0) {
+        surface->revision = 1;
+    }
+}
+
+static void surface_tree_changed(struct nb_wayland_surface *surface,
+                                 bool root_revision_already_changed)
+{
+    struct nb_wayland_surface *root = surface_root_toplevel(surface);
+
+    if (root == NULL) {
+        return;
+    }
+    if (!root_revision_already_changed) {
+        advance_surface_revision(root);
+    }
+    refresh_toplevel_composite(root);
+    root->server->redraw_pending = true;
 }
 
 static nb_menu_source_id application_menu_source_for_surface(
@@ -1131,7 +1450,8 @@ static void maybe_release_surface_slot(struct nb_wayland_surface *surface)
 {
     if (surface->surface_resource != NULL ||
         surface->xdg_surface_resource != NULL ||
-        surface->toplevel_resource != NULL) {
+        surface->toplevel_resource != NULL ||
+        surface->popup_resource != NULL) {
         return;
     }
 
@@ -1140,6 +1460,7 @@ static void maybe_release_surface_slot(struct nb_wayland_surface *surface)
     clear_pending_attach(surface);
     destroy_frame_resources(surface);
     free(surface->pixels);
+    free(surface->composite_pixels);
     memset(surface, 0, sizeof(*surface));
 }
 
@@ -1275,17 +1596,27 @@ static void send_initial_configure(struct nb_wayland_surface *surface)
     struct wl_array states;
     uint32_t serial;
 
-    if (surface->toplevel_resource == NULL ||
-        surface->xdg_surface_resource == NULL) {
+    if (surface->xdg_surface_resource == NULL) {
         return;
     }
-
-    wl_array_init(&states);
-    xdg_toplevel_send_configure(surface->toplevel_resource,
-                                NB_WAYLAND_INITIAL_CONTENT_WIDTH,
-                                NB_WAYLAND_INITIAL_CONTENT_HEIGHT,
-                                &states);
-    wl_array_release(&states);
+    if (surface->toplevel_resource != NULL) {
+        wl_array_init(&states);
+        xdg_toplevel_send_configure(surface->toplevel_resource,
+                                    NB_WAYLAND_INITIAL_CONTENT_WIDTH,
+                                    NB_WAYLAND_INITIAL_CONTENT_HEIGHT,
+                                    &states);
+        wl_array_release(&states);
+    } else if (surface->popup_resource != NULL &&
+               !surface->popup_dismissed) {
+        xdg_popup_send_configure(
+            surface->popup_resource,
+            surface->popup_x,
+            surface->popup_y,
+            surface->popup_positioner.width,
+            surface->popup_positioner.height);
+    } else {
+        return;
+    }
     serial = wl_display_next_serial(surface->server->display);
     surface->configure_serial = serial;
     surface->configure_sent = true;
@@ -1320,7 +1651,9 @@ static void surface_resource_destroyed(struct wl_resource *resource)
     clear_pending_attach(surface);
     destroy_frame_resources(surface);
     free(surface->pixels);
+    free(surface->composite_pixels);
     surface->pixels = NULL;
+    surface->composite_pixels = NULL;
     detach_surface_application_menu(surface);
     surface->surface_resource = NULL;
     maybe_release_surface_slot(surface);
@@ -1334,7 +1667,8 @@ static void surface_destroy(struct wl_client *client,
 
     (void)client;
     if (surface->xdg_surface_resource != NULL ||
-        surface->toplevel_resource != NULL) {
+        surface->toplevel_resource != NULL ||
+        surface->popup_resource != NULL) {
         wl_resource_post_error(resource,
                                WL_SURFACE_ERROR_DEFUNCT_ROLE_OBJECT,
                                "destroy xdg role objects first");
@@ -1430,15 +1764,25 @@ static void surface_commit(struct wl_client *client,
 
     surface->committed_once = true;
     if (surface->xdg_surface_resource != NULL &&
-        surface->toplevel_resource == NULL) {
+        !surface_has_xdg_role(surface)) {
         wl_resource_post_error(surface->xdg_surface_resource,
                                XDG_SURFACE_ERROR_NOT_CONSTRUCTED,
                                "xdg_surface has no role");
         return;
     }
+    if (surface->popup_resource != NULL &&
+        (surface->popup_dismissed ||
+         !surface_is_mapped(surface->popup_parent))) {
+        if (!surface->popup_dismissed) {
+            surface->popup_dismissed = true;
+            xdg_popup_send_popup_done(surface->popup_resource);
+        }
+        clear_pending_attach(surface);
+        move_pending_frames_to_ready(surface);
+        return;
+    }
 
-    if (surface->toplevel_resource != NULL &&
-        !surface->configure_sent) {
+    if (surface_has_xdg_role(surface) && !surface->configure_sent) {
         if (surface->pending_attach &&
             surface->pending_buffer_resource != NULL) {
             wl_resource_post_error(surface->xdg_surface_resource,
@@ -1455,7 +1799,7 @@ static void surface_commit(struct wl_client *client,
 
     if (surface->pending_attach &&
         surface->pending_buffer_resource != NULL &&
-        surface->toplevel_resource != NULL && !surface->configured) {
+        surface_has_xdg_role(surface) && !surface->configured) {
         wl_resource_post_error(surface->xdg_surface_resource,
                                XDG_SURFACE_ERROR_UNCONFIGURED_BUFFER,
                                "buffer committed before configure ack");
@@ -1468,6 +1812,7 @@ static void surface_commit(struct wl_client *client,
         uint32_t *new_pixels = NULL;
         int new_width = 0;
         int new_height = 0;
+        const bool was_mapped = surface_is_mapped(surface);
 
         if (buffer != NULL &&
             !copy_shm_buffer(surface,
@@ -1490,19 +1835,30 @@ static void surface_commit(struct wl_client *client,
         }
 
         if (surface->pixels == NULL) {
-            unmap_surface(surface, true);
+            if (surface->toplevel_resource != NULL) {
+                unmap_surface(surface, true);
+                surface_tree_changed(surface, false);
+            } else if (was_mapped) {
+                surface_send_output_membership(surface, false);
+                surface_tree_changed(surface, false);
+            }
             surface->configure_sent = false;
             surface->configured = false;
             surface->configure_serial = 0;
         } else {
-            ++surface->revision;
-            if (surface->revision == 0) {
-                surface->revision = 1;
+            advance_surface_revision(surface);
+            if (surface->toplevel_resource != NULL) {
+                map_surface(surface);
+                surface_tree_changed(surface, true);
+            } else {
+                if (!was_mapped) {
+                    surface_send_output_membership(surface, true);
+                }
+                surface_tree_changed(surface, false);
             }
-            map_surface(surface);
-            surface->server->redraw_pending = true;
         }
-    } else if (surface->pixels != NULL) {
+    } else if (surface->pixels != NULL &&
+               surface->toplevel_resource != NULL) {
         map_surface(surface);
     }
 
@@ -2180,15 +2536,36 @@ static void positioner_destroy(struct wl_client *client,
     wl_resource_destroy(resource);
 }
 
+static void positioner_resource_destroyed(struct wl_resource *resource)
+{
+    struct nb_wayland_positioner *positioner =
+        wl_resource_get_user_data(resource);
+
+    if (positioner == NULL) {
+        return;
+    }
+    positioner->resource = NULL;
+    free(positioner);
+}
+
 static void positioner_set_size(struct wl_client *client,
                                 struct wl_resource *resource,
                                 int32_t width,
                                 int32_t height)
 {
+    struct nb_wayland_positioner *positioner =
+        wl_resource_get_user_data(resource);
+
     (void)client;
-    (void)resource;
-    (void)width;
-    (void)height;
+    if (width <= 0 || height <= 0) {
+        wl_resource_post_error(resource,
+                               XDG_POSITIONER_ERROR_INVALID_INPUT,
+                               "popup size must be positive");
+        return;
+    }
+    positioner->width = width;
+    positioner->height = height;
+    positioner->size_set = true;
 }
 
 static void positioner_set_anchor_rect(struct wl_client *client,
@@ -2198,21 +2575,85 @@ static void positioner_set_anchor_rect(struct wl_client *client,
                                        int32_t width,
                                        int32_t height)
 {
+    struct nb_wayland_positioner *positioner =
+        wl_resource_get_user_data(resource);
+
     (void)client;
-    (void)resource;
-    (void)x;
-    (void)y;
-    (void)width;
-    (void)height;
+    if (width < 0 || height < 0) {
+        wl_resource_post_error(resource,
+                               XDG_POSITIONER_ERROR_INVALID_INPUT,
+                               "popup anchor rectangle cannot be negative");
+        return;
+    }
+    positioner->anchor_x = x;
+    positioner->anchor_y = y;
+    positioner->anchor_width = width;
+    positioner->anchor_height = height;
+    positioner->anchor_rect_set = width > 0 && height > 0;
 }
 
-static void positioner_set_enum(struct wl_client *client,
-                                struct wl_resource *resource,
-                                uint32_t value)
+static bool positioner_enum_is_valid(uint32_t value)
 {
+    return value <= XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT;
+}
+
+static void positioner_set_anchor(struct wl_client *client,
+                                  struct wl_resource *resource,
+                                  uint32_t anchor)
+{
+    struct nb_wayland_positioner *positioner =
+        wl_resource_get_user_data(resource);
+
     (void)client;
-    (void)resource;
-    (void)value;
+    if (!positioner_enum_is_valid(anchor)) {
+        wl_resource_post_error(resource,
+                               XDG_POSITIONER_ERROR_INVALID_INPUT,
+                               "invalid popup anchor");
+        return;
+    }
+    positioner->anchor = anchor;
+}
+
+static void positioner_set_gravity(struct wl_client *client,
+                                   struct wl_resource *resource,
+                                   uint32_t gravity)
+{
+    struct nb_wayland_positioner *positioner =
+        wl_resource_get_user_data(resource);
+
+    (void)client;
+    if (!positioner_enum_is_valid(gravity)) {
+        wl_resource_post_error(resource,
+                               XDG_POSITIONER_ERROR_INVALID_INPUT,
+                               "invalid popup gravity");
+        return;
+    }
+    positioner->gravity = gravity;
+}
+
+static void positioner_set_constraint_adjustment(
+    struct wl_client *client,
+    struct wl_resource *resource,
+    uint32_t adjustment)
+{
+    struct nb_wayland_positioner *positioner =
+        wl_resource_get_user_data(resource);
+    const uint32_t valid =
+        XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X |
+        XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y |
+        XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X |
+        XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y |
+        XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_RESIZE_X |
+        XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_RESIZE_Y;
+
+    (void)client;
+    if ((adjustment & ~valid) != 0) {
+        wl_resource_post_error(resource,
+                               XDG_POSITIONER_ERROR_INVALID_INPUT,
+                               "invalid popup constraint adjustment");
+        return;
+    }
+    positioner->constraint_adjustment = adjustment;
 }
 
 static void positioner_set_offset(struct wl_client *client,
@@ -2220,10 +2661,12 @@ static void positioner_set_offset(struct wl_client *client,
                                   int32_t x,
                                   int32_t y)
 {
+    struct nb_wayland_positioner *positioner =
+        wl_resource_get_user_data(resource);
+
     (void)client;
-    (void)resource;
-    (void)x;
-    (void)y;
+    positioner->offset_x = x;
+    positioner->offset_y = y;
 }
 
 static void positioner_set_reactive(struct wl_client *client,
@@ -2258,9 +2701,9 @@ static const struct xdg_positioner_interface positioner_implementation = {
     .destroy = positioner_destroy,
     .set_size = positioner_set_size,
     .set_anchor_rect = positioner_set_anchor_rect,
-    .set_anchor = positioner_set_enum,
-    .set_gravity = positioner_set_enum,
-    .set_constraint_adjustment = positioner_set_enum,
+    .set_anchor = positioner_set_anchor,
+    .set_gravity = positioner_set_gravity,
+    .set_constraint_adjustment = positioner_set_constraint_adjustment,
     .set_offset = positioner_set_offset,
     .set_reactive = positioner_set_reactive,
     .set_parent_size = positioner_set_parent_size,
@@ -2278,7 +2721,9 @@ static void xdg_toplevel_resource_destroyed(struct wl_resource *resource)
     unmap_surface(surface, false);
     clear_pending_attach(surface);
     free(surface->pixels);
+    free(surface->composite_pixels);
     surface->pixels = NULL;
+    surface->composite_pixels = NULL;
     surface->width = 0;
     surface->height = 0;
     surface->configure_sent = false;
@@ -2288,6 +2733,236 @@ static void xdg_toplevel_resource_destroyed(struct wl_resource *resource)
     detach_surface_application_menu(surface);
     maybe_release_surface_slot(surface);
 }
+
+static bool anchor_is_left(uint32_t anchor)
+{
+    return anchor == XDG_POSITIONER_ANCHOR_LEFT ||
+           anchor == XDG_POSITIONER_ANCHOR_TOP_LEFT ||
+           anchor == XDG_POSITIONER_ANCHOR_BOTTOM_LEFT;
+}
+
+static bool anchor_is_right(uint32_t anchor)
+{
+    return anchor == XDG_POSITIONER_ANCHOR_RIGHT ||
+           anchor == XDG_POSITIONER_ANCHOR_TOP_RIGHT ||
+           anchor == XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT;
+}
+
+static bool anchor_is_top(uint32_t anchor)
+{
+    return anchor == XDG_POSITIONER_ANCHOR_TOP ||
+           anchor == XDG_POSITIONER_ANCHOR_TOP_LEFT ||
+           anchor == XDG_POSITIONER_ANCHOR_TOP_RIGHT;
+}
+
+static bool anchor_is_bottom(uint32_t anchor)
+{
+    return anchor == XDG_POSITIONER_ANCHOR_BOTTOM ||
+           anchor == XDG_POSITIONER_ANCHOR_BOTTOM_LEFT ||
+           anchor == XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT;
+}
+
+static bool positioner_calculate_geometry(
+    const struct nb_wayland_positioner *positioner,
+    const struct nb_wayland_surface *parent,
+    int *popup_x,
+    int *popup_y)
+{
+    int parent_x;
+    int parent_y;
+    int parent_width;
+    int parent_height;
+    int64_t anchor_x;
+    int64_t anchor_y;
+    int64_t x;
+    int64_t y;
+
+    if (positioner == NULL || parent == NULL ||
+        !positioner->size_set || !positioner->anchor_rect_set) {
+        return false;
+    }
+    surface_window_geometry(parent,
+                            &parent_x,
+                            &parent_y,
+                            &parent_width,
+                            &parent_height);
+    if (parent_width <= 0 || parent_height <= 0 ||
+        positioner->anchor_x < 0 || positioner->anchor_y < 0 ||
+        (int64_t)positioner->anchor_x + positioner->anchor_width >
+            parent_width ||
+        (int64_t)positioner->anchor_y + positioner->anchor_height >
+            parent_height) {
+        return false;
+    }
+    if (anchor_is_left(positioner->anchor)) {
+        anchor_x = positioner->anchor_x;
+    } else if (anchor_is_right(positioner->anchor)) {
+        anchor_x = (int64_t)positioner->anchor_x +
+                   positioner->anchor_width;
+    } else {
+        anchor_x = (int64_t)positioner->anchor_x +
+                   positioner->anchor_width / 2;
+    }
+    if (anchor_is_top(positioner->anchor)) {
+        anchor_y = positioner->anchor_y;
+    } else if (anchor_is_bottom(positioner->anchor)) {
+        anchor_y = (int64_t)positioner->anchor_y +
+                   positioner->anchor_height;
+    } else {
+        anchor_y = (int64_t)positioner->anchor_y +
+                   positioner->anchor_height / 2;
+    }
+    if (anchor_is_left(positioner->gravity)) {
+        x = anchor_x - positioner->width;
+    } else if (anchor_is_right(positioner->gravity)) {
+        x = anchor_x;
+    } else {
+        x = anchor_x - positioner->width / 2;
+    }
+    if (anchor_is_top(positioner->gravity)) {
+        y = anchor_y - positioner->height;
+    } else if (anchor_is_bottom(positioner->gravity)) {
+        y = anchor_y;
+    } else {
+        y = anchor_y - positioner->height / 2;
+    }
+    x += positioner->offset_x;
+    y += positioner->offset_y;
+    if (x < INT_MIN || x > INT_MAX || y < INT_MIN || y > INT_MAX) {
+        return false;
+    }
+    *popup_x = (int)x;
+    *popup_y = (int)y;
+    (void)parent_x;
+    (void)parent_y;
+    return true;
+}
+
+static void popup_resource_destroyed(struct wl_resource *resource)
+{
+    struct nb_wayland_surface *surface =
+        wl_resource_get_user_data(resource);
+    struct nb_wayland_surface *root;
+
+    if (surface == NULL || !surface->occupied) {
+        return;
+    }
+    root = surface_root_toplevel(surface);
+    clear_surface_pointer_state(surface, false);
+    clear_surface_keyboard_state(surface, false);
+    clear_pending_attach(surface);
+    destroy_frame_resources(surface);
+    if (surface->pixels != NULL) {
+        surface_send_output_membership(surface, false);
+    }
+    free(surface->pixels);
+    free(surface->composite_pixels);
+    surface->pixels = NULL;
+    surface->composite_pixels = NULL;
+    surface->width = 0;
+    surface->height = 0;
+    surface->configure_sent = false;
+    surface->configured = false;
+    surface->configure_serial = 0;
+    surface->popup_resource = NULL;
+    surface->popup_parent = NULL;
+    surface->popup_grabbed = false;
+    surface->popup_dismissed = false;
+    if (root != NULL) {
+        surface_tree_changed(root, false);
+    }
+    maybe_release_surface_slot(surface);
+}
+
+static void popup_destroy(struct wl_client *client,
+                          struct wl_resource *resource)
+{
+    (void)client;
+    wl_resource_destroy(resource);
+}
+
+static void popup_grab(struct wl_client *client,
+                       struct wl_resource *resource,
+                       struct wl_resource *seat,
+                       uint32_t serial)
+{
+    struct nb_wayland_surface *surface =
+        wl_resource_get_user_data(resource);
+
+    (void)client;
+    (void)serial;
+    if (surface->configure_sent || surface->pixels != NULL) {
+        wl_resource_post_error(resource,
+                               XDG_POPUP_ERROR_INVALID_GRAB,
+                               "popup grab requested after mapping");
+        return;
+    }
+    if (!wl_resource_instance_of(seat,
+                                 &wl_seat_interface,
+                                 &seat_implementation) ||
+        wl_resource_get_user_data(seat) != surface->server) {
+        surface->popup_dismissed = true;
+        xdg_popup_send_popup_done(resource);
+        return;
+    }
+    /* Explicit popup grabs are deliberately denied without killing client. */
+    surface->popup_dismissed = true;
+    xdg_popup_send_popup_done(resource);
+}
+
+static void popup_reposition(struct wl_client *client,
+                             struct wl_resource *resource,
+                             struct wl_resource *positioner_resource,
+                             uint32_t token)
+{
+    struct nb_wayland_surface *surface =
+        wl_resource_get_user_data(resource);
+    struct nb_wayland_positioner *positioner;
+    int popup_x;
+    int popup_y;
+
+    (void)client;
+    if (!wl_resource_instance_of(positioner_resource,
+                                 &xdg_positioner_interface,
+                                 &positioner_implementation)) {
+        wl_resource_post_error(surface->wm_base_resource,
+                               XDG_WM_BASE_ERROR_INVALID_POSITIONER,
+                               "foreign popup positioner");
+        return;
+    }
+    positioner = wl_resource_get_user_data(positioner_resource);
+    if (!positioner_calculate_geometry(positioner,
+                                       surface->popup_parent,
+                                       &popup_x,
+                                       &popup_y)) {
+        wl_resource_post_error(surface->wm_base_resource,
+                               XDG_WM_BASE_ERROR_INVALID_POSITIONER,
+                               "incomplete popup positioner");
+        return;
+    }
+    surface->popup_positioner = *positioner;
+    surface->popup_positioner.resource = NULL;
+    surface->popup_x = popup_x;
+    surface->popup_y = popup_y;
+    xdg_popup_send_repositioned(resource, token);
+    xdg_popup_send_configure(resource,
+                             popup_x,
+                             popup_y,
+                             positioner->width,
+                             positioner->height);
+    surface->configure_serial =
+        wl_display_next_serial(surface->server->display);
+    surface->configure_sent = true;
+    surface->configured = false;
+    xdg_surface_send_configure(surface->xdg_surface_resource,
+                               surface->configure_serial);
+}
+
+static const struct xdg_popup_interface popup_implementation = {
+    .destroy = popup_destroy,
+    .grab = popup_grab,
+    .reposition = popup_reposition
+};
 
 static void xdg_surface_resource_destroyed(struct wl_resource *resource)
 {
@@ -2309,10 +2984,10 @@ static void xdg_surface_destroy(struct wl_client *client,
         wl_resource_get_user_data(resource);
 
     (void)client;
-    if (surface->toplevel_resource != NULL) {
+    if (surface_has_xdg_role(surface)) {
         wl_resource_post_error(resource,
                                XDG_SURFACE_ERROR_DEFUNCT_ROLE_OBJECT,
-                               "destroy xdg_toplevel first");
+                               "destroy the xdg role object first");
         return;
     }
     wl_resource_destroy(resource);
@@ -2489,15 +3164,85 @@ static void xdg_surface_get_popup(struct wl_client *client,
                                   struct wl_resource *resource,
                                   uint32_t id,
                                   struct wl_resource *parent,
-                                  struct wl_resource *positioner)
+                                  struct wl_resource *positioner_resource)
 {
-    (void)id;
-    (void)parent;
-    (void)positioner;
-    wl_client_post_implementation_error(
+    struct nb_wayland_surface *surface =
+        wl_resource_get_user_data(resource);
+    struct nb_wayland_surface *parent_surface;
+    struct nb_wayland_positioner *positioner;
+    int popup_x;
+    int popup_y;
+
+    if (surface->role != NB_WAYLAND_SURFACE_ROLE_NONE) {
+        wl_resource_post_error(surface->wm_base_resource,
+                               XDG_WM_BASE_ERROR_ROLE,
+                               "wl_surface already has an xdg role");
+        return;
+    }
+    if (parent == NULL ||
+        !wl_resource_instance_of(parent,
+                                 &xdg_surface_interface,
+                                 &xdg_surface_implementation)) {
+        wl_resource_post_error(surface->wm_base_resource,
+                               XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT,
+                               "popup parent is not a local xdg_surface");
+        return;
+    }
+    parent_surface = wl_resource_get_user_data(parent);
+    if (parent_surface == NULL ||
+        parent_surface->server != surface->server ||
+        parent_surface->xdg_surface_resource != parent ||
+        !surface_has_xdg_role(parent_surface) ||
+        !surface_is_mapped(parent_surface) ||
+        wl_resource_get_client(parent_surface->surface_resource) != client) {
+        wl_resource_post_error(surface->wm_base_resource,
+                               XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT,
+                               "popup parent is not mapped");
+        return;
+    }
+    if (!wl_resource_instance_of(positioner_resource,
+                                 &xdg_positioner_interface,
+                                 &positioner_implementation)) {
+        wl_resource_post_error(surface->wm_base_resource,
+                               XDG_WM_BASE_ERROR_INVALID_POSITIONER,
+                               "popup positioner is not local");
+        return;
+    }
+    positioner = wl_resource_get_user_data(positioner_resource);
+    if (!positioner_calculate_geometry(positioner,
+                                       parent_surface,
+                                       &popup_x,
+                                       &popup_y)) {
+        wl_resource_post_error(surface->wm_base_resource,
+                               XDG_WM_BASE_ERROR_INVALID_POSITIONER,
+                               "popup positioner is incomplete or outside "
+                               "its parent");
+        return;
+    }
+    surface->popup_resource = wl_resource_create(
         client,
-        "NixBench does not implement xdg_popup yet");
-    (void)resource;
+        &xdg_popup_interface,
+        wl_resource_get_version(resource),
+        id);
+    if (surface->popup_resource == NULL) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    surface->role = NB_WAYLAND_SURFACE_ROLE_XDG_POPUP;
+    surface->popup_parent = parent_surface;
+    surface->popup_positioner = *positioner;
+    surface->popup_positioner.resource = NULL;
+    surface->popup_x = popup_x;
+    surface->popup_y = popup_y;
+    ++surface->server->next_popup_sequence;
+    if (surface->server->next_popup_sequence == 0) {
+        surface->server->next_popup_sequence = 1;
+    }
+    surface->popup_sequence = surface->server->next_popup_sequence;
+    wl_resource_set_implementation(surface->popup_resource,
+                                   &popup_implementation,
+                                   surface,
+                                   popup_resource_destroyed);
 }
 
 static void xdg_surface_set_window_geometry(
@@ -2512,18 +3257,25 @@ static void xdg_surface_set_window_geometry(
         wl_resource_get_user_data(resource);
 
     (void)client;
-    if (surface->toplevel_resource == NULL) {
+    if (!surface_has_xdg_role(surface)) {
         wl_resource_post_error(resource,
                                XDG_SURFACE_ERROR_NOT_CONSTRUCTED,
                                "xdg_surface has no role");
         return;
     }
-    (void)x;
-    (void)y;
     if (width <= 0 || height <= 0) {
         wl_resource_post_error(resource,
                                XDG_SURFACE_ERROR_INVALID_SIZE,
                                "window geometry must be positive");
+        return;
+    }
+    surface->window_geometry_set = true;
+    surface->window_geometry_x = x;
+    surface->window_geometry_y = y;
+    surface->window_geometry_width = width;
+    surface->window_geometry_height = height;
+    if (surface_is_mapped(surface)) {
+        surface_tree_changed(surface, false);
     }
 }
 
@@ -2535,7 +3287,7 @@ static void xdg_surface_ack_configure(struct wl_client *client,
         wl_resource_get_user_data(resource);
 
     (void)client;
-    if (surface->toplevel_resource == NULL) {
+    if (!surface_has_xdg_role(surface)) {
         wl_resource_post_error(resource,
                                XDG_SURFACE_ERROR_NOT_CONSTRUCTED,
                                "xdg_surface has no role");
@@ -2590,20 +3342,28 @@ static void xdg_wm_base_create_positioner(
     struct wl_resource *resource,
     uint32_t id)
 {
-    struct wl_resource *positioner = wl_resource_create(
-        client,
-        &xdg_positioner_interface,
-        wl_resource_get_version(resource),
-        id);
+    struct nb_wayland_positioner *positioner =
+        calloc(1, sizeof(*positioner));
 
     if (positioner == NULL) {
         wl_client_post_no_memory(client);
         return;
     }
-    wl_resource_set_implementation(positioner,
+    positioner->resource = wl_resource_create(
+        client,
+        &xdg_positioner_interface,
+        wl_resource_get_version(resource),
+        id);
+
+    if (positioner->resource == NULL) {
+        free(positioner);
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(positioner->resource,
                                    &positioner_implementation,
-                                   NULL,
-                                   NULL);
+                                   positioner,
+                                   positioner_resource_destroyed);
 }
 
 static void xdg_wm_base_get_xdg_surface(
@@ -3229,6 +3989,7 @@ void nb_wayland_server_destroy(struct nb_wayland_server *server)
         clear_pending_attach(surface);
         destroy_frame_resources(surface);
         free(surface->pixels);
+        free(surface->composite_pixels);
         memset(surface, 0, sizeof(*surface));
     }
     wl_display_destroy(server->display);
@@ -3392,7 +4153,9 @@ bool nb_wayland_server_surface_snapshot(
         surface->width <= 0 || surface->height <= 0) {
         return false;
     }
-    snapshot->pixels = surface->pixels;
+    snapshot->pixels = surface->composite_pixels != NULL
+                           ? surface->composite_pixels
+                           : surface->pixels;
     snapshot->width = surface->width;
     snapshot->height = surface->height;
     snapshot->stride = surface->width * (int)sizeof(uint32_t);

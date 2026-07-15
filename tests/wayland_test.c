@@ -48,6 +48,10 @@ enum {
     OUTPUT_HEIGHT = 640,
     INITIAL_WIDTH = 560,
     INITIAL_HEIGHT = 300,
+    POPUP_WIDTH = 160,
+    POPUP_HEIGHT = 72,
+    POPUP_EXPECTED_X = 27,
+    POPUP_EXPECTED_Y = 69,
     BYTES_PER_PIXEL = 4,
     WAYLAND_POINTER_BUTTON_LEFT = 0x110,
     WAYLAND_POINTER_BUTTON_RIGHT = 0x111,
@@ -195,6 +199,20 @@ struct client_state {
     unsigned int keyboard_release_counts[KEYBOARD_KEY_CAPACITY];
     uint32_t application_menu_command;
     unsigned int application_menu_command_count;
+};
+
+struct popup_state {
+    uint32_t configure_serial;
+    int32_t configured_x;
+    int32_t configured_y;
+    int32_t configured_width;
+    int32_t configured_height;
+    unsigned int event_sequence;
+    unsigned int popup_configure_sequence;
+    unsigned int surface_configure_sequence;
+    unsigned int popup_configure_count;
+    unsigned int surface_configure_count;
+    unsigned int done_count;
 };
 
 static void barrier_done(void *data,
@@ -1159,6 +1177,53 @@ static const struct xdg_surface_listener xdg_surface_listener = {
     .configure = xdg_surface_configure
 };
 
+static void popup_surface_configure(void *data,
+                                    struct xdg_surface *xdg_surface,
+                                    uint32_t serial)
+{
+    struct popup_state *state = data;
+
+    state->configure_serial = serial;
+    ++state->surface_configure_count;
+    state->surface_configure_sequence = ++state->event_sequence;
+    xdg_surface_ack_configure(xdg_surface, serial);
+}
+
+static const struct xdg_surface_listener popup_surface_listener = {
+    .configure = popup_surface_configure
+};
+
+static void popup_configure(void *data,
+                            struct xdg_popup *popup,
+                            int32_t x,
+                            int32_t y,
+                            int32_t width,
+                            int32_t height)
+{
+    struct popup_state *state = data;
+
+    (void)popup;
+    state->configured_x = x;
+    state->configured_y = y;
+    state->configured_width = width;
+    state->configured_height = height;
+    ++state->popup_configure_count;
+    state->popup_configure_sequence = ++state->event_sequence;
+}
+
+static void popup_done(void *data, struct xdg_popup *popup)
+{
+    struct popup_state *state = data;
+
+    (void)popup;
+    ++state->done_count;
+}
+
+static const struct xdg_popup_listener popup_listener = {
+    .configure = popup_configure,
+    .popup_done = popup_done
+};
+
 static void toplevel_configure(void *data,
                                struct xdg_toplevel *toplevel,
                                int32_t width,
@@ -1280,16 +1345,25 @@ static void test_wayland_surface_lifecycle(void)
     struct wl_display *display = NULL;
     struct wl_registry *registry = NULL;
     struct wl_surface *surface = NULL;
+    struct wl_surface *popup_surface = NULL;
     struct wl_shm_pool *pool = NULL;
     struct wl_buffer *buffer = NULL;
+    struct wl_buffer *popup_buffer = NULL;
     struct wl_data_source *drag_source = NULL;
+    struct xdg_surface *popup_xdg_surface = NULL;
+    struct xdg_popup *popup = NULL;
+    struct xdg_positioner *positioner = NULL;
     struct client_state client = {0};
     struct client_state legacy_input = {0};
+    struct popup_state popup_client = {0};
     struct nb_wayland_surface_snapshot snapshot;
     const struct nb_window *host_window;
     struct nb_window *resized_host_window;
     struct nb_rect content;
     nb_window_id window = NB_WINDOW_ID_NONE;
+    uint32_t parent_pixel_under_popup = 0;
+    uint64_t root_revision_before_popup = 0;
+    uint64_t popup_tree_revision = 0;
     int sockets[2] = {-1, -1};
     int shm_fd = -1;
     uint32_t *pixels = MAP_FAILED;
@@ -1616,8 +1690,142 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(snapshot.stride == INITIAL_WIDTH * BYTES_PER_PIXEL);
     CHECK(snapshot.revision == 1);
     CHECK(memcmp(snapshot.pixels, pixels, buffer_size) == 0);
+    parent_pixel_under_popup =
+        snapshot.pixels[(size_t)POPUP_EXPECTED_Y * (size_t)INITIAL_WIDTH +
+                        (size_t)POPUP_EXPECTED_X];
+    root_revision_before_popup = snapshot.revision;
     pixels[0] = 0;
     CHECK(snapshot.pixels[0] != pixels[0]);
+
+    /*
+     * A completed positioner is copied by get_popup.  Destroying it before
+     * the popup's initial commit must not affect the resulting configure.
+     * The popup is part of the parent's surface tree, not another decorated
+     * NixBench shell window.
+     */
+    popup_surface = wl_compositor_create_surface(client.compositor);
+    REQUIRE(popup_surface != NULL);
+    popup_xdg_surface = xdg_wm_base_get_xdg_surface(client.wm_base,
+                                                    popup_surface);
+    REQUIRE(popup_xdg_surface != NULL);
+    REQUIRE(xdg_surface_add_listener(popup_xdg_surface,
+                                     &popup_surface_listener,
+                                     &popup_client) == 0);
+    positioner = xdg_wm_base_create_positioner(client.wm_base);
+    REQUIRE(positioner != NULL);
+    xdg_positioner_set_size(positioner, POPUP_WIDTH, POPUP_HEIGHT);
+    xdg_positioner_set_anchor_rect(positioner, 24, 36, 120, 28);
+    xdg_positioner_set_anchor(positioner,
+                              XDG_POSITIONER_ANCHOR_BOTTOM_LEFT);
+    xdg_positioner_set_gravity(positioner,
+                               XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT);
+    xdg_positioner_set_constraint_adjustment(
+        positioner,
+        XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X |
+            XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y);
+    xdg_positioner_set_offset(positioner, 3, 5);
+    popup = xdg_surface_get_popup(popup_xdg_surface,
+                                  client.xdg_surface,
+                                  positioner);
+    REQUIRE(popup != NULL);
+    REQUIRE(xdg_popup_add_listener(popup,
+                                   &popup_listener,
+                                   &popup_client) == 0);
+    xdg_positioner_destroy(positioner);
+    positioner = NULL;
+
+    wl_surface_commit(popup_surface);
+    REQUIRE(pump_barrier(server, display));
+    CHECK(popup_client.popup_configure_count == 1);
+    CHECK(popup_client.surface_configure_count == 1);
+    CHECK(popup_client.popup_configure_sequence != 0);
+    CHECK(popup_client.popup_configure_sequence <
+          popup_client.surface_configure_sequence);
+    CHECK(popup_client.configure_serial != 0);
+    CHECK(popup_client.configured_x == POPUP_EXPECTED_X);
+    CHECK(popup_client.configured_y == POPUP_EXPECTED_Y);
+    CHECK(popup_client.configured_width == POPUP_WIDTH);
+    CHECK(popup_client.configured_height == POPUP_HEIGHT);
+    CHECK(popup_client.done_count == 0);
+    CHECK(nb_wayland_server_window_count(server) == 1);
+    CHECK(!nb_wayland_server_take_redraw(server));
+
+    /* Process the popup ack before attaching its first shared-memory buffer. */
+    REQUIRE(pump_barrier(server, display));
+    popup_buffer = wl_shm_pool_create_buffer(
+        pool,
+        0,
+        POPUP_WIDTH,
+        POPUP_HEIGHT,
+        POPUP_WIDTH * BYTES_PER_PIXEL,
+        WL_SHM_FORMAT_ARGB8888);
+    REQUIRE(popup_buffer != NULL);
+    REQUIRE(wl_buffer_add_listener(popup_buffer,
+                                   &buffer_listener,
+                                   &client) == 0);
+    {
+        const size_t popup_pixel_count =
+            (size_t)POPUP_WIDTH * (size_t)POPUP_HEIGHT;
+        size_t pixel_index;
+
+        for (pixel_index = 0; pixel_index < popup_pixel_count;
+             ++pixel_index) {
+            pixels[pixel_index] = UINT32_C(0xff386ca8);
+        }
+    }
+    client.buffer_released = false;
+    xdg_surface_set_window_geometry(popup_xdg_surface,
+                                    0,
+                                    0,
+                                    POPUP_WIDTH,
+                                    POPUP_HEIGHT);
+    wl_surface_attach(popup_surface, popup_buffer, 0, 0);
+    wl_surface_damage(popup_surface, 0, 0, POPUP_WIDTH, POPUP_HEIGHT);
+    wl_surface_commit(popup_surface);
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.buffer_released);
+    CHECK(nb_wayland_server_window_count(server) == 1);
+    CHECK(nb_wayland_server_window_at(server, 0) == window);
+    CHECK(nb_wayland_server_owns_window(server, window));
+    CHECK(nb_wayland_server_take_redraw(server));
+    CHECK(!nb_wayland_server_take_redraw(server));
+    REQUIRE(nb_wayland_server_surface_snapshot(server,
+                                               window,
+                                               &snapshot));
+    CHECK(snapshot.width == INITIAL_WIDTH);
+    CHECK(snapshot.height == INITIAL_HEIGHT);
+    CHECK(snapshot.pixels[
+              (size_t)POPUP_EXPECTED_Y * (size_t)INITIAL_WIDTH +
+              (size_t)POPUP_EXPECTED_X] == UINT32_C(0xff386ca8));
+    CHECK(snapshot.revision > root_revision_before_popup);
+    popup_tree_revision = snapshot.revision;
+
+    /* Client-driven popup destruction unmaps only the child surface. */
+    xdg_popup_destroy(popup);
+    popup = NULL;
+    REQUIRE(pump_barrier(server, display));
+    CHECK(popup_client.done_count == 0);
+    CHECK(nb_wayland_server_window_count(server) == 1);
+    CHECK(nb_wayland_server_window_at(server, 0) == window);
+    CHECK(nb_wayland_server_owns_window(server, window));
+    CHECK(nb_wayland_server_take_redraw(server));
+    CHECK(!nb_wayland_server_take_redraw(server));
+    REQUIRE(nb_wayland_server_surface_snapshot(server,
+                                               window,
+                                               &snapshot));
+    CHECK(snapshot.pixels[
+              (size_t)POPUP_EXPECTED_Y * (size_t)INITIAL_WIDTH +
+              (size_t)POPUP_EXPECTED_X] == parent_pixel_under_popup);
+    CHECK(snapshot.revision > popup_tree_revision);
+    xdg_surface_destroy(popup_xdg_surface);
+    popup_xdg_surface = NULL;
+    wl_surface_destroy(popup_surface);
+    popup_surface = NULL;
+    wl_buffer_destroy(popup_buffer);
+    popup_buffer = NULL;
+    fill_pixels(pixels, pixel_count);
+    REQUIRE(pump_barrier(server, display));
+    CHECK(nb_wayland_server_window_count(server) == 1);
 
     CHECK(!nb_wayland_server_set_output_size(NULL,
                                               OUTPUT_WIDTH,
