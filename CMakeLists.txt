@@ -849,6 +849,16 @@ if(
 endif()
 
 if(UNIX AND (BUILD_TESTING OR NIXBENCH_BUILD_WSDISPLAY_SESSION))
+  add_library(
+    nixbench_session_runtime_sentinel STATIC
+    src/session_runtime_sentinel.c
+  )
+  target_include_directories(
+    nixbench_session_runtime_sentinel
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  )
+  nixbench_configure_c_target(nixbench_session_runtime_sentinel)
+
   add_library(nixbench_session_watchdog STATIC src/session_watchdog.c)
   target_include_directories(
     nixbench_session_watchdog
@@ -994,6 +1004,16 @@ if(BUILD_TESTING)
       PRIVATE nixbench_session_watchdog
     )
     nixbench_configure_c_target(nixbench_session_watchdog_tests)
+
+    add_executable(
+      nixbench_session_runtime_sentinel_tests
+      tests/session_runtime_sentinel_test.c
+    )
+    target_link_libraries(
+      nixbench_session_runtime_sentinel_tests
+      PRIVATE nixbench_session_runtime_sentinel
+    )
+    nixbench_configure_c_target(nixbench_session_runtime_sentinel_tests)
 
     add_executable(
       nixbench_host_privsep_client_tests
@@ -1238,6 +1258,10 @@ if(BUILD_TESTING)
     add_test(
       NAME nixbench.session.watchdog
       COMMAND nixbench_session_watchdog_tests
+    )
+    add_test(
+      NAME nixbench.session.runtime-sentinel
+      COMMAND nixbench_session_runtime_sentinel_tests
     )
     if(NIXBENCH_WAYLAND_ENABLED)
       add_test(
