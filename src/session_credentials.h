@@ -68,6 +68,14 @@ bool nb_session_credentials_resolve_sudo(
     char error[NB_SESSION_CREDENTIALS_ERROR_CAPACITY]);
 
 /*
+ * Reserve descriptors 0, 1, and 2 before the privileged parent opens any
+ * device or recovery file. Existing descriptors are preserved; missing ones
+ * are filled with /dev/null. This prevents a privileged capability from
+ * occupying a standard descriptor that the child intentionally inherits.
+ */
+bool nb_session_credentials_prepare_parent_stdio(void);
+
+/*
  * Run only in a freshly forked, single-threaded child. This function creates
  * a new session, establishes fd 3 as the sole inherited session channel,
  * irreversibly changes to credentials, and execs an absolute core path with a

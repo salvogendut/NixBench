@@ -1,9 +1,13 @@
 #include "session_credentials.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 struct fake_lookup {
     struct nb_session_account by_name;
@@ -265,6 +269,67 @@ static void test_invalid_api_arguments(void)
                                                        error));
 }
 
+static void test_parent_standard_descriptor_reservation(void)
+{
+    int report_pipe[2] = {-1, -1};
+    pid_t child;
+    unsigned char result = 0;
+    int status = 0;
+
+    CHECK(pipe(report_pipe) == 0);
+    if (report_pipe[0] < 0 || report_pipe[1] < 0) {
+        return;
+    }
+    child = fork();
+    CHECK(child >= 0);
+    if (child == 0) {
+        struct stat descriptor_status;
+        int report = fcntl(report_pipe[1], F_DUPFD, 10);
+        int descriptor;
+        bool valid = report >= 10;
+
+        (void)close(report_pipe[0]);
+        (void)close(report_pipe[1]);
+        for (descriptor = STDIN_FILENO;
+             descriptor <= STDERR_FILENO;
+             ++descriptor) {
+            (void)close(descriptor);
+        }
+        valid = valid && nb_session_credentials_prepare_parent_stdio();
+        for (descriptor = STDIN_FILENO;
+             descriptor <= STDERR_FILENO;
+             ++descriptor) {
+            valid = valid && fstat(descriptor, &descriptor_status) == 0 &&
+                    S_ISCHR(descriptor_status.st_mode) &&
+                    (fcntl(descriptor, F_GETFD) & FD_CLOEXEC) == 0;
+        }
+        result = valid ? 1U : 0U;
+        if (report >= 0) {
+            (void)write(report, &result, sizeof(result));
+            (void)close(report);
+        }
+        _exit(valid ? 0 : 1);
+    }
+    (void)close(report_pipe[1]);
+    report_pipe[1] = -1;
+    if (child > 0) {
+        ssize_t count;
+
+        do {
+            count = read(report_pipe[0], &result, sizeof(result));
+        } while (count < 0 && errno == EINTR);
+        CHECK(count == (ssize_t)sizeof(result));
+        do {
+            child = waitpid(child, &status, 0);
+        } while (child < 0 && errno == EINTR);
+        CHECK(child > 0);
+        CHECK(WIFEXITED(status));
+        CHECK(WEXITSTATUS(status) == 0);
+        CHECK(result == 1U);
+    }
+    (void)close(report_pipe[0]);
+}
+
 int main(void)
 {
     test_valid_identity();
@@ -272,6 +337,7 @@ int main(void)
     test_name_lookup_failures();
     test_uid_lookup_mismatches();
     test_invalid_api_arguments();
+    test_parent_standard_descriptor_reservation();
 
     if (failures != 0) {
         fprintf(stderr,

@@ -593,6 +593,11 @@ static bool ensure_standard_descriptors(void)
     return true;
 }
 
+bool nb_session_credentials_prepare_parent_stdio(void)
+{
+    return ensure_standard_descriptors();
+}
+
 static void close_unexpected_descriptors(void)
 {
 #if defined(__NetBSD__) || defined(__linux__)
