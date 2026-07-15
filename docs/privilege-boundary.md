@@ -28,9 +28,9 @@ controller loss also triggers its unprivileged cleanup fallback. Device-free
 tests exercise the split, heartbeat timeout, sentinel cleanup, and exact
 crash/hang gate policy.
 Physical takeover, normal exit, VT 1 -> 2 -> 1, and supervised-SIGTERM recovery
-have completed, and the physical core-crash gate now passes. The core-hang
-trial and remaining failure-injection and repeated-session matrix are still
-pending, so this is not a production login session.
+have completed, and both physical core-failure gates now pass. The remaining
+failure-injection and repeated-session matrix is still pending, so this is not
+a production login session.
 
 The implemented boundary is:
 
@@ -266,8 +266,15 @@ and recovery-record removal all completed. Independent checks found the
 reported runtime directory and recovery record absent, no surviving NixBench
 process, and active one-based VT 1 with the saved console state. NixClock's
 Wayland read failure is expected when the compositor is deliberately killed.
-The core-hang trial is next. Remaining later hardware cases are malformed
-protocol, worker or supervisor hard failure, and repeated sessions.
+The physical core-hang trial also passes. Its armed trigger delivered `SIGSTOP`
+to the validated core, the heartbeat watchdog detected the stall, and forced
+process-group containment, sentinel cleanup, restoration, and record removal
+completed. Independent checks again found no runtime directory, recovery
+record, or surviving NixBench process and found the saved console state with
+one-based VT 1 active. Failure of the resumed core's orderly-shutdown request is
+expected because the watchdog has already invalidated its helper session.
+Remaining later hardware cases are malformed protocol, worker or supervisor
+hard failure, and repeated sessions.
 
 Every case must return to the saved screen in emulation mode with video on and
 automatic VT handling, leave no worker or recovery record, and require no

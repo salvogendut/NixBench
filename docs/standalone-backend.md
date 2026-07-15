@@ -12,10 +12,10 @@ are replaceable platform adapters, not part of application or shell policy.
 > an ordinary-user desktop, private Wayland server, and NixClock client. Its
 > device-free integration tests, physical takeover/normal-exit trial, and
 > VT 1 -> 2 -> 1 cycle and supervised SIGTERM recovery gate pass, but it has
-> now also passed the physical core-crash gate. The core-hang trial and the
-> remaining failure-injection matrix are pending, as are complete seat/input
-> support, acceleration, and broad hardware coverage. It is not a production
-> login session or a default crash-safe console owner.
+> now also passed both physical core-failure gates. The remaining failure-
+> injection matrix is pending, as are complete seat/input support, acceleration,
+> and broad hardware coverage. It is not a production login session or a
+> default crash-safe console owner.
 
 ## Process and backend boundaries
 
@@ -516,7 +516,13 @@ application group, verified ordinary-user sentinel cleanup, restored the saved
 console state, and removed the recovery record. Independent checks found no
 reported runtime directory, recovery record, or surviving NixBench process and
 found one-based VT 1 active. NixClock's Wayland read failure is expected for
-this deliberate compositor crash. The core-hang trial is next. Malformed
+this deliberate compositor crash. The physical core-hang gate also passes. The
+worker stopped the validated core, the heartbeat watchdog detected the stall,
+and forced process-group containment, sentinel cleanup, console restoration,
+and record removal completed. Independent checks again found no runtime path,
+recovery record, or surviving NixBench process and found one-based VT 1 active
+with the saved console state. Failure of an orderly in-band shutdown request is
+expected after the watchdog has invalidated the hung helper session. Malformed
 protocol, worker or supervisor hard failure, and repeated-session recovery
 remain later hardware gates.
 The older all-root smoke harness remains useful only for bounded research and

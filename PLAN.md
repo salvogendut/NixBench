@@ -170,10 +170,10 @@ credential drop. Its device-free integration path now includes a bounded core
 heartbeat, deterministic crash/hang injection policy, and an ordinary-user
 runtime-directory cleanup sentinel. Physical console takeover/normal exit,
 VT 1 -> 2 -> 1, supervised SIGTERM recovery, and deterministic core-crash
-recovery are complete. The core-hang gate is next; malformed protocol, harder
-supervisor/worker failures, and repeated-session validation follow it. Desktop-
-managed installation, popup/subsurface/data protocols, toolkit trials, and
-broader application-menu bridges also remain outstanding.
+and core-hang recovery are complete. Malformed protocol, harder supervisor/
+worker failures, and repeated-session validation remain. Desktop-managed
+installation, popup/subsurface/data protocols, toolkit trials, and broader
+application-menu bridges also remain outstanding.
 
 ## Milestone 6: Package and validate the hosted prototype
 
@@ -350,7 +350,7 @@ This root-only harness remains a supervised hardware-validation mode rather
 than a desktop session. Broader hardware validation and complete wscons
 keymap/seat/hotplug support are still required. Privilege separation and a
 separate recovery supervisor now exist in the distinct opt-in session path
-described below. Its core-crash gate now passes, but it still needs core-hang,
+described below. Its core-crash and core-hang gates now pass, but it still needs
 malformed-protocol, worker/supervisor hard-failure, and repeated-session
 acceptance trials.
 The active-map controls are shell navigation only; general text, modifiers,
@@ -483,9 +483,14 @@ failure, contained the application group, verified sentinel cleanup, restored
 the console, and removed the recovery record. Independent checks found the
 reported runtime path and recovery record absent, no surviving NixBench
 process, and screen 0 back in emulation mode with automatic VT handling, video
-on, and VT 1 active. The physical core-hang gate is next. Malformed protocol,
-worker or supervisor hard failure, and repeated-session validation on the X220
-follow it.
+on, and VT 1 active. The physical core-hang gate also passed: the worker stopped
+the validated core with `SIGSTOP`, the heartbeat watchdog detected the stall,
+and forced containment, sentinel cleanup, restoration, and record removal all
+completed. Independent checks again found no runtime path, recovery record, or
+surviving NixBench process and found the complete saved console state with VT 1
+active. The failed orderly-shutdown diagnostic is expected after watchdog
+invalidation of the hung helper session. Malformed protocol, worker or
+supervisor hard failure, and repeated-session validation on the X220 remain.
 Direct KMS remains a Milestone 7 deliverable but is not on that immediate
 critical path.
 

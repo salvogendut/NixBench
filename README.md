@@ -154,9 +154,9 @@ NixClock does not receive that endpoint, and neither ordinary-user process
 receives a framebuffer, wscons, recovery, or VT descriptor. The heartbeat,
 runtime cleanup, and deterministic core-crash/core-hang gates have device-free
 coverage. Console takeover, normal exit, VT 1 -> 2 -> 1, supervised SIGTERM
-recovery, and the core-crash gate have passed on hardware; the core-hang gate
-is next. This remains an explicitly acknowledged development milestone rather
-than a supported login session.
+recovery, and both core-failure gates have passed on hardware. This remains an
+explicitly acknowledged development milestone rather than a supported login
+session while the harder failure matrix remains.
 
 The older `nixbench-wsdisplay-smoke` research harness deliberately remains
 available for framebuffer and input experiments. It neither publishes Wayland
@@ -533,11 +533,20 @@ runtime sentinel were cleaned up, and the reported runtime directory was
 independently confirmed absent. Restoration and postflight found screen 0 in
 emulation mode, automatic VT handling, video on, and one-based VT 1; the
 recovery record was absent and no NixBench process survived. NixClock's Wayland
-read error is expected when its compositor is deliberately killed. The
-core-hang trial is the next physical gate. Malformed protocol, worker or
-supervisor hard failure, and repeated sessions remain later gates. The guided
-command therefore remains an opt-in development test rather than a login-
-session installation procedure.
+read error is expected when its compositor is deliberately killed.
+
+The physical core-hang gate now passes as well. The armed trigger stopped the
+validated core with `SIGSTOP`; the heartbeat watchdog detected the resulting
+stall, contained the resumed core/application group, verified sentinel cleanup,
+restored the console, and removed the recovery record. Independent checks again
+found the reported runtime path and recovery record absent, no surviving
+NixBench process, and one-based VT 1 with the complete saved console state. The
+`Could not request orderly session shutdown` diagnostic is expected after the
+watchdog has invalidated the hung core's in-band helper session; verified forced
+containment is the required path. Malformed protocol, worker or supervisor hard
+failure, and repeated sessions remain later gates. The guided command therefore
+remains an opt-in development test rather than a login-session installation
+procedure.
 
 The opt-in `wsdisplay` presentation harness must run as root. Start with its
 query-only preflight:
