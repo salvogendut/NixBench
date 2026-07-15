@@ -638,7 +638,8 @@ Midori terminated with `SIGSEGV` while tearing down; the typed letter itself
 had traversed the wscons and Wayland keyboard paths correctly. The embedded
 server now implements a basic `xdg_positioner`/`xdg_popup` lifecycle: it sends
 the initial configure sequence, accepts GTK's valid pre-map popup grab, copies
-and CPU-composites shared-memory popup pixels into the parent snapshot, and
+and CPU-composites shared-memory popup pixels into the parent snapshot,
+restores keyboard focus to grabbed popups while they are mapped, and
 recursively dismisses descendants when a parent unmaps or is destroyed. The
 NetBSD device-free suite passes 50/50 tests with that implementation. Full
 pointer routing into popups, outside-click dismissal policy, and positioner

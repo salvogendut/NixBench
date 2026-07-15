@@ -218,10 +218,12 @@ one-character dropdown. NixBench's former fatal rejection of `xdg_popup`
 disconnected Midori, which then terminated with `SIGSEGV`. The new basic
 `xdg_positioner`/`xdg_popup` slice configures and maps shared-memory popups,
 accepts GTK's valid pre-map popup grab, CPU-composites popup pixels, and
-recursively dismisses descendants during parent teardown. The NetBSD
-device-free suite passes 50/50 tests. Physical Control+L, text editing, and
-Return validation remains the acceptance gate; full popup pointer routing,
-outside-click policy, and constraint adjustment remain later work.
+recursively dismisses descendants during parent teardown. Grabbed popups now
+take keyboard focus while they are mapped and return focus to their parent
+when dismissed. The NetBSD device-free suite passes 50/50 tests. Physical
+Control+L, text editing, and Return validation remains the acceptance gate;
+full popup pointer routing, outside-click policy, and constraint adjustment
+remain later work.
 Malformed protocol, harder supervisor/worker failures, and repeated-session
 validation remain. Installation and launching managed by the desktop,
 complete popup interaction policy, subsurface/data transfer, broader toolkit
