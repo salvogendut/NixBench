@@ -1346,16 +1346,21 @@ static void test_wayland_surface_lifecycle(void)
     struct wl_registry *registry = NULL;
     struct wl_surface *surface = NULL;
     struct wl_surface *popup_surface = NULL;
+    struct wl_surface *child_popup_surface = NULL;
     struct wl_shm_pool *pool = NULL;
     struct wl_buffer *buffer = NULL;
     struct wl_buffer *popup_buffer = NULL;
     struct wl_data_source *drag_source = NULL;
     struct xdg_surface *popup_xdg_surface = NULL;
+    struct xdg_surface *child_popup_xdg_surface = NULL;
     struct xdg_popup *popup = NULL;
+    struct xdg_popup *child_popup = NULL;
     struct xdg_positioner *positioner = NULL;
+    struct xdg_positioner *child_positioner = NULL;
     struct client_state client = {0};
     struct client_state legacy_input = {0};
     struct popup_state popup_client = {0};
+    struct popup_state child_popup_client = {0};
     struct nb_wayland_surface_snapshot snapshot;
     const struct nb_window *host_window;
     struct nb_window *resized_host_window;
@@ -2234,6 +2239,98 @@ static void test_wayland_surface_lifecycle(void)
     REQUIRE(shell.menu.model != NULL);
     CHECK(strcmp(shell.menu.model->menus[0].label, "NixClock") == 0);
 
+    /*
+     * A root unmap dismisses a complete popup grab tree before the root
+     * surface can later be remapped or its storage slot reused.
+     */
+    popup_client = (struct popup_state){0};
+    child_popup_client = (struct popup_state){0};
+    popup_surface = wl_compositor_create_surface(client.compositor);
+    REQUIRE(popup_surface != NULL);
+    popup_xdg_surface = xdg_wm_base_get_xdg_surface(client.wm_base,
+                                                    popup_surface);
+    REQUIRE(popup_xdg_surface != NULL);
+    REQUIRE(xdg_surface_add_listener(popup_xdg_surface,
+                                     &popup_surface_listener,
+                                     &popup_client) == 0);
+    positioner = xdg_wm_base_create_positioner(client.wm_base);
+    REQUIRE(positioner != NULL);
+    xdg_positioner_set_size(positioner, POPUP_WIDTH, POPUP_HEIGHT);
+    xdg_positioner_set_anchor_rect(positioner, 8, 8, 16, 16);
+    xdg_positioner_set_anchor(positioner,
+                              XDG_POSITIONER_ANCHOR_BOTTOM_LEFT);
+    xdg_positioner_set_gravity(positioner,
+                               XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT);
+    popup = xdg_surface_get_popup(popup_xdg_surface,
+                                  client.xdg_surface,
+                                  positioner);
+    REQUIRE(popup != NULL);
+    REQUIRE(xdg_popup_add_listener(popup,
+                                   &popup_listener,
+                                   &popup_client) == 0);
+    xdg_popup_grab(popup, client.seat, UINT32_C(2));
+    xdg_positioner_destroy(positioner);
+    positioner = NULL;
+    wl_surface_commit(popup_surface);
+    REQUIRE(pump_barrier(server, display));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(popup_client.popup_configure_count == 1);
+    CHECK(popup_client.surface_configure_count == 1);
+    CHECK(popup_client.done_count == 0);
+
+    popup_buffer = wl_shm_pool_create_buffer(
+        pool,
+        0,
+        POPUP_WIDTH,
+        POPUP_HEIGHT,
+        POPUP_WIDTH * BYTES_PER_PIXEL,
+        WL_SHM_FORMAT_ARGB8888);
+    REQUIRE(popup_buffer != NULL);
+    xdg_surface_set_window_geometry(popup_xdg_surface,
+                                    0,
+                                    0,
+                                    POPUP_WIDTH,
+                                    POPUP_HEIGHT);
+    wl_surface_attach(popup_surface, popup_buffer, 0, 0);
+    wl_surface_damage(popup_surface, 0, 0, POPUP_WIDTH, POPUP_HEIGHT);
+    wl_surface_commit(popup_surface);
+    REQUIRE(pump_barrier(server, display));
+
+    child_popup_surface = wl_compositor_create_surface(client.compositor);
+    REQUIRE(child_popup_surface != NULL);
+    child_popup_xdg_surface = xdg_wm_base_get_xdg_surface(
+        client.wm_base,
+        child_popup_surface);
+    REQUIRE(child_popup_xdg_surface != NULL);
+    REQUIRE(xdg_surface_add_listener(child_popup_xdg_surface,
+                                     &popup_surface_listener,
+                                     &child_popup_client) == 0);
+    child_positioner = xdg_wm_base_create_positioner(client.wm_base);
+    REQUIRE(child_positioner != NULL);
+    xdg_positioner_set_size(child_positioner, 16, 16);
+    xdg_positioner_set_anchor_rect(child_positioner, 0, 0, 16, 16);
+    xdg_positioner_set_anchor(child_positioner,
+                              XDG_POSITIONER_ANCHOR_BOTTOM_LEFT);
+    xdg_positioner_set_gravity(child_positioner,
+                               XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT);
+    child_popup = xdg_surface_get_popup(child_popup_xdg_surface,
+                                        popup_xdg_surface,
+                                        child_positioner);
+    REQUIRE(child_popup != NULL);
+    REQUIRE(xdg_popup_add_listener(child_popup,
+                                   &popup_listener,
+                                   &child_popup_client) == 0);
+    xdg_popup_grab(child_popup, client.seat, UINT32_C(3));
+    xdg_positioner_destroy(child_positioner);
+    child_positioner = NULL;
+    wl_surface_commit(child_popup_surface);
+    REQUIRE(pump_barrier(server, display));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(child_popup_client.popup_configure_count == 1);
+    CHECK(child_popup_client.surface_configure_count == 1);
+    CHECK(child_popup_client.done_count == 0);
+    CHECK(nb_wayland_server_window_count(server) == 1);
+
     /* A committed NULL attachment explicitly unmaps the host window. */
     wl_surface_attach(surface, NULL, 0, 0);
     wl_surface_commit(surface);
@@ -2256,6 +2353,24 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(!nb_wayland_server_surface_snapshot(server,
                                               window,
                                               &snapshot));
+    CHECK(popup_client.done_count == 1);
+    CHECK(child_popup_client.done_count == 1);
+
+    xdg_popup_destroy(child_popup);
+    child_popup = NULL;
+    xdg_surface_destroy(child_popup_xdg_surface);
+    child_popup_xdg_surface = NULL;
+    wl_surface_destroy(child_popup_surface);
+    child_popup_surface = NULL;
+    xdg_popup_destroy(popup);
+    popup = NULL;
+    xdg_surface_destroy(popup_xdg_surface);
+    popup_xdg_surface = NULL;
+    wl_surface_destroy(popup_surface);
+    popup_surface = NULL;
+    wl_buffer_destroy(popup_buffer);
+    popup_buffer = NULL;
+    REQUIRE(pump_barrier(server, display));
 
     /* Remap, then destroy the role while its committed menu remains alive. */
     wl_surface_commit(surface);
