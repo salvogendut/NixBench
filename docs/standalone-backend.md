@@ -191,13 +191,19 @@ the same output-only `wsdisplay` host submits the resulting XRGB frame.
 same shell scene plus a software cursor and temporarily owns NetBSD's fixed
 `/dev/wskbd` and `/dev/wsmouse` mux aliases. Pointer motion and the left button
 exercise menus and managed-window dragging. On every keyboard open or reopen,
-the provider queries the active wscons map for Escape, F10, the four arrows,
-Return, and keypad Enter. Those controls use the normalized XKB names already
-consumed by the global menu path; Escape requests an orderly early exit when no
-menu is open. Repeated downs are flagged, and `ALL_KEYS_UP` queues releases for
-every held binding. The provider closes both device descriptors and clears held input before
-every acknowledged VT release and on all cleanup paths. It does not turn SDL
-into the display or input backend: rendering remains an in-memory SDL software
+the provider snapshots the mux inventory, keyboard type, and active wscons
+map. A stable mux containing exactly one direct PC-XT device whose exact
+`KB_US` encoding matches required sentinels receives a bounded physical XKB profile
+covering ordinary text, modifiers, navigation, function keys, and the keypad.
+The inventory is checked again after the keyboard queries. USB, mixed,
+multiple, nested, variant, changed, and unknown configurations retain the
+discovered Escape, F10, arrow, Return, and keypad-Enter fallback. Those
+controls use the normalized XKB names already consumed
+by the global menu path; Escape requests an orderly early exit when no menu is
+open. Repeated downs are flagged, and `ALL_KEYS_UP` queues releases for every
+held mapped key. The provider closes both device descriptors and clears held
+input before every acknowledged VT release and on all cleanup paths. It does
+not turn SDL into the display or input backend: rendering remains an in-memory SDL software
 surface, `wsdisplay` remains the sole display owner, and no X11, Wayland, or SDL
 video subsystem is started. The display adapter itself stays output-only.
 
@@ -473,7 +479,7 @@ NIXBENCH_APPLICATION=/usr/pkg/bin/midori ./tools/run-wsdisplay-session.sh
 
 An empty-history Midori Speed Dial has no shortcut tiles and can look like an
 unpainted gray page. Use the fixed offline content wrapper to verify WebKit
-page pixels without application arguments, keyboard text entry, or a network:
+page pixels without application arguments, typing, or a network:
 
 ```sh
 NIXBENCH_APPLICATION="$PWD/tools/run-midori-content-probe.sh" \
@@ -649,12 +655,19 @@ events. The interactive smoke mode now exercises the intended separation with
 a narrow provider that translates the fixed `/dev/wskbd` and `/dev/wsmouse`
 mux streams into normalized events. The `wsdisplay` adapter never opens those
 devices. The research provider covers a software pointer driven by relative
-motion and the left button plus active-map bindings for Escape, F10, arrows,
-Return, and keypad Enter. It propagates repeated downs and synthesizes held
-control releases on `ALL_KEYS_UP`; absolute-device calibration is deliberately
-deferred. This bounded navigation lookup is not a general text/modifier or
-client XKB keymap, hotplug, multi-device, or seat implementation. This
-separation permits device-free
+motion and the left button. Its first full keyboard profile explicitly maps
+validated PC-XT raw positions 0 through 255 to physical XKB names; this
+includes ordinary text, left/right modifiers, editing/navigation keys,
+function keys, and the keypad. Activation requires one unchanged direct
+keyboard in the mux, exact `KB_US` encoding, and required sentinels before and
+after probing. USB, mixed/multiple, nested, variant, changed, and unknown
+configurations keep the earlier active-map control fallback. Arbitrary maps
+installed with `WSKBDIO_SETMAP` are not imported and may not be detected. It
+propagates repeated downs and synthesizes every held-key
+release on `ALL_KEYS_UP`; absolute-device calibration is deliberately
+deferred. Layout reconciliation beyond exact `KB_US`, hotplug, heterogeneous mux
+devices, LED synchronization, and production seat policy remain incomplete.
+This separation permits device-free
 reducer tests and later lets the aggregate host facade compose production
 display, session, and input providers.
 Consult [`wskbd(4)`][wskbd], [`wsmouse(4)`][wsmouse], and the versioned event

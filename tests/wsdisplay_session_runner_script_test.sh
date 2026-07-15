@@ -66,6 +66,9 @@ ln -s stub "$temporary/bin/sudo"
 test_application="$temporary/Midori Browser"
 touch "$test_application"
 chmod +x "$test_application"
+keyboard_application="$temporary/run-midori-content-probe.sh"
+touch "$keyboard_application"
+chmod +x "$keyboard_application"
 
 unset NIXBENCH_EXPECT_SUPERVISOR_TERM || :
 unset NIXBENCH_EXPECT_CORE_FAILURE || :
@@ -161,6 +164,15 @@ if grep -F -- 'NixClock will open automatically' \
     echo "custom-application session described NixClock as initial" >&2
     exit 1
 fi
+
+keyboard_log=$temporary/keyboard.log
+keyboard_output=$temporary/keyboard.out
+run_session 0 '' 0 0 1 "$keyboard_log" "$keyboard_output" \
+    "$keyboard_application"
+grep -F -- 'test the PC-XT keyboard path with Ctrl-L' \
+    "$keyboard_output" >/dev/null
+grep -F -- 'data:text/plain,nixbench-keyboard' \
+    "$keyboard_output" >/dev/null
 
 crash_log=$temporary/crash.log
 crash_output=$temporary/crash.out

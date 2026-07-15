@@ -2062,6 +2062,240 @@ static void test_all_keys_up_pending_releases(void)
     CHECK(event.type == NB_HOST_EVENT_POINTER_MOTION);
 }
 
+static void test_pc_xt_keyboard_profile(void)
+{
+    static const struct {
+        int keycode;
+        const char *xkb_key_name;
+    } address_probe_keys[] = {
+        {29, "LCTL"}, {38, "AC09"},
+        {32, "AC03"}, {30, "AC01"}, {20, "AD05"},
+        {39, "AC10"}, {18, "AD03"}, {45, "AB02"},
+        {53, "AB10"}, {25, "AD10"}, {23, "AD08"},
+        {49, "AB06"}, {51, "AB08"}, {48, "AB05"},
+        {46, "AB03"}, {35, "AC06"}, {12, "AE11"},
+        {37, "AC08"}, {21, "AD06"}, {24, "AD09"},
+        {19, "AD04"}, {14, "BKSP"}, {203, "LEFT"},
+        {205, "RGHT"}, {28, "RTRN"}
+    };
+    struct nb_wscons_input_reducer reducer;
+    struct nb_wscons_input_stats stats;
+    struct nb_host_event event;
+    size_t index;
+    size_t mapped = 0;
+
+    CHECK(nb_wscons_input_reducer_init(&reducer, 100, 80));
+    CHECK(!nb_wscons_input_reducer_set_keycode(&reducer, -1, "AC01"));
+    CHECK(!nb_wscons_input_reducer_set_keycode(
+        &reducer, NB_WSCONS_KEYCODE_CAPACITY, "AC01"));
+    CHECK(!nb_wscons_input_reducer_set_keycode(&reducer, 30, ""));
+    CHECK(!nb_wscons_input_reducer_set_keycode(&reducer, 30, "ABCDE"));
+    CHECK(nb_wscons_input_reducer_set_pc_xt_keycodes(&reducer));
+    CHECK(!nb_wscons_input_reducer_set_pc_xt_keycodes(&reducer));
+
+    for (index = 0; index < NB_WSCONS_KEYCODE_CAPACITY; ++index) {
+        if (reducer.keyboard_keys[index].xkb_key_name[0] != '\0') {
+            ++mapped;
+        }
+    }
+    CHECK(mapped >= 100);
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.keyboard_binding_count == mapped);
+    CHECK(strcmp(reducer.keyboard_keys[1].xkb_key_name, "ESC") == 0);
+    CHECK(strcmp(reducer.keyboard_keys[14].xkb_key_name, "BKSP") == 0);
+    CHECK(strcmp(reducer.keyboard_keys[30].xkb_key_name, "AC01") == 0);
+    CHECK(strcmp(reducer.keyboard_keys[42].xkb_key_name, "LFSH") == 0);
+    CHECK(strcmp(reducer.keyboard_keys[53].xkb_key_name, "AB10") == 0);
+    CHECK(strcmp(reducer.keyboard_keys[57].xkb_key_name, "SPCE") == 0);
+    CHECK(strcmp(reducer.keyboard_keys[156].xkb_key_name, "KPEN") == 0);
+    CHECK(strcmp(reducer.keyboard_keys[184].xkb_key_name, "RALT") == 0);
+    CHECK(strcmp(reducer.keyboard_keys[200].xkb_key_name, "UP") == 0);
+    CHECK(strcmp(reducer.keyboard_keys[211].xkb_key_name, "DELE") == 0);
+    CHECK(strcmp(reducer.keyboard_keys[221].xkb_key_name, "MENU") == 0);
+    for (index = 0;
+         index < sizeof(address_probe_keys) / sizeof(address_probe_keys[0]);
+         ++index) {
+        if (strcmp(reducer.keyboard_keys[
+                       (size_t)address_probe_keys[index].keycode]
+                       .xkb_key_name,
+                   address_probe_keys[index].xkb_key_name) != 0) {
+            fprintf(stderr,
+                    "PC-XT code %d: expected %s, received %s\n",
+                    address_probe_keys[index].keycode,
+                    address_probe_keys[index].xkb_key_name,
+                    reducer.keyboard_keys[
+                        (size_t)address_probe_keys[index].keycode]
+                        .xkb_key_name);
+        }
+        CHECK(strcmp(reducer.keyboard_keys[
+                         (size_t)address_probe_keys[index].keycode]
+                         .xkb_key_name,
+                     address_probe_keys[index].xkb_key_name) == 0);
+    }
+
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                42,
+                900,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(strcmp(event.data.key.xkb_key_name, "LFSH") == 0);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                30,
+                901,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(strcmp(event.data.key.xkb_key_name, "AC01") == 0);
+    CHECK(event.data.key.pressed && !event.data.key.repeat);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                30,
+                902,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(event.data.key.repeat);
+    CHECK(!nb_wscons_input_reducer_set_keycode(&reducer, 31, "AC02"));
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_UP,
+                30,
+                903,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_UP,
+                42,
+                904,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                29,
+                905,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(strcmp(event.data.key.xkb_key_name, "LCTL") == 0);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                38,
+                906,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(strcmp(event.data.key.xkb_key_name, "AC09") == 0);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_UP,
+                38,
+                907,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_UP,
+                29,
+                908,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                14,
+                909,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(strcmp(event.data.key.xkb_key_name, "BKSP") == 0);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_UP,
+                14,
+                910,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                211,
+                911,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(strcmp(event.data.key.xkb_key_name, "DELE") == 0);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_UP,
+                211,
+                912,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                NB_WSCONS_KEYCODE_CAPACITY,
+                913,
+                &event) == NB_WSCONS_REDUCE_IGNORED);
+}
+
+static void test_keyboard_mux_inventory(void)
+{
+    const enum nb_wscons_mux_device_type keyboard[] = {
+        NB_WSCONS_MUX_DEVICE_KEYBOARD
+    };
+    const enum nb_wscons_mux_device_type two_keyboards[] = {
+        NB_WSCONS_MUX_DEVICE_KEYBOARD,
+        NB_WSCONS_MUX_DEVICE_KEYBOARD
+    };
+    const enum nb_wscons_mux_device_type nested_mux[] = {
+        NB_WSCONS_MUX_DEVICE_KEYBOARD,
+        NB_WSCONS_MUX_DEVICE_MUX
+    };
+    const enum nb_wscons_mux_device_type keyboard_and_mouse[] = {
+        NB_WSCONS_MUX_DEVICE_KEYBOARD,
+        NB_WSCONS_MUX_DEVICE_MOUSE
+    };
+    const enum nb_wscons_mux_device_type unknown[] = {
+        NB_WSCONS_MUX_DEVICE_UNKNOWN
+    };
+
+    CHECK(!nb_wscons_input_mux_is_single_keyboard(NULL, 0));
+    CHECK(!nb_wscons_input_mux_is_single_keyboard(keyboard, 0));
+    CHECK(nb_wscons_input_mux_is_single_keyboard(keyboard, 1));
+    CHECK(!nb_wscons_input_mux_is_single_keyboard(two_keyboards, 2));
+    CHECK(!nb_wscons_input_mux_is_single_keyboard(nested_mux, 2));
+    CHECK(!nb_wscons_input_mux_is_single_keyboard(
+        keyboard_and_mouse,
+        2));
+    CHECK(!nb_wscons_input_mux_is_single_keyboard(unknown, 1));
+}
+
+static void test_pc_xt_all_keys_up(void)
+{
+    struct nb_wscons_input_reducer reducer;
+    struct nb_wscons_input_stats stats;
+    struct nb_host_event event;
+    size_t released = 0;
+    int keycode;
+
+    CHECK(nb_wscons_input_reducer_init(&reducer, 100, 80));
+    CHECK(nb_wscons_input_reducer_set_pc_xt_keycodes(&reducer));
+    for (keycode = 1; keycode <= 50; ++keycode) {
+        CHECK(apply(&reducer,
+                    NB_WSCONS_RAW_EVENT_KEY_DOWN,
+                    keycode,
+                    UINT64_C(1000) + (uint64_t)keycode,
+                    &event) == NB_WSCONS_REDUCE_EVENT);
+    }
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_ALL_KEYS_UP,
+                0,
+                1100,
+                &event) == NB_WSCONS_REDUCE_EVENT);
+    CHECK(!event.data.key.pressed);
+    CHECK(strcmp(event.data.key.xkb_key_name, "ESC") == 0);
+    ++released;
+    while (nb_wscons_input_reducer_poll_pending(&reducer, &event) ==
+           NB_WSCONS_REDUCE_EVENT) {
+        CHECK(!event.data.key.pressed);
+        CHECK(event.milliseconds == 1100);
+        ++released;
+    }
+    CHECK(released == 50);
+    CHECK(reducer.pending_key_release_count == 0);
+    CHECK(reducer.pending_key_release_mask == 0);
+    CHECK(reducer.pending_key_release_cursor == 0);
+    for (keycode = 1; keycode <= 50; ++keycode) {
+        CHECK(!reducer.keyboard_keys[(size_t)keycode].pressed);
+        CHECK(!reducer.keyboard_keys[(size_t)keycode].release_pending);
+    }
+    CHECK(apply(&reducer,
+                NB_WSCONS_RAW_EVENT_KEY_UP,
+                30,
+                1101,
+                &event) == NB_WSCONS_REDUCE_IGNORED);
+    CHECK(nb_wscons_input_reducer_get_stats(&reducer, &stats));
+    CHECK(stats.keyboard_synthesized_release_events == 50);
+}
+
 static void test_ascii_escape_without_keycode(void)
 {
     struct nb_wscons_input_reducer reducer;
@@ -2207,6 +2441,15 @@ static void test_defensive_reducer(void)
         UINT32_C(1) << (unsigned int)NB_WSCONS_CONTROL_KEY_ESCAPE;
     CHECK(nb_wscons_input_reducer_poll_pending(&reducer, &event) ==
           NB_WSCONS_REDUCE_ERROR);
+
+    CHECK(nb_wscons_input_reducer_init(&reducer, 10, 10));
+    CHECK(nb_wscons_input_reducer_set_keycode(&reducer, 30, "AC01"));
+    reducer.keyboard_keys[30].release_pending = true;
+    reducer.pending_key_release_count = 1;
+    reducer.pending_key_release_cursor = 31;
+    reducer.pending_key_release_milliseconds = 2;
+    CHECK(nb_wscons_input_reducer_poll_pending(&reducer, &event) ==
+          NB_WSCONS_REDUCE_ERROR);
 }
 
 static void test_live_provider_without_devices(void)
@@ -2320,6 +2563,9 @@ int main(void)
     test_escape_translation();
     test_control_key_translation_and_diagnostics();
     test_all_keys_up_pending_releases();
+    test_pc_xt_keyboard_profile();
+    test_pc_xt_all_keys_up();
+    test_keyboard_mux_inventory();
     test_ascii_escape_without_keycode();
     test_keyboard_counter_saturation();
     test_defensive_reducer();

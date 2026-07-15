@@ -202,6 +202,17 @@ Dial was simply its fresh-history state. A dedicated ordinary-user content
 wrapper now exposes that same offline test on the physical console. Standalone
 clients also receive an explicit NixBench/Wayland XDG session identity, GTK
 backend, and UTF-8 locale. Per-session D-Bus supervision remains future work.
+The next input slice replaces the standalone provider's eight-key ceiling on
+the tested hardware. A stable NetBSD mux containing exactly one direct PC-XT
+keyboard reporting exact `KB_US` plus required sentinels now emits a bounded standard
+physical XKB profile, including letters, digits, punctuation, modifiers,
+editing/navigation, function keys, and the keypad. USB, mixed/multiple,
+variant, changed, and unknown configurations retain the control-only fallback.
+Reducer tests cover
+Shift/Control sequences, Backspace versus Delete, repeats, out-of-range input,
+and deterministic `ALL_KEYS_UP` release of fifty simultaneous keys; the
+Wayland keymap test proves `AC01` resolves to `a` and Shift+`AC01` to `A`.
+Physical Midori address-bar validation remains the acceptance gate.
 Malformed protocol, harder supervisor/worker failures, and repeated-session
 validation remain. Installation and launching managed by the desktop,
 popup/subsurface/data transfer, broader toolkit trials, and application-menu
@@ -330,11 +341,14 @@ preview remains output-only. A separate explicit `--interactive-preview` mode
 composes a small wscons research provider with the same output adapter. It owns
 the fixed `/dev/wskbd` and `/dev/wsmouse` mux aliases only for the bounded
 worker lifetime, draws a software cursor, routes the left button to menus and
-window dragging, and discovers Escape, F10, arrows, Return, and keypad Enter
-from the active wscons map. Those limited controls drive the existing global
-menu keyboard path and let Escape request an early clean exit. Repeated downs
-are flagged and `ALL_KEYS_UP` queues deterministic releases for every held
-binding. Both preview modes use SDL only for an in-memory software surface;
+window dragging, and discovers the keyboard type and active wscons map. A
+stable single-keyboard PC-XT device reporting exact `KB_US` plus sentinels now
+receives a bounded raw-position to physical-XKB profile for ordinary text, modifiers,
+editing/navigation, function keys, and the keypad. USB, mixed/multiple,
+variant, changed, and other configurations retain discovered Escape, F10,
+arrow, Return, and keypad-Enter controls. Repeated downs are flagged and
+`ALL_KEYS_UP` queues deterministic releases for every held mapped key. Both
+preview modes use SDL only for an in-memory software surface;
 neither initializes SDL video nor opens X11 or Wayland. An additional explicit
 `--runtime-preview`
 mode now connects the same host and input provider to the shared desktop
@@ -385,9 +399,11 @@ separate recovery supervisor now exist in the distinct opt-in session path
 described below. Its core-crash and core-hang gates now pass, but it still needs
 malformed-protocol, worker/supervisor hard-failure, and repeated-session
 acceptance trials.
-The active-map controls are shell navigation only; general text, modifiers,
-client keymap reconciliation, and multi-device seat handling remain in that
-broader input gate.
+The PC-XT/US profile and published XKB map now cover basic GTK text and
+shortcuts in device-free tests. National-layout reconciliation, LEDs, unknown
+keyboard types, heterogeneous mux devices, and full seat/hotplug handling
+remain in the broader input gate. A focused physical Midori address-bar trial
+is the next acceptance check.
 The detailed design and source references are in
 [`docs/standalone-backend.md`](docs/standalone-backend.md).
 

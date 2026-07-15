@@ -10,6 +10,8 @@
 enum {
     NB_WSCONS_INPUT_ERROR_CAPACITY = 256,
     NB_WSCONS_INPUT_WAIT_DESCRIPTOR_COUNT = 2,
+    NB_WSCONS_KEYCODE_CAPACITY = 256,
+    NB_WSCONS_MUX_DEVICE_CAPACITY = 32,
     NB_WSCONS_POINTER_SENSITIVITY_MIN_PERCENT = 25,
     NB_WSCONS_POINTER_SENSITIVITY_DEFAULT_PERCENT = 100,
     NB_WSCONS_POINTER_SENSITIVITY_MAX_PERCENT = 400,
@@ -23,9 +25,9 @@ enum nb_wscons_pointer_profile {
 };
 
 /*
- * Bounded control-key vocabulary needed by the standalone shell. Bindings are
- * discovered from the active wscons keymap and retain the host API's existing
- * XKB physical-key names; general layout and text translation remain separate.
+ * Bounded control-key vocabulary needed by the standalone shell and retained
+ * as the safe fallback for unknown keyboard types. The validated PC-XT/US
+ * profile additionally maps the standard physical keyboard into XKB names.
  */
 enum nb_wscons_control_key {
     NB_WSCONS_CONTROL_KEY_ESCAPE,
@@ -39,9 +41,23 @@ enum nb_wscons_control_key {
     NB_WSCONS_CONTROL_KEY_COUNT
 };
 
+enum nb_wscons_mux_device_type {
+    NB_WSCONS_MUX_DEVICE_UNKNOWN,
+    NB_WSCONS_MUX_DEVICE_MOUSE,
+    NB_WSCONS_MUX_DEVICE_KEYBOARD,
+    NB_WSCONS_MUX_DEVICE_MUX,
+    NB_WSCONS_MUX_DEVICE_BELL
+};
+
 struct nb_wscons_control_key_state {
     int keycode;
     bool pressed;
+};
+
+struct nb_wscons_key_state {
+    char xkb_key_name[NB_HOST_XKB_KEY_NAME_CAPACITY];
+    bool pressed;
+    bool release_pending;
 };
 
 /*
@@ -140,7 +156,10 @@ struct nb_wscons_input_reducer {
     int pointer_y;
     struct nb_wscons_control_key_state
         control_keys[NB_WSCONS_CONTROL_KEY_COUNT];
+    struct nb_wscons_key_state keyboard_keys[NB_WSCONS_KEYCODE_CAPACITY];
     uint32_t pending_key_release_mask;
+    size_t pending_key_release_count;
+    size_t pending_key_release_cursor;
     uint64_t pending_key_release_milliseconds;
     uint32_t pressed_buttons;
     enum nb_wscons_pointer_profile pointer_profile;
@@ -170,6 +189,16 @@ bool nb_wscons_input_reducer_set_bounds(
 bool nb_wscons_input_reducer_set_escape_keycode(
     struct nb_wscons_input_reducer *reducer,
     int escape_keycode);
+bool nb_wscons_input_reducer_set_keycode(
+    struct nb_wscons_input_reducer *reducer,
+    int keycode,
+    const char *xkb_key_name);
+/* Configures the bounded standard PC-XT physical-key profile. */
+bool nb_wscons_input_reducer_set_pc_xt_keycodes(
+    struct nb_wscons_input_reducer *reducer);
+bool nb_wscons_input_mux_is_single_keyboard(
+    const enum nb_wscons_mux_device_type *device_types,
+    size_t device_count);
 bool nb_wscons_input_reducer_set_control_keycode(
     struct nb_wscons_input_reducer *reducer,
     enum nb_wscons_control_key key,

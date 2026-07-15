@@ -72,25 +72,83 @@ static const char *control_key_name(enum nb_wscons_control_key key)
     return control_key_is_valid(key) ? names[key] : NULL;
 }
 
+static bool xkb_key_name_is_valid(const char *name)
+{
+    size_t index;
+
+    if (name == NULL) {
+        return false;
+    }
+    for (index = 0; index < NB_HOST_XKB_KEY_NAME_CAPACITY; ++index) {
+        const unsigned char character = (unsigned char)name[index];
+
+        if (character == '\0') {
+            return index > 0;
+        }
+        if (character < 0x21 || character > 0x7e) {
+            return false;
+        }
+    }
+    return false;
+}
+
 static bool control_key_state_is_valid(
     const struct nb_wscons_input_reducer *reducer)
 {
     uint32_t valid_mask = 0;
     size_t configured_count = 0;
+    size_t pending_count = 0;
     size_t index;
 
+    if (reducer->pending_key_release_cursor >
+        NB_WSCONS_KEYCODE_CAPACITY) {
+        return false;
+    }
+    for (index = 0; index < NB_WSCONS_KEYCODE_CAPACITY; ++index) {
+        const struct nb_wscons_key_state *state =
+            &reducer->keyboard_keys[index];
+        const bool configured = state->xkb_key_name[0] != '\0';
+
+        if ((configured && !xkb_key_name_is_valid(state->xkb_key_name)) ||
+            (!configured && (state->pressed || state->release_pending)) ||
+            (state->pressed && state->release_pending)) {
+            return false;
+        }
+        if (configured) {
+            ++configured_count;
+        }
+        if (state->release_pending) {
+            if (reducer->pending_key_release_mask == 0 &&
+                index < reducer->pending_key_release_cursor) {
+                return false;
+            }
+            ++pending_count;
+        }
+    }
     for (index = 0; index < NB_WSCONS_CONTROL_KEY_COUNT; ++index) {
         const struct nb_wscons_control_key_state *state =
             &reducer->control_keys[index];
+        const uint32_t mask = UINT32_C(1) << (unsigned int)index;
         size_t other;
 
         if (state->keycode < -1 ||
+            state->keycode >= NB_WSCONS_KEYCODE_CAPACITY ||
             (state->pressed && state->keycode < 0 &&
              index != NB_WSCONS_CONTROL_KEY_ESCAPE)) {
             return false;
         }
         if (state->keycode >= 0) {
-            ++configured_count;
+            const struct nb_wscons_key_state *keyboard_state =
+                &reducer->keyboard_keys[(size_t)state->keycode];
+
+            if (strcmp(keyboard_state->xkb_key_name,
+                       control_key_name((enum nb_wscons_control_key)index)) !=
+                    0 ||
+                keyboard_state->pressed != state->pressed ||
+                keyboard_state->release_pending !=
+                    ((reducer->pending_key_release_mask & mask) != 0)) {
+                return false;
+            }
             for (other = 0; other < index; ++other) {
                 if (reducer->control_keys[other].keycode == state->keycode) {
                     return false;
@@ -98,19 +156,36 @@ static bool control_key_state_is_valid(
             }
         }
         if ((reducer->pending_key_release_mask &
-             (UINT32_C(1) << (unsigned int)index)) != 0 &&
-            (state->pressed ||
-             (state->keycode < 0 &&
-              index != NB_WSCONS_CONTROL_KEY_ESCAPE))) {
-            return false;
+             mask) != 0) {
+            if (state->pressed ||
+                (state->keycode < 0 &&
+                 index != NB_WSCONS_CONTROL_KEY_ESCAPE)) {
+                return false;
+            }
+            if (state->keycode < 0) {
+                ++pending_count;
+            }
         }
-        valid_mask |= UINT32_C(1) << (unsigned int)index;
+        valid_mask |= mask;
     }
     return (reducer->pending_key_release_mask & ~valid_mask) == 0 &&
-           (reducer->pending_key_release_mask != 0 ||
-            reducer->pending_key_release_milliseconds == 0) &&
+           (reducer->pending_key_release_mask == 0 ||
+            reducer->pending_key_release_cursor == 0) &&
+           reducer->pending_key_release_count == pending_count &&
+           (pending_count != 0 ||
+            (reducer->pending_key_release_mask == 0 &&
+             reducer->pending_key_release_cursor == 0 &&
+             reducer->pending_key_release_milliseconds == 0)) &&
            reducer->stats.keyboard_binding_count ==
                (uint64_t)configured_count;
+}
+
+bool nb_wscons_input_mux_is_single_keyboard(
+    const enum nb_wscons_mux_device_type *device_types,
+    size_t device_count)
+{
+    return device_types != NULL && device_count == 1 &&
+           device_types[0] == NB_WSCONS_MUX_DEVICE_KEYBOARD;
 }
 
 static void reset_adaptive_motion(
@@ -225,32 +300,110 @@ bool nb_wscons_input_reducer_set_escape_keycode(
         escape_keycode);
 }
 
-bool nb_wscons_input_reducer_set_control_keycode(
-    struct nb_wscons_input_reducer *reducer,
-    enum nb_wscons_control_key key,
-    int keycode)
+static bool keyboard_state_is_idle(
+    const struct nb_wscons_input_reducer *reducer)
 {
     size_t index;
-    bool configured;
 
-    if (!reducer_is_valid(reducer) || !control_key_is_valid(key) ||
-        keycode < 0 || reducer->pending_key_release_mask != 0) {
+    if (reducer->pending_key_release_count != 0) {
         return false;
     }
     for (index = 0; index < NB_WSCONS_CONTROL_KEY_COUNT; ++index) {
         if (reducer->control_keys[index].pressed) {
             return false;
         }
+    }
+    for (index = 0; index < NB_WSCONS_KEYCODE_CAPACITY; ++index) {
+        if (reducer->keyboard_keys[index].pressed ||
+            reducer->keyboard_keys[index].release_pending) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool nb_wscons_input_reducer_set_keycode(
+    struct nb_wscons_input_reducer *reducer,
+    int keycode,
+    const char *xkb_key_name)
+{
+    struct nb_wscons_key_state *state;
+    size_t index;
+
+    if (!reducer_is_valid(reducer) || keycode < 0 ||
+        keycode >= NB_WSCONS_KEYCODE_CAPACITY ||
+        !xkb_key_name_is_valid(xkb_key_name) ||
+        !keyboard_state_is_idle(reducer)) {
+        return false;
+    }
+    state = &reducer->keyboard_keys[(size_t)keycode];
+    if (state->xkb_key_name[0] != '\0') {
+        return strcmp(state->xkb_key_name, xkb_key_name) == 0;
+    }
+    for (index = 0; index < NB_WSCONS_KEYCODE_CAPACITY; ++index) {
+        if (strcmp(reducer->keyboard_keys[index].xkb_key_name,
+                   xkb_key_name) == 0) {
+            return false;
+        }
+    }
+    (void)snprintf(state->xkb_key_name,
+                   sizeof(state->xkb_key_name),
+                   "%s",
+                   xkb_key_name);
+    ++reducer->stats.keyboard_binding_count;
+    return true;
+}
+
+bool nb_wscons_input_reducer_set_control_keycode(
+    struct nb_wscons_input_reducer *reducer,
+    enum nb_wscons_control_key key,
+    int keycode)
+{
+    const char *const name = control_key_name(key);
+    struct nb_wscons_control_key_state *control;
+    struct nb_wscons_key_state *target;
+    int previous_keycode;
+    size_t index;
+
+    if (!reducer_is_valid(reducer) || !control_key_is_valid(key) ||
+        keycode < 0 || keycode >= NB_WSCONS_KEYCODE_CAPACITY ||
+        !keyboard_state_is_idle(reducer)) {
+        return false;
+    }
+    for (index = 0; index < NB_WSCONS_CONTROL_KEY_COUNT; ++index) {
         if (index != (size_t)key &&
             reducer->control_keys[index].keycode == keycode) {
             return false;
         }
     }
-    configured = reducer->control_keys[(size_t)key].keycode >= 0;
-    reducer->control_keys[(size_t)key].keycode = keycode;
-    if (!configured) {
+    control = &reducer->control_keys[(size_t)key];
+    previous_keycode = control->keycode;
+    target = &reducer->keyboard_keys[(size_t)keycode];
+    if (target->xkb_key_name[0] != '\0' &&
+        strcmp(target->xkb_key_name, name) != 0) {
+        return false;
+    }
+    for (index = 0; index < NB_WSCONS_KEYCODE_CAPACITY; ++index) {
+        if ((int)index != previous_keycode && (int)index != keycode &&
+            strcmp(reducer->keyboard_keys[index].xkb_key_name, name) == 0) {
+            return false;
+        }
+    }
+    if (previous_keycode >= 0 && previous_keycode != keycode) {
+        memset(&reducer->keyboard_keys[(size_t)previous_keycode],
+               0,
+               sizeof(reducer->keyboard_keys[(size_t)previous_keycode]));
+        --reducer->stats.keyboard_binding_count;
+    }
+    if (target->xkb_key_name[0] == '\0') {
+        (void)snprintf(target->xkb_key_name,
+                       sizeof(target->xkb_key_name),
+                       "%s",
+                       name);
         ++reducer->stats.keyboard_binding_count;
     }
+    control->keycode = keycode;
+    control->pressed = false;
     return true;
 }
 
@@ -299,8 +452,14 @@ void nb_wscons_input_reducer_reset(
         for (index = 0; index < NB_WSCONS_CONTROL_KEY_COUNT; ++index) {
             reducer->control_keys[index].pressed = false;
         }
+        for (index = 0; index < NB_WSCONS_KEYCODE_CAPACITY; ++index) {
+            reducer->keyboard_keys[index].pressed = false;
+            reducer->keyboard_keys[index].release_pending = false;
+        }
     }
     reducer->pending_key_release_mask = 0;
+    reducer->pending_key_release_count = 0;
+    reducer->pending_key_release_cursor = 0;
     reducer->pending_key_release_milliseconds = 0;
     reducer->pointer_remainder_x = 0;
     reducer->pointer_remainder_y = 0;
@@ -710,14 +869,12 @@ static void set_pointer_motion_event(
     event->data.pointer_motion.y = reducer->pointer_y;
 }
 
-static void set_escape_event(bool pressed,
-                             bool repeat,
-                             uint64_t milliseconds,
-                             struct nb_host_event *event)
+static void set_key_event(const char *name,
+                          bool pressed,
+                          bool repeat,
+                          uint64_t milliseconds,
+                          struct nb_host_event *event)
 {
-    const char *const name =
-        control_key_name(NB_WSCONS_CONTROL_KEY_ESCAPE);
-
     event->type = NB_HOST_EVENT_KEY;
     event->milliseconds = milliseconds;
     (void)snprintf(event->data.key.xkb_key_name,
@@ -728,22 +885,29 @@ static void set_escape_event(bool pressed,
     event->data.key.repeat = repeat;
 }
 
+static void set_escape_event(bool pressed,
+                             bool repeat,
+                             uint64_t milliseconds,
+                             struct nb_host_event *event)
+{
+    set_key_event(control_key_name(NB_WSCONS_CONTROL_KEY_ESCAPE),
+                  pressed,
+                  repeat,
+                  milliseconds,
+                  event);
+}
+
 static void set_control_key_event(enum nb_wscons_control_key key,
                                   bool pressed,
                                   bool repeat,
                                   uint64_t milliseconds,
                                   struct nb_host_event *event)
 {
-    const char *const name = control_key_name(key);
-
-    event->type = NB_HOST_EVENT_KEY;
-    event->milliseconds = milliseconds;
-    (void)snprintf(event->data.key.xkb_key_name,
-                   sizeof(event->data.key.xkb_key_name),
-                   "%s",
-                   name);
-    event->data.key.pressed = pressed;
-    event->data.key.repeat = repeat;
+    set_key_event(control_key_name(key),
+                  pressed,
+                  repeat,
+                  milliseconds,
+                  event);
 }
 
 static void record_emitted_key(struct nb_wscons_input_reducer *reducer,
@@ -774,6 +938,14 @@ enum nb_wscons_reduce_result nb_wscons_input_reducer_poll_pending(
             continue;
         }
         reducer->pending_key_release_mask &= ~mask;
+        if (reducer->control_keys[index].keycode >= 0) {
+            struct nb_wscons_key_state *state =
+                &reducer->keyboard_keys[(size_t)
+                    reducer->control_keys[index].keycode];
+
+            state->release_pending = false;
+        }
+        --reducer->pending_key_release_count;
         set_control_key_event((enum nb_wscons_control_key)index,
                               false,
                               false,
@@ -782,13 +954,44 @@ enum nb_wscons_reduce_result nb_wscons_input_reducer_poll_pending(
         record_emitted_key(reducer, false);
         saturating_increment(
             &reducer->stats.keyboard_synthesized_release_events);
-        if (reducer->pending_key_release_mask == 0) {
+        if (reducer->pending_key_release_count == 0) {
+            reducer->pending_key_release_cursor = 0;
+            reducer->pending_key_release_milliseconds = 0;
+        }
+        return NB_WSCONS_REDUCE_EVENT;
+    }
+    for (index = reducer->pending_key_release_cursor;
+         index < NB_WSCONS_KEYCODE_CAPACITY;
+         ++index) {
+        struct nb_wscons_key_state *state =
+            &reducer->keyboard_keys[index];
+
+        if (!state->release_pending) {
+            continue;
+        }
+        state->release_pending = false;
+        --reducer->pending_key_release_count;
+        reducer->pending_key_release_cursor = index + 1;
+        set_key_event(state->xkb_key_name,
+                      false,
+                      false,
+                      reducer->pending_key_release_milliseconds,
+                      event);
+        record_emitted_key(reducer, false);
+        saturating_increment(
+            &reducer->stats.keyboard_synthesized_release_events);
+        if (reducer->pending_key_release_count == 0) {
+            reducer->pending_key_release_cursor = 0;
             reducer->pending_key_release_milliseconds = 0;
         }
         return NB_WSCONS_REDUCE_EVENT;
     }
     return NB_WSCONS_REDUCE_IGNORED;
 }
+
+static enum nb_wscons_control_key control_key_for_keycode(
+    const struct nb_wscons_input_reducer *reducer,
+    int keycode);
 
 static enum nb_wscons_reduce_result reduce_all_keys_up(
     struct nb_wscons_input_reducer *reducer,
@@ -798,20 +1001,41 @@ static enum nb_wscons_reduce_result reduce_all_keys_up(
     size_t index;
 
     saturating_increment(&reducer->stats.keyboard_all_keys_up_events);
-    for (index = 0; index < NB_WSCONS_CONTROL_KEY_COUNT; ++index) {
-        struct nb_wscons_control_key_state *state =
-            &reducer->control_keys[index];
+    for (index = 0; index < NB_WSCONS_KEYCODE_CAPACITY; ++index) {
+        struct nb_wscons_key_state *state =
+            &reducer->keyboard_keys[index];
 
         if (state->pressed) {
-            reducer->pending_key_release_mask |=
-                UINT32_C(1) << (unsigned int)index;
+            const enum nb_wscons_control_key control =
+                control_key_for_keycode(reducer, (int)index);
+
             state->pressed = false;
+            state->release_pending = true;
+            ++reducer->pending_key_release_count;
+            if (control_key_is_valid(control)) {
+                reducer->control_keys[(size_t)control].pressed = false;
+                reducer->pending_key_release_mask |=
+                    UINT32_C(1) << (unsigned int)control;
+            }
         }
     }
-    if (reducer->pending_key_release_mask == 0) {
+    if (reducer->control_keys[NB_WSCONS_CONTROL_KEY_ESCAPE].keycode < 0 &&
+        reducer->control_keys[NB_WSCONS_CONTROL_KEY_ESCAPE].pressed) {
+        reducer->control_keys[NB_WSCONS_CONTROL_KEY_ESCAPE].pressed = false;
+        if ((reducer->pending_key_release_mask &
+             (UINT32_C(1) <<
+              (unsigned int)NB_WSCONS_CONTROL_KEY_ESCAPE)) == 0) {
+            reducer->pending_key_release_mask |=
+                UINT32_C(1) <<
+                (unsigned int)NB_WSCONS_CONTROL_KEY_ESCAPE;
+            ++reducer->pending_key_release_count;
+        }
+    }
+    if (reducer->pending_key_release_count == 0) {
         saturating_increment(&reducer->stats.keyboard_ignored_events);
         return NB_WSCONS_REDUCE_IGNORED;
     }
+    reducer->pending_key_release_cursor = 0;
     reducer->pending_key_release_milliseconds = raw_event->milliseconds;
     return nb_wscons_input_reducer_poll_pending(reducer, event);
 }
@@ -837,7 +1061,8 @@ static enum nb_wscons_reduce_result reduce_key_event(
     struct nb_host_event *event)
 {
     enum nb_wscons_control_key key;
-    struct nb_wscons_control_key_state *state;
+    struct nb_wscons_control_key_state *control_state;
+    struct nb_wscons_key_state *state;
     bool repeat;
 
     saturating_increment(&reducer->stats.keyboard_events);
@@ -846,10 +1071,17 @@ static enum nb_wscons_reduce_result reduce_key_event(
             saturating_increment(&reducer->stats.keyboard_ignored_events);
             return NB_WSCONS_REDUCE_IGNORED;
         }
-        state = &reducer->control_keys[
+        control_state = &reducer->control_keys[
             (size_t)NB_WSCONS_CONTROL_KEY_ESCAPE];
-        repeat = state->pressed;
-        state->pressed = true;
+        if (control_state->keycode >= 0) {
+            state = &reducer->keyboard_keys[
+                (size_t)control_state->keycode];
+            repeat = state->pressed;
+            state->pressed = true;
+        } else {
+            repeat = control_state->pressed;
+        }
+        control_state->pressed = true;
         set_escape_event(true, repeat, raw_event->milliseconds, event);
         record_emitted_key(reducer, repeat);
         return NB_WSCONS_REDUCE_EVENT;
@@ -857,20 +1089,31 @@ static enum nb_wscons_reduce_result reduce_key_event(
     if (raw_event->type == NB_WSCONS_RAW_EVENT_ALL_KEYS_UP) {
         return reduce_all_keys_up(reducer, raw_event, event);
     }
-    key = control_key_for_keycode(reducer, raw_event->value);
-    if (!control_key_is_valid(key)) {
+    if (raw_event->value < 0 ||
+        raw_event->value >= NB_WSCONS_KEYCODE_CAPACITY) {
         saturating_increment(&reducer->stats.keyboard_ignored_events);
         return NB_WSCONS_REDUCE_IGNORED;
     }
-    state = &reducer->control_keys[(size_t)key];
+    state = &reducer->keyboard_keys[(size_t)raw_event->value];
+    if (state->xkb_key_name[0] == '\0') {
+        saturating_increment(&reducer->stats.keyboard_ignored_events);
+        return NB_WSCONS_REDUCE_IGNORED;
+    }
+    key = control_key_for_keycode(reducer, raw_event->value);
+    control_state = control_key_is_valid(key)
+                        ? &reducer->control_keys[(size_t)key]
+                        : NULL;
     if (raw_event->type == NB_WSCONS_RAW_EVENT_KEY_DOWN) {
         repeat = state->pressed;
         state->pressed = true;
-        set_control_key_event(key,
-                              true,
-                              repeat,
-                              raw_event->milliseconds,
-                              event);
+        if (control_state != NULL) {
+            control_state->pressed = true;
+        }
+        set_key_event(state->xkb_key_name,
+                      true,
+                      repeat,
+                      raw_event->milliseconds,
+                      event);
         record_emitted_key(reducer, repeat);
         return NB_WSCONS_REDUCE_EVENT;
     }
@@ -880,11 +1123,14 @@ static enum nb_wscons_reduce_result reduce_key_event(
             return NB_WSCONS_REDUCE_IGNORED;
         }
         state->pressed = false;
-        set_control_key_event(key,
-                              false,
-                              false,
-                              raw_event->milliseconds,
-                              event);
+        if (control_state != NULL) {
+            control_state->pressed = false;
+        }
+        set_key_event(state->xkb_key_name,
+                      false,
+                      false,
+                      raw_event->milliseconds,
+                      event);
         record_emitted_key(reducer, false);
         return NB_WSCONS_REDUCE_EVENT;
     }
@@ -1016,7 +1262,7 @@ enum nb_wscons_reduce_result nb_wscons_input_reducer_apply(
         return NB_WSCONS_REDUCE_ERROR;
     }
     /* The caller must preserve ALL_KEYS_UP release ordering. */
-    if (reducer->pending_key_release_mask != 0) {
+    if (reducer->pending_key_release_count != 0) {
         return NB_WSCONS_REDUCE_ERROR;
     }
 
@@ -1068,9 +1314,84 @@ struct nb_wscons_input *nb_wscons_input_create(int logical_width,
     return input;
 }
 
+static const char *const pc_xt_xkb_key_names[
+    NB_WSCONS_KEYCODE_CAPACITY] = {
+    [1] = "ESC",
+    [2] = "AE01", [3] = "AE02", [4] = "AE03", [5] = "AE04",
+    [6] = "AE05", [7] = "AE06", [8] = "AE07", [9] = "AE08",
+    [10] = "AE09", [11] = "AE10", [12] = "AE11", [13] = "AE12",
+    [14] = "BKSP", [15] = "TAB",
+    [16] = "AD01", [17] = "AD02", [18] = "AD03", [19] = "AD04",
+    [20] = "AD05", [21] = "AD06", [22] = "AD07", [23] = "AD08",
+    [24] = "AD09", [25] = "AD10", [26] = "AD11", [27] = "AD12",
+    [28] = "RTRN", [29] = "LCTL",
+    [30] = "AC01", [31] = "AC02", [32] = "AC03", [33] = "AC04",
+    [34] = "AC05", [35] = "AC06", [36] = "AC07", [37] = "AC08",
+    [38] = "AC09", [39] = "AC10", [40] = "AC11", [41] = "TLDE",
+    [42] = "LFSH", [43] = "BKSL",
+    [44] = "AB01", [45] = "AB02", [46] = "AB03", [47] = "AB04",
+    [48] = "AB05", [49] = "AB06", [50] = "AB07", [51] = "AB08",
+    [52] = "AB09", [53] = "AB10", [54] = "RTSH", [55] = "KPMU",
+    [56] = "LALT", [57] = "SPCE", [58] = "CAPS",
+    [59] = "FK01", [60] = "FK02", [61] = "FK03", [62] = "FK04",
+    [63] = "FK05", [64] = "FK06", [65] = "FK07", [66] = "FK08",
+    [67] = "FK09", [68] = "FK10", [69] = "NMLK", [70] = "SCLK",
+    [71] = "KP7", [72] = "KP8", [73] = "KP9", [74] = "KPSU",
+    [75] = "KP4", [76] = "KP5", [77] = "KP6", [78] = "KPAD",
+    [79] = "KP1", [80] = "KP2", [81] = "KP3", [82] = "KP0",
+    [83] = "KPDL", [86] = "LSGT", [87] = "FK11", [88] = "FK12",
+    [127] = "PAUS", [156] = "KPEN", [157] = "RCTL",
+    [181] = "KPDV", [183] = "PRSC", [184] = "RALT",
+    [199] = "HOME", [200] = "UP", [201] = "PGUP", [203] = "LEFT",
+    [205] = "RGHT", [207] = "END", [208] = "DOWN", [209] = "PGDN",
+    [210] = "INS", [211] = "DELE", [219] = "LWIN", [220] = "RWIN",
+    [221] = "MENU"
+};
+
+bool nb_wscons_input_reducer_set_pc_xt_keycodes(
+    struct nb_wscons_input_reducer *reducer)
+{
+    static const int control_keycodes[NB_WSCONS_CONTROL_KEY_COUNT] = {
+        [NB_WSCONS_CONTROL_KEY_ESCAPE] = 1,
+        [NB_WSCONS_CONTROL_KEY_F10] = 68,
+        [NB_WSCONS_CONTROL_KEY_UP] = 200,
+        [NB_WSCONS_CONTROL_KEY_DOWN] = 208,
+        [NB_WSCONS_CONTROL_KEY_LEFT] = 203,
+        [NB_WSCONS_CONTROL_KEY_RIGHT] = 205,
+        [NB_WSCONS_CONTROL_KEY_RETURN] = 28,
+        [NB_WSCONS_CONTROL_KEY_KP_ENTER] = 156
+    };
+    size_t index;
+
+    if (!reducer_is_valid(reducer) ||
+        reducer->stats.keyboard_binding_count != 0 ||
+        !keyboard_state_is_idle(reducer)) {
+        return false;
+    }
+    for (index = 0; index < NB_WSCONS_KEYCODE_CAPACITY; ++index) {
+        const char *const name = pc_xt_xkb_key_names[index];
+
+        if (name != NULL &&
+            !nb_wscons_input_reducer_set_keycode(reducer,
+                                                 (int)index,
+                                                 name)) {
+            return false;
+        }
+    }
+    for (index = 0; index < NB_WSCONS_CONTROL_KEY_COUNT; ++index) {
+        if (!nb_wscons_input_reducer_set_control_keycode(
+                reducer,
+                (enum nb_wscons_control_key)index,
+                control_keycodes[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 #if defined(__NetBSD__)
 
-static void clear_control_keycodes(
+static void clear_keyboard_keycodes(
     struct nb_wscons_input_reducer *reducer)
 {
     size_t index;
@@ -1079,7 +1400,10 @@ static void clear_control_keycodes(
         reducer->control_keys[index].keycode = -1;
         reducer->control_keys[index].pressed = false;
     }
+    memset(reducer->keyboard_keys, 0, sizeof(reducer->keyboard_keys));
     reducer->pending_key_release_mask = 0;
+    reducer->pending_key_release_count = 0;
+    reducer->pending_key_release_cursor = 0;
     reducer->pending_key_release_milliseconds = 0;
     reducer->stats.keyboard_binding_count = 0;
 }
@@ -1256,18 +1580,107 @@ static int find_control_keycode(
     }
 }
 
+static enum nb_wscons_mux_device_type mux_device_type(int native_type)
+{
+    switch (native_type) {
+    case WSMUX_MOUSE:
+        return NB_WSCONS_MUX_DEVICE_MOUSE;
+    case WSMUX_KBD:
+        return NB_WSCONS_MUX_DEVICE_KEYBOARD;
+    case WSMUX_MUX:
+        return NB_WSCONS_MUX_DEVICE_MUX;
+    case WSMUX_BELL:
+        return NB_WSCONS_MUX_DEVICE_BELL;
+    default:
+        return NB_WSCONS_MUX_DEVICE_UNKNOWN;
+    }
+}
+
+static bool query_keyboard_mux(int descriptor,
+                               struct wsmux_device_list *snapshot)
+{
+    enum nb_wscons_mux_device_type
+        types[NB_WSCONS_MUX_DEVICE_CAPACITY];
+    size_t index;
+
+    memset(snapshot, 0, sizeof(*snapshot));
+    if (ioctl(descriptor, WSMUXIO_LIST_DEVICES, snapshot) != 0 ||
+        snapshot->ndevices < 0 ||
+        snapshot->ndevices > WSMUX_MAXDEV ||
+        snapshot->ndevices > NB_WSCONS_MUX_DEVICE_CAPACITY) {
+        return false;
+    }
+    for (index = 0; index < (size_t)snapshot->ndevices; ++index) {
+        types[index] = mux_device_type(snapshot->devices[index].type);
+    }
+    return nb_wscons_input_mux_is_single_keyboard(
+        types,
+        (size_t)snapshot->ndevices);
+}
+
+static bool keyboard_mux_matches(
+    const struct wsmux_device_list *first,
+    const struct wsmux_device_list *second)
+{
+    int index;
+
+    if (first->ndevices != second->ndevices) {
+        return false;
+    }
+    for (index = 0; index < first->ndevices; ++index) {
+        if (first->devices[index].type != second->devices[index].type ||
+            first->devices[index].idx != second->devices[index].idx) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool pc_xt_us_map_is_supported(
+    int descriptor,
+    const struct wscons_keymap *map,
+    u_int map_length)
+{
+    u_int keyboard_type;
+    kbd_t encoding;
+
+    return map != NULL && map_length > 221 &&
+           ioctl(descriptor, WSKBDIO_GTYPE, &keyboard_type) == 0 &&
+           keyboard_type == WSKBD_TYPE_PC_XT &&
+           ioctl(descriptor, WSKBDIO_GETENCODING, &encoding) == 0 &&
+           encoding == KB_US &&
+           map[1].group1[0] == KS_Escape &&
+           map[28].group1[0] == KS_Return &&
+           map[42].group1[0] == KS_Shift_L &&
+           map[54].group1[0] == KS_Shift_R &&
+           map[57].group1[0] == KS_space &&
+           map[200].group1[0] == KS_Up &&
+           map[211].group1[0] == KS_Delete &&
+           map[219].group1[0] == KS_Meta_L &&
+           map[220].group1[0] == KS_Meta_R &&
+           map[221].group1[0] == KS_Menu;
+}
+
 static bool query_control_keycodes(
     int descriptor,
     int keycodes[NB_WSCONS_CONTROL_KEY_COUNT],
+    bool *pc_xt_us,
     int *system_error)
 {
+    struct wsmux_device_list mux_before;
+    struct wsmux_device_list mux_after;
     struct wskbd_map_data map_data;
     struct wscons_keymap *map;
+    bool mux_before_is_single;
+    bool mux_after_is_single;
+    bool map_is_supported = false;
     size_t index;
 
     for (index = 0; index < NB_WSCONS_CONTROL_KEY_COUNT; ++index) {
         keycodes[index] = -1;
     }
+    *pc_xt_us = false;
+    mux_before_is_single = query_keyboard_mux(descriptor, &mux_before);
     map = calloc(WSKBDIO_MAXMAPLEN, sizeof(*map));
     if (map == NULL) {
         *system_error = ENOMEM;
@@ -1280,6 +1693,9 @@ static bool query_control_keycodes(
     } else if (map_data.maplen > WSKBDIO_MAXMAPLEN) {
         *system_error = EOVERFLOW;
     } else {
+        map_is_supported = pc_xt_us_map_is_supported(descriptor,
+                                                     map,
+                                                     map_data.maplen);
         /* Enum order gives deterministic priority for pathological maps. */
         for (index = 0; index < NB_WSCONS_CONTROL_KEY_COUNT; ++index) {
             keycodes[index] = find_control_keycode(
@@ -1288,6 +1704,10 @@ static bool query_control_keycodes(
                 (enum nb_wscons_control_key)index,
                 keycodes);
         }
+        mux_after_is_single = query_keyboard_mux(descriptor, &mux_after);
+        *pc_xt_us = mux_before_is_single && mux_after_is_single &&
+                    keyboard_mux_matches(&mux_before, &mux_after) &&
+                    map_is_supported;
         if (keycodes[NB_WSCONS_CONTROL_KEY_ESCAPE] < 0) {
             *system_error = ENOENT;
         }
@@ -1298,6 +1718,7 @@ static bool query_control_keycodes(
 
 bool nb_wscons_input_resume(struct nb_wscons_input *input)
 {
+    bool pc_xt_us = false;
     int system_error = 0;
     int keycodes[NB_WSCONS_CONTROL_KEY_COUNT];
     size_t index;
@@ -1310,7 +1731,7 @@ bool nb_wscons_input_resume(struct nb_wscons_input *input)
     }
     clear_error(input);
     nb_wscons_input_reducer_reset(&input->reducer);
-    clear_control_keycodes(&input->reducer);
+    clear_keyboard_keycodes(&input->reducer);
     input->mouse_fd = open_input_device(mouse_path,
                                         false,
                                         WSMOUSEIO_SETVERSION,
@@ -1332,6 +1753,7 @@ bool nb_wscons_input_resume(struct nb_wscons_input *input)
     }
     if (!query_control_keycodes(input->keyboard_fd,
                                 keycodes,
+                                &pc_xt_us,
                                 &system_error)) {
         remember_error(input,
                        "Could not find Escape in the wscons keymap",
@@ -1340,24 +1762,38 @@ bool nb_wscons_input_resume(struct nb_wscons_input *input)
         close_descriptor(&input->mouse_fd);
         return false;
     }
-    for (index = 0; index < NB_WSCONS_CONTROL_KEY_COUNT; ++index) {
-        if (keycodes[index] >= 0 &&
-            !nb_wscons_input_reducer_set_control_keycode(
-                &input->reducer,
-                (enum nb_wscons_control_key)index,
-                keycodes[index])) {
+    if (pc_xt_us) {
+        if (!nb_wscons_input_reducer_set_pc_xt_keycodes(
+                &input->reducer)) {
             remember_error(input,
-                           "Could not configure the wscons control keymap",
+                           "Could not configure the PC-XT wscons keymap",
                            EINVAL);
-            close_descriptor(&input->keyboard_fd);
-            close_descriptor(&input->mouse_fd);
-            clear_control_keycodes(&input->reducer);
-            return false;
+            goto keymap_error;
+        }
+    } else {
+        for (index = 0; index < NB_WSCONS_CONTROL_KEY_COUNT; ++index) {
+            if (keycodes[index] >= 0 &&
+                !nb_wscons_input_reducer_set_control_keycode(
+                    &input->reducer,
+                    (enum nb_wscons_control_key)index,
+                    keycodes[index])) {
+                remember_error(
+                    input,
+                    "Could not configure the wscons control keymap",
+                    EINVAL);
+                goto keymap_error;
+            }
         }
     }
     input->prefer_mouse = true;
     input->active = true;
     return true;
+
+keymap_error:
+    close_descriptor(&input->keyboard_fd);
+    close_descriptor(&input->mouse_fd);
+    clear_keyboard_keycodes(&input->reducer);
+    return false;
 }
 
 void nb_wscons_input_suspend(struct nb_wscons_input *input)

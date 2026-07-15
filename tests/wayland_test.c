@@ -17,6 +17,7 @@
 
 #include "nixbench-application-menu-v1-client-protocol.h"
 #include "wayland_server.h"
+#include "wscons_input.h"
 #include "xdg-shell-client-protocol.h"
 
 static int failures;
@@ -163,6 +164,9 @@ struct client_state {
     bool keyboard_keymap_terminated;
     bool keyboard_keymap_has_header;
     bool keyboard_keycodes_valid;
+    bool keyboard_key_a_is_lowercase;
+    bool keyboard_shift_a_is_uppercase;
+    bool keyboard_pc_xt_profile_resolves;
     uint32_t keyboard_key_a;
     uint32_t keyboard_key_left_shift;
     uint32_t keyboard_key_space;
@@ -565,6 +569,11 @@ static void keyboard_keymap(void *data,
                     XKB_KEYMAP_COMPILE_NO_FLAGS);
             }
             if (keymap != NULL) {
+                struct nb_wscons_input_reducer pc_xt_profile;
+                struct xkb_state *xkb_state;
+                char text[8];
+                size_t profile_index;
+
                 key_a = xkb_keymap_key_by_name(keymap, "AC01");
                 key_left_shift =
                     xkb_keymap_key_by_name(keymap, "LFSH");
@@ -585,6 +594,45 @@ static void keyboard_keymap(void *data,
                     state->keyboard_key_space =
                         (uint32_t)(key_space - UINT32_C(8));
                     state->keyboard_keycodes_valid = true;
+                }
+                xkb_state = state->keyboard_keycodes_valid
+                                ? xkb_state_new(keymap)
+                                : NULL;
+                if (xkb_state != NULL) {
+                    state->keyboard_key_a_is_lowercase =
+                        xkb_state_key_get_utf8(xkb_state,
+                                               key_a,
+                                               text,
+                                               sizeof(text)) == 1 &&
+                        strcmp(text, "a") == 0;
+                    (void)xkb_state_update_key(xkb_state,
+                                               key_left_shift,
+                                               XKB_KEY_DOWN);
+                    state->keyboard_shift_a_is_uppercase =
+                        xkb_state_key_get_utf8(xkb_state,
+                                               key_a,
+                                               text,
+                                               sizeof(text)) == 1 &&
+                        strcmp(text, "A") == 0;
+                    xkb_state_unref(xkb_state);
+                }
+                state->keyboard_pc_xt_profile_resolves =
+                    nb_wscons_input_reducer_init(&pc_xt_profile, 1, 1) &&
+                    nb_wscons_input_reducer_set_pc_xt_keycodes(
+                        &pc_xt_profile);
+                for (profile_index = 0;
+                     state->keyboard_pc_xt_profile_resolves &&
+                     profile_index < NB_WSCONS_KEYCODE_CAPACITY;
+                     ++profile_index) {
+                    const char *const name =
+                        pc_xt_profile.keyboard_keys[profile_index]
+                            .xkb_key_name;
+
+                    if (name[0] != '\0' &&
+                        xkb_keymap_key_by_name(keymap, name) ==
+                            XKB_KEYCODE_INVALID) {
+                        state->keyboard_pc_xt_profile_resolves = false;
+                    }
                 }
             }
         }
@@ -1357,6 +1405,9 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(client.keyboard_keymap_terminated);
     CHECK(client.keyboard_keymap_has_header);
     CHECK(client.keyboard_keycodes_valid);
+    CHECK(client.keyboard_key_a_is_lowercase);
+    CHECK(client.keyboard_shift_a_is_uppercase);
+    CHECK(client.keyboard_pc_xt_profile_resolves);
     CHECK(client.keyboard_repeat_count == 1);
     CHECK(client.keyboard_repeat_rate == 25);
     CHECK(client.keyboard_repeat_delay == 600);

@@ -1232,6 +1232,7 @@ if(BUILD_TESTING)
       nixbench_wayland_tests
       PRIVATE
         nixbench_wayland
+        nixbench_wscons_input
         "${NIXBENCH_WAYLAND_CLIENT_LIBRARY}"
         "${NIXBENCH_XKBCOMMON_LIBRARY}"
     )

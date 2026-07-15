@@ -176,6 +176,16 @@ The selected initial application will open automatically:
   $application
 Its execution occurs only after the desktop core has dropped privileges.
 EOF
+    if [ "${application##*/}" = run-midori-content-probe.sh ]; then
+        cat <<EOF
+After the fixed page appears, test the PC-XT keyboard path with Ctrl-L. Type:
+
+  data:text/plain,nixbench-keyboard
+
+Use Backspace or the arrow keys to edit it, then press Return. Midori should
+replace the page with the text "nixbench-keyboard" without using the network.
+EOF
+    fi
 else
     cat <<EOF
 NixClock will open automatically. Its menus are installed into the global bar:

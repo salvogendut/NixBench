@@ -126,10 +126,15 @@ same canonical CPU frame without initializing SDL video. A separate,
 explicit `--interactive-preview` research mode temporarily owns the fixed
 `/dev/wskbd` and `/dev/wsmouse` mux aliases, adds a software cursor, routes the
 left button to menus and window dragging, and queries the active wscons keymap
-for the bounded shell controls Escape, F10, the four arrows, Return, and keypad
-Enter. F10 and those navigation keys drive the global menu path; Escape also
-provides an orderly early exit. Repeated downs are marked as repeats and
-`ALL_KEYS_UP` synthesizes every held control release. A new explicit
+and keyboard type. A stable mux containing exactly one direct PC-XT keyboard
+that reports exact `KB_US` encoding and required physical sentinels uses a
+bounded physical XKB profile for letters, digits, punctuation, modifiers,
+navigation, function keys, and the keypad. USB, mixed/multiple, variant,
+hot-plugged, and unknown configurations retain the proven Escape, F10, arrow,
+Return, and keypad-Enter fallback. F10 and those navigation keys drive the
+global menu path; Escape also provides an orderly early exit.
+Repeated downs are marked as repeats and `ALL_KEYS_UP` synthesizes every held
+mapped-key release. A new explicit
 `--runtime-preview` replaces that lightweight scene
 with the same shared desktop runtime used by the hosted SDL frontend, including
 the real NixInfo application and application-owned global menus. It keeps
@@ -445,8 +450,8 @@ NIXBENCH_APPLICATION=/usr/pkg/bin/midori ./tools/run-wsdisplay-session.sh
 
 Midori's fresh Speed Dial contains no tiles until browsing history exists, so
 its page area can look empty even when WebKit is rendering correctly. Load a
-fixed, offline HTML page to verify browser content without general text input
-or network access:
+fixed, offline HTML page to verify browser content without typing or network
+access:
 
 ```sh
 NIXBENCH_APPLICATION="$PWD/tools/run-midori-content-probe.sh" \
@@ -668,8 +673,12 @@ temporarily opens only the fixed `/dev/wskbd` and `/dev/wsmouse` mux aliases.
 Relative pointer motion and the left button exercise menus and window dragging.
 The active-map F10, arrow, Return, keypad-Enter, and Escape bindings exercise
 the keyboard menu path; Escape requests an orderly early exit when no menu is
-open. Absolute-only pointer devices are not translated by this first research
-provider, and these limited controls are not general text or modifier input.
+open. On a stable single-keyboard PC-XT mux reporting exact `KB_US` plus the
+required sentinels, the same provider also emits the complete standard
+physical XKB set needed for standalone GTK text entries and shortcuts. USB,
+multiple, nested, variant, and unknown keyboard configurations retain only the
+bounded controls. Absolute-only pointer devices are not translated by this
+first research provider.
 
 The guided hardware run configures `RelWithDebInfo` by default so its pointer
 measurements are not dominated by unoptimized per-pixel diagnostic code. Set
@@ -809,18 +818,20 @@ This supplies the harness `--require-vt-cycle` option, which is accepted only
 for an interactive/runtime preview and fails unless the worker closes input,
 acknowledges release, reacquires and reconfigures, reopens input, and then
 completes a full redraw. It also rejects lifecycle timestamp regressions,
-missing timing samples, and a missing post-acquire frame. The keyboard
-menu-navigation bindings still require focused physical validation; the
-complete release/acquire cycle and Escape exit have already passed on the X220.
+missing timing samples, and a missing post-acquire frame. The complete release/
+acquire cycle and Escape exit have passed on the X220; the new full PC-XT text
+profile has deterministic reducer and XKB tests and awaits its focused Midori
+address-bar trial.
 
 Interactive input is acquired only by the framebuffer worker. Both mux
 descriptors are closed and held button/keyboard state is discarded before an
 acknowledged VT release and again during every cleanup path. The display
 adapter itself remains output-only. While `/dev/wskbd` is owned by the worker,
 normal console text translation and the usual keyboard VT-switch shortcuts are
-unavailable. NixBench's limited active-map shell controls remain available,
-but general text/modifier translation does not; this is another reason to keep
-SSH recovery open.
+unavailable. NixBench's own guarded PC-XT/exact-`KB_US` physical mapping remains
+available to its shell and focused Wayland clients; other
+configurations retain only the control fallback. Keep SSH recovery open while
+this hardware-specific profile remains experimental.
 
 Before forking the framebuffer worker, the parent records the console state in
 the root-only `/var/run/nixbench-wsdisplay-smoke.state`. The parent stays
@@ -838,8 +849,8 @@ sudo ./build/nixbench-wsdisplay-smoke --recover
 This all-root supervisor is a development safeguard, not the separate
 privilege-separated session described above or a production helper/watchdog.
 The worker still runs privileged, and its fixed-mux input is a short-lived
-research path rather than a general text/modifier keymap, hotplug, multi-device,
-production seat, or session implementation. The second acknowledgement
+research path rather than a layout-reconciled, hotplug, multi-device,
+production seat or session implementation. The second acknowledgement
 recognizes that supervisor
 failure still needs manual recovery. CTest exercises parsers, reducers,
 rendering, help, and refusal with synthetic input only; automated tests never
