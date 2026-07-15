@@ -111,18 +111,29 @@ static void copy_error(char destination[NB_PRIVSEP_CLIENT_ERROR_CAPACITY],
                        const char *operation,
                        int system_error)
 {
+    const char *parts[3];
+    size_t destination_used = 0;
+    size_t part_count;
+    size_t part_index;
+
+    parts[0] = operation != NULL ? operation : "Privsep host error";
     if (system_error != 0) {
-        (void)snprintf(destination,
-                       NB_PRIVSEP_CLIENT_ERROR_CAPACITY,
-                       "%s: %s",
-                       operation,
-                       strerror(system_error));
+        parts[1] = ": ";
+        parts[2] = strerror(system_error);
+        part_count = 3;
     } else {
-        (void)snprintf(destination,
-                       NB_PRIVSEP_CLIENT_ERROR_CAPACITY,
-                       "%s",
-                       operation);
+        part_count = 1;
     }
+    for (part_index = 0; part_index < part_count; ++part_index) {
+        const char *source = parts[part_index];
+
+        while (*source != '\0' &&
+               destination_used + 1U <
+                   NB_PRIVSEP_CLIENT_ERROR_CAPACITY) {
+            destination[destination_used++] = *source++;
+        }
+    }
+    destination[destination_used] = '\0';
 }
 
 static void set_creation_error(const char *operation, int system_error)
