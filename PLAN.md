@@ -406,9 +406,12 @@ A first guided `--runtime-preview` X220 trial completed on 2026-07-14. The
 physical console displayed the shared runtime and real NixInfo application
 through `wsdisplay` and wscons without X11, Wayland publication, or SDL video;
 the user confirmed it worked, and the guided postflight restored the console.
-The active-map keyboard menu controls and required VT-cycle path are implemented
-with device-free reducer/parser coverage but still await their X220 physical
-trial.
+The no-deadline required VT-cycle path was physically validated on 2026-07-15:
+VT release/acquire and input suspend/resume each balanced at 1/1, a
+post-acquire frame completed, Escape exited cleanly, and both supervisor and
+postflight verification restored screen 0 in emulation mode with automatic VT
+handling, video on, and VT 1 active. The remaining active-map menu-navigation
+bindings retain device-free coverage but still await a focused physical trial.
 
 ## Milestone 8: Add standalone X11 compatibility
 

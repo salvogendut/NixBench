@@ -113,9 +113,9 @@ supported 1366x768, 32-bit RGB framebuffer with a 5504-byte stride. This
 establishes both DRM/KMS and software `wsdisplay` as candidates. The bounded
 software path has since mapped and presented successfully for 2000 ms, then
 restored and verified the saved console state. DRM/KMS takeover, page flips,
-and page flips remain unvalidated. Physical pointer/runtime input is validated;
-the bounded keyboard controls and a complete VT release/reacquire cycle await
-the next guided trial.
+and modesetting remain unvalidated. Physical pointer/runtime input, the Escape
+exit binding, and a complete VT release/reacquire cycle are validated; the
+remaining active-map menu-navigation bindings await a focused guided trial.
 
 The CMake setting `NIXBENCH_LIBDRM=AUTO|ON|OFF` controls this detailed layer.
 `AUTO`, the default, enables it when all headers and the library are found and
@@ -310,8 +310,9 @@ return command. Required-cycle mode is valid only with an interactive/runtime
 preview and fails unless release/acquire and input suspend/resume counts form a
 complete balanced cycle, lifecycle timing has no regressions or missing
 samples, and a post-acquire frame completes. The implementation and
-device-free tests are ready; physical keyboard navigation and VT-cycle
-validation remain pending.
+device-free tests pass. The X220 physically validated the VT cycle and Escape
+exit on 2026-07-15; the remaining menu-navigation keys still need a focused
+physical trial.
 
 The hardware runner selects `RelWithDebInfo` unless
 `NIXBENCH_BUILD_TYPE` overrides it. Debug builds remain useful for correctness
@@ -397,6 +398,15 @@ well. The physical console displayed the shared runtime and real NixInfo
 application through `wsdisplay` and wscons with X11, Wayland publication, and
 SDL video absent. The user confirmed the scene worked, and the guided
 postflight restored and rechecked the console successfully.
+
+On 2026-07-15, the no-deadline required-cycle trial switched the X220 from VT
+1 to VT 2 and back. Release/acquire and input suspend/resume counts each
+balanced at 1/1 without timing regressions; release acknowledgement took 145
+ms, the suspended interval was 11383 ms, and acquire acknowledgement took 13
+ms. The post-acquire frame completed, Escape exited cleanly, and its
+input-associated frame completed in 5 ms. Supervisor and independent
+postflight checks restored screen 0 in emulation mode with automatic VT
+handling and video on, with one-based VT 1 active and no recovery record left.
 
 ### 3. Production supervised standalone sessions
 

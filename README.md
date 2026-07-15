@@ -210,7 +210,7 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
 - **NetBSD 11.0_RC6 (GENERIC), amd64 on a Lenovo ThinkPad X220** with Intel
   Sandy Bridge graphics and SDL3 3.4.2 from pkgsrc: a clean-machine setup,
   explicit `NIXBENCH_LIBDRM=ON` and `NIXBENCH_WAYLAND=ON` configuration, full
-  native build, and all 28 tests were confirmed working on July 14, 2026. The
+  native build, and all 32 tests were confirmed working on July 15, 2026. The
   kernel attaches `i915drmkms` and provides an `intelfb` console.
 
   The privileged query-only probe reports a supported 1366x768, 32-bit RGB
@@ -258,6 +258,16 @@ See [PLAN.md](PLAN.md) for milestones, deliverables, and exit criteria.
   NixInfo application through `wsdisplay`/wscons without X11, Wayland, or SDL
   video. The user confirmed the scene worked, and the guided postflight
   completed with the console restored.
+
+  On 2026-07-15, the no-deadline `--vt-cycle` runtime trial completed a
+  physical switch from VT 1 to VT 2 and back. Release/acquire requests and
+  completions and wscons input suspend/resume each balanced at 1/1 with no
+  timing regression. Release acknowledgement took 145 ms, the console stayed
+  away for 11383 ms, and acquire acknowledgement took 13 ms. Escape then
+  produced the orderly exit and its input-associated frame completed in 5 ms.
+  The supervisor verified the saved console state, the independent postflight
+  matched emulation mode, automatic VT handling, video-on state, and screen 0,
+  and the active one-based VT was again 1.
 
   A subsequent adaptive-pointer trial kept 888 of 1709 relative events at
   100% gain, put 626 at 101..149%, 186 at 150..199%, and 9 at 200..249%; it
