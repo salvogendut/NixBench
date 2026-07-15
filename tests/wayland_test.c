@@ -2654,6 +2654,15 @@ static void test_wayland_subsurface_lifecycle(void)
     CHECK(nb_wayland_server_window_count(server) == 0);
 
 cleanup:
+    if (child_buffer != NULL) {
+        wl_buffer_destroy(child_buffer);
+    }
+    if (root_buffer != NULL) {
+        wl_buffer_destroy(root_buffer);
+    }
+    if (pool != NULL) {
+        wl_shm_pool_destroy(pool);
+    }
     if (subsurface != NULL) {
         wl_subsurface_destroy(subsurface);
     }
@@ -2677,9 +2686,6 @@ cleanup:
     }
     if (pixels != MAP_FAILED) {
         (void)munmap(pixels, total_bytes);
-    }
-    if (pool != NULL) {
-        wl_shm_pool_destroy(pool);
     }
     if (shm_fd >= 0) {
         (void)close(shm_fd);
