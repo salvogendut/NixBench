@@ -24,6 +24,17 @@ case "$expect_supervisor_term" in
         fail "NIXBENCH_EXPECT_SUPERVISOR_TERM must be 0 or 1"
         ;;
 esac
+expect_core_failure=${NIXBENCH_EXPECT_CORE_FAILURE:-}
+case "$expect_core_failure" in
+    ''|crash|hang) ;;
+    *)
+        fail "NIXBENCH_EXPECT_CORE_FAILURE must be crash or hang"
+        ;;
+esac
+if [ "$expect_supervisor_term" -eq 1 ] &&
+   [ -n "$expect_core_failure" ]; then
+    fail "supervisor SIGTERM and core-failure gates are mutually exclusive"
+fi
 
 script_path=$0
 case "$script_path" in
@@ -106,7 +117,8 @@ if [ "${#original_vt}" -gt 3 ] || [ "$original_vt" -gt 256 ]; then
 fi
 
 away_vt=
-if [ "$expect_supervisor_term" -eq 0 ]; then
+if [ "$expect_supervisor_term" -eq 0 ] &&
+   [ -z "$expect_core_failure" ]; then
     away_vt=${NIXBENCH_VT_AWAY:-}
     if [ -z "$away_vt" ]; then
         if [ "$original_vt" -eq 2 ]; then
@@ -155,6 +167,39 @@ core/application session are gone, the saved console state is restored and
 verified, and the recovery record is removed. A normal desktop exit, a
 different signal, or incomplete recovery fails this trial.
 EOF
+elif [ "$expect_core_failure" = crash ]; then
+    cat <<EOF
+This is the core-crash recovery gate. Once the desktop is visible, do not quit
+it and do not switch VTs. Wait until the privileged launcher reports that the
+core-failure trigger is armed, then run the exact sudo kill -USR1 command it
+prints from the retained second SSH session. Signal the supervisor only; do not
+look up or signal the ordinary-user core PID yourself.
+
+SIGUSR1 asks the supervisor to inject an abrupt crash into its validated,
+ordinary-user core. The launcher succeeds only if that crash is observed, no
+independent supervision failure occurs, the worker and complete
+core/application session are gone, the saved console state is restored and
+verified, and the recovery record is removed. A normal exit, a heartbeat
+timeout, a different supervisor signal, or incomplete recovery fails this
+trial.
+EOF
+elif [ "$expect_core_failure" = hang ]; then
+    cat <<EOF
+This is the core-hang watchdog gate. Once the desktop is visible, do not quit
+it and do not switch VTs. Wait until the privileged launcher reports that the
+core-failure trigger is armed, then run the exact sudo kill -USR1 command it
+prints from the retained second SSH session. Signal the supervisor only; do not
+look up or signal the ordinary-user core PID yourself.
+
+SIGUSR1 asks the supervisor to stop its validated, ordinary-user core. The
+desktop should freeze until the heartbeat watchdog detects the hang and drives
+bounded cleanup; do not send SIGCONT. The launcher succeeds only if the
+heartbeat timeout is observed, no independent supervision failure occurs, the
+worker and complete core/application session are gone, the saved console state
+is restored and verified, and the recovery record is removed. A normal exit,
+a core crash, a different supervisor signal, or incomplete recovery fails this
+trial.
+EOF
 else
     cat <<EOF
 After closing NixClock, use the desktop's NixBench -> Quit command, or press
@@ -175,7 +220,9 @@ fi
 
 cat <<EOF
 Keep a second SSH session open. The launcher prints its supervisor PID and an
-exact SIGTERM command. If orderly cancellation fails, verify that no
+exact SIGTERM cancellation command. In a core-failure gate it also prints the
+exact SIGUSR1 trigger command once the ordinary-user core is validated and the
+trigger is armed. If orderly cancellation fails, verify that no
 nixbench-wsdisplay-session helper remains, then recover with:
 
   sudo $staged_session --recover
@@ -196,6 +243,12 @@ set +e
 if [ "$expect_supervisor_term" -eq 1 ]; then
     sudo -n "$staged_session" --acknowledge-console-takeover \
         --core "$core" --require-supervisor-sigterm
+elif [ "$expect_core_failure" = crash ]; then
+    sudo -n "$staged_session" --acknowledge-console-takeover \
+        --core "$core" --require-core-crash
+elif [ "$expect_core_failure" = hang ]; then
+    sudo -n "$staged_session" --acknowledge-console-takeover \
+        --core "$core" --require-core-hang
 else
     sudo -n "$staged_session" --acknowledge-console-takeover --core "$core"
 fi
@@ -236,6 +289,10 @@ fi
 
 if [ "$expect_supervisor_term" -eq 1 ]; then
     echo "==> Success: supervisor SIGTERM recovery and console restoration were verified"
+elif [ "$expect_core_failure" = crash ]; then
+    echo "==> Success: core-crash recovery and console restoration were verified"
+elif [ "$expect_core_failure" = hang ]; then
+    echo "==> Success: core-hang watchdog recovery and console restoration were verified"
 else
     echo "==> Success: NixBench exited and console restoration was verified"
 fi

@@ -47,7 +47,7 @@ bool nb_wsdisplay_session_parse_options(
     bool action_seen = false;
     bool core_seen = false;
     bool acknowledge_seen = false;
-    bool require_sigterm_seen = false;
+    bool recovery_gate_seen = false;
     int index;
 
     if (options != NULL) {
@@ -84,13 +84,26 @@ bool nb_wsdisplay_session_parse_options(
             continue;
         } else if (strcmp(argv[index],
                           "--require-supervisor-sigterm") == 0) {
-            if (require_sigterm_seen) {
+            if (recovery_gate_seen) {
                 set_error(error,
-                          "duplicate --require-supervisor-sigterm");
+                          "select exactly one required recovery gate");
                 return false;
             }
-            require_sigterm_seen = true;
+            recovery_gate_seen = true;
             parsed.require_supervisor_sigterm = true;
+            continue;
+        } else if (strcmp(argv[index], "--require-core-crash") == 0 ||
+                   strcmp(argv[index], "--require-core-hang") == 0) {
+            if (recovery_gate_seen) {
+                set_error(error,
+                          "select exactly one required recovery gate");
+                return false;
+            }
+            recovery_gate_seen = true;
+            parsed.required_core_failure =
+                strcmp(argv[index], "--require-core-crash") == 0
+                    ? NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH
+                    : NB_WSDISPLAY_SESSION_CORE_FAILURE_HANG;
             continue;
         } else if (strcmp(argv[index], "--core") == 0) {
             if (core_seen || index + 1 >= argc) {
@@ -119,7 +132,7 @@ bool nb_wsdisplay_session_parse_options(
     }
 
     if (action_seen &&
-        (acknowledge_seen || core_seen || require_sigterm_seen)) {
+        (acknowledge_seen || core_seen || recovery_gate_seen)) {
         set_error(error,
                   "run-only options cannot be combined with an action");
         return false;
@@ -139,6 +152,23 @@ bool nb_wsdisplay_session_sigterm_gate_passes(
     return gate != NULL &&
            gate->sigterm_received &&
            gate->sigterm_drove_shutdown &&
+           !gate->independent_failure &&
+           gate->worker_gone &&
+           gate->core_session_gone &&
+           gate->console_restored &&
+           gate->recovery_record_removed;
+}
+
+bool nb_wsdisplay_session_core_failure_gate_passes(
+    const struct nb_wsdisplay_session_core_failure_gate *gate)
+{
+    return gate != NULL &&
+           (gate->expected == NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH ||
+            gate->expected == NB_WSDISPLAY_SESSION_CORE_FAILURE_HANG) &&
+           gate->observed == gate->expected &&
+           gate->fault_trigger_received &&
+           gate->fault_injection_delivered &&
+           !gate->supervisor_signal_received &&
            !gate->independent_failure &&
            gate->worker_gone &&
            gate->core_session_gone &&
@@ -289,6 +319,8 @@ int nb_wsdisplay_session_run(
 #include "host_wsdisplay.h"
 #include "privsep_helper.h"
 #include "session_credentials.h"
+#include "session_runtime_sentinel.h"
+#include "session_watchdog.h"
 #include "wscons_input.h"
 #include "wsdisplay_console_session.h"
 #include "wsdisplay_recovery.h"
@@ -297,14 +329,34 @@ enum {
     NB_SESSION_ACK_FLUSH_TIMEOUT_MS = 2000,
     NB_SESSION_CORE_ORDERLY_GRACE_MS = 4000,
     NB_SESSION_CORE_SIGNAL_GRACE_MS = 2000,
-    NB_SESSION_WORKER_ORDERLY_GRACE_MS = 7000,
+    NB_SESSION_RUNTIME_SENTINEL_TIMEOUT_MS = 3000,
+    NB_SESSION_RUNTIME_SENTINEL_SIGNAL_MS = 2000,
+    NB_SESSION_RUNTIME_SENTINEL_KILL_MS = 2000,
+    NB_SESSION_WORKER_ORDERLY_GRACE_MS =
+        NB_SESSION_ACK_FLUSH_TIMEOUT_MS +
+        NB_SESSION_CORE_ORDERLY_GRACE_MS +
+        4 * NB_SESSION_CORE_SIGNAL_GRACE_MS +
+        2 * NB_SESSION_RUNTIME_SENTINEL_TIMEOUT_MS +
+        NB_SESSION_RUNTIME_SENTINEL_SIGNAL_MS +
+        NB_SESSION_RUNTIME_SENTINEL_KILL_MS + 1000,
     NB_SESSION_WORKER_SIGNAL_GRACE_MS = 2000,
+    NB_SESSION_FAULT_GATE_TIMEOUT_MS =
+        NB_SESSION_WATCHDOG_PING_INTERVAL_MS +
+        NB_SESSION_WATCHDOG_PONG_TIMEOUT_MS +
+        NB_SESSION_WORKER_ORDERLY_GRACE_MS,
+    NB_SESSION_CORE_REPORT_TIMEOUT_MS =
+        NB_SESSION_WATCHDOG_STARTUP_GRACE_MS + 10000,
     NB_SESSION_WAIT_SLICE_MS = 20,
     NB_SESSION_IDLE_WAIT_MS = 50,
-    NB_SESSION_HEARTBEAT_INTERVAL_MS = 1000,
-    NB_SESSION_HEARTBEAT_TIMEOUT_MS = 3000,
     NB_SESSION_IO_BATCH = 64,
-    NB_SESSION_WORKER_CLEANUP_INCOMPLETE_EXIT = 2
+    NB_SESSION_WORKER_CLEANUP_INCOMPLETE_EXIT = 2,
+    NB_SESSION_WORKER_CORE_CRASH_EXIT = 3,
+    NB_SESSION_WORKER_CORE_HANG_EXIT = 4
+};
+
+enum nb_session_fault_command {
+    NB_SESSION_FAULT_COMMAND_CRASH = 1,
+    NB_SESSION_FAULT_COMMAND_HANG = 2
 };
 
 static const char status_device[] = "/dev/ttyEstat";
@@ -535,6 +587,7 @@ struct worker_context {
     struct nb_wscons_input *input;
     struct nb_privsep_helper *helper;
     int socket_fd;
+    int fault_fd;
     pid_t core_pid;
     struct nb_wsdisplay_session_frame_state frame;
     uint64_t submitted_generation;
@@ -673,6 +726,34 @@ static bool drain_core(struct worker_context *worker, bool *eof)
     return true;
 }
 
+static bool take_fault_command(struct worker_context *worker,
+                               bool *received,
+                               enum nb_session_fault_command *command)
+{
+    unsigned char value;
+    ssize_t count;
+
+    *received = false;
+    do {
+        count = read(worker->fault_fd, &value, sizeof(value));
+    } while (count < 0 && errno == EINTR);
+    if (count == 0) {
+        errno = EPIPE;
+        return false;
+    }
+    if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        return true;
+    }
+    if (count != (ssize_t)sizeof(value) ||
+        (value != NB_SESSION_FAULT_COMMAND_CRASH &&
+         value != NB_SESSION_FAULT_COMMAND_HANG)) {
+        return false;
+    }
+    *received = true;
+    *command = (enum nb_session_fault_command)value;
+    return true;
+}
+
 static bool drain_input(struct worker_context *worker)
 {
     size_t batch;
@@ -767,8 +848,8 @@ static bool handle_host_event(struct worker_context *worker,
 
 static bool wait_for_worker_event(struct worker_context *worker)
 {
-    int descriptors[1 + NB_WSCONS_INPUT_WAIT_DESCRIPTOR_COUNT];
-    size_t count = 1;
+    int descriptors[2 + NB_WSCONS_INPUT_WAIT_DESCRIPTOR_COUNT];
+    size_t count = 2;
     struct nb_host_event event;
     struct nb_host_fd_wait_result result;
     enum nb_host_event_status status;
@@ -777,9 +858,10 @@ static bool wait_for_worker_event(struct worker_context *worker)
                            : NB_SESSION_IDLE_WAIT_MS;
 
     descriptors[0] = worker->socket_fd;
+    descriptors[1] = worker->fault_fd;
     if (nb_wscons_input_is_active(worker->input)) {
         if (!nb_wscons_input_get_wait_descriptors(worker->input,
-                                                   descriptors + 1)) {
+                                                   descriptors + 2)) {
             return false;
         }
         count += NB_WSCONS_INPUT_WAIT_DESCRIPTOR_COUNT;
@@ -888,11 +970,15 @@ static bool stop_core(pid_t child,
                       int *status,
                       bool *cleanup_complete)
 {
-    bool reaped = wait_child(
-        child,
-        add_milliseconds(monotonic_milliseconds(),
-                         NB_SESSION_CORE_ORDERLY_GRACE_MS),
-        status);
+    bool reaped = false;
+
+    if (orderly) {
+        reaped = wait_child(
+            child,
+            add_milliseconds(monotonic_milliseconds(),
+                             NB_SESSION_CORE_ORDERLY_GRACE_MS),
+            status);
+    }
 
     if (!reaped) {
         signal_core_session(child, SIGTERM);
@@ -916,6 +1002,131 @@ static bool stop_core(pid_t child,
     return *cleanup_complete &&
            (!orderly ||
             (WIFEXITED(*status) && WEXITSTATUS(*status) == 0));
+}
+
+static bool contain_crashed_core(pid_t child,
+                                 int *status,
+                                 bool *cleanup_complete)
+{
+    bool reaped;
+
+    reaped = wait_child(
+        child,
+        add_milliseconds(monotonic_milliseconds(),
+                         NB_SESSION_CORE_SIGNAL_GRACE_MS),
+        status);
+    if (!reaped) {
+        if (kill(child, SIGKILL) != 0 && errno != ESRCH) {
+            fprintf(stderr,
+                    "Could not re-signal crashed core %ld: %s\n",
+                    (long)child,
+                    strerror(errno));
+        }
+        reaped = wait_child(
+            child,
+            add_milliseconds(monotonic_milliseconds(),
+                             NB_SESSION_CORE_SIGNAL_GRACE_MS),
+            status);
+    }
+    *cleanup_complete = reaped &&
+                        stop_reaped_core_process_group(child);
+    return *cleanup_complete && WIFSIGNALED(*status) &&
+           WTERMSIG(*status) == SIGKILL;
+}
+
+static void signal_runtime_sentinel(pid_t child, int signal_number)
+{
+    if (child > 0 && kill(child, signal_number) != 0 && errno != ESRCH) {
+        fprintf(stderr,
+                "Could not signal runtime sentinel %ld: %s\n",
+                (long)child,
+                strerror(errno));
+    }
+}
+
+static bool finish_runtime_sentinel(pid_t child,
+                                    int *controller_fd,
+                                    bool ready,
+                                    bool core_session_gone,
+                                    bool *reaped,
+                                    int *status)
+{
+    char error[NB_SESSION_RUNTIME_SENTINEL_ERROR_CAPACITY];
+    bool cleanup_reported = !ready;
+    bool abort_cleanup = !core_session_gone;
+    bool forced = false;
+
+    if (child <= 0 || controller_fd == NULL || reaped == NULL ||
+        status == NULL) {
+        return child <= 0;
+    }
+    if (*reaped) {
+        if (*controller_fd >= 0) {
+            (void)close(*controller_fd);
+            *controller_fd = -1;
+        }
+        return false;
+    }
+    if (!core_session_gone) {
+        forced = true;
+        signal_runtime_sentinel(child, SIGKILL);
+    } else {
+        if (ready && *controller_fd >= 0) {
+            cleanup_reported =
+                nb_session_runtime_sentinel_request_cleanup(
+                    *controller_fd,
+                    NB_SESSION_RUNTIME_SENTINEL_TIMEOUT_MS,
+                    error);
+            if (!cleanup_reported) {
+                fprintf(stderr,
+                        "Runtime sentinel cleanup failed: %s\n",
+                        error[0] != '\0' ? error : "no CLEANED response");
+            }
+        }
+        if (*controller_fd >= 0) {
+            (void)close(*controller_fd);
+            *controller_fd = -1;
+        }
+    }
+
+    *reaped = wait_child(
+        child,
+        add_milliseconds(monotonic_milliseconds(),
+                         forced ? NB_SESSION_RUNTIME_SENTINEL_KILL_MS
+                                : NB_SESSION_RUNTIME_SENTINEL_TIMEOUT_MS),
+        status);
+    if (!*reaped) {
+        forced = true;
+        if (!abort_cleanup) {
+            signal_runtime_sentinel(child, SIGTERM);
+            signal_runtime_sentinel(child, SIGCONT);
+            *reaped = wait_child(
+                child,
+                add_milliseconds(monotonic_milliseconds(),
+                                 NB_SESSION_RUNTIME_SENTINEL_SIGNAL_MS),
+                status);
+        }
+        if (!*reaped) {
+            signal_runtime_sentinel(child, SIGKILL);
+            *reaped = wait_child(
+                child,
+                add_milliseconds(monotonic_milliseconds(),
+                                 NB_SESSION_RUNTIME_SENTINEL_KILL_MS),
+                status);
+        }
+    }
+    if (*controller_fd >= 0) {
+        (void)close(*controller_fd);
+        *controller_fd = -1;
+    }
+    if (!*reaped) {
+        fprintf(stderr,
+                "Runtime sentinel %ld could not be reaped\n",
+                (long)child);
+        return false;
+    }
+    return !forced && cleanup_reported && WIFEXITED(*status) &&
+           WEXITSTATUS(*status) == 0;
 }
 
 static bool core_credentials(pid_t pid,
@@ -970,6 +1181,8 @@ static int run_device_worker(
     const char *core_path,
     const char *nixclock_path,
     int core_report_fd,
+    int fault_fd,
+    enum nb_wsdisplay_session_core_failure required_core_failure,
     int session_lock_fd)
 {
     struct nb_host_wsdisplay_options host_options;
@@ -977,32 +1190,52 @@ static int run_device_worker(
     struct nb_privsep_output output;
     struct nb_privsep_credentials expected;
     struct nb_privsep_helper_options helper_options;
+    struct nb_session_watchdog watchdog;
     struct worker_context worker;
     int sockets[2] = {-1, -1};
+    int sentinel_sockets[2] = {-1, -1};
+    int sentinel_fd = -1;
     sigset_t previous_mask;
+    char runtime_path[NB_SESSION_RUNTIME_SENTINEL_PATH_CAPACITY] = {0};
+    char runtime_error[NB_SESSION_RUNTIME_SENTINEL_ERROR_CAPACITY];
+    char *sentinel_argv[] = {
+        (char *)core_path,
+        "--runtime-sentinel",
+        "--ipc-fd",
+        "3",
+        NULL
+    };
     char *core_argv[] = {
         (char *)core_path,
         "--ipc-fd",
         "3",
         "--launch",
         (char *)nixclock_path,
+        "--runtime-dir",
+        runtime_path,
         NULL
     };
-    uint64_t startup_deadline;
-    uint64_t next_ping;
-    uint64_t pong_deadline = 0;
-    uint64_t ping_token = 1;
     bool signals_blocked = false;
     bool success = false;
     bool orderly = false;
     bool core_reported = false;
     bool core_reaped = false;
     bool core_cleanup_complete = true;
+    bool sentinel_ready = false;
+    bool sentinel_reaped = false;
+    bool runtime_cleanup_complete = true;
+    bool crash_containment = false;
+    bool heartbeat_expired = false;
+    enum nb_wsdisplay_session_core_failure injected_core_failure =
+        NB_WSDISPLAY_SESSION_CORE_FAILURE_NONE;
     int core_status = 0;
+    int sentinel_status = 0;
+    pid_t sentinel_pid = -1;
     int one = 1;
 
     memset(&worker, 0, sizeof(worker));
     worker.socket_fd = -1;
+    worker.fault_fd = fault_fd;
     nb_wsdisplay_session_frame_state_init(&worker.frame);
     if (!block_worker_termination(&previous_mask)) {
         goto cleanup;
@@ -1011,6 +1244,53 @@ static int run_device_worker(
     if (!ignore_worker_sigpipe()) {
         goto cleanup;
     }
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sentinel_sockets) != 0 ||
+        !set_cloexec(sentinel_sockets[0], true) ||
+        !set_cloexec(sentinel_sockets[1], true) ||
+        setsockopt(sentinel_sockets[0],
+                   SOL_SOCKET,
+                   SO_NOSIGPIPE,
+                   &one,
+                   sizeof(one)) != 0 ||
+        setsockopt(sentinel_sockets[1],
+                   SOL_SOCKET,
+                   SO_NOSIGPIPE,
+                   &one,
+                   sizeof(one)) != 0) {
+        goto cleanup;
+    }
+    sentinel_pid = fork();
+    if (sentinel_pid < 0) {
+        goto cleanup;
+    }
+    if (sentinel_pid == 0) {
+        (void)close(sentinel_sockets[0]);
+        (void)close(core_report_fd);
+        (void)close(fault_fd);
+        (void)close(session_lock_fd);
+        nb_session_credentials_drop_and_exec(credentials,
+                                             sentinel_sockets[1],
+                                             core_path,
+                                             sentinel_argv);
+    }
+    runtime_cleanup_complete = false;
+    (void)close(sentinel_sockets[1]);
+    sentinel_sockets[1] = -1;
+    sentinel_fd = sentinel_sockets[0];
+    sentinel_sockets[0] = -1;
+    if (!nb_session_runtime_sentinel_wait_ready(
+            sentinel_fd,
+            NB_SESSION_RUNTIME_SENTINEL_TIMEOUT_MS,
+            runtime_path,
+            runtime_error)) {
+        fprintf(stderr,
+                "Runtime sentinel startup failed: %s\n",
+                runtime_error[0] != '\0' ? runtime_error
+                                         : "no READY response");
+        goto cleanup;
+    }
+    sentinel_ready = true;
+
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) != 0 ||
         !set_cloexec(sockets[0], true) ||
         !set_cloexec(sockets[1], true) ||
@@ -1032,6 +1312,7 @@ static int run_device_worker(
     }
     if (worker.core_pid == 0) {
         (void)close(sockets[0]);
+        (void)close(sentinel_fd);
         (void)close(core_report_fd);
         (void)close(session_lock_fd);
         nb_session_credentials_drop_and_exec(credentials,
@@ -1043,7 +1324,8 @@ static int run_device_worker(
     sockets[1] = -1;
     worker.socket_fd = sockets[0];
     sockets[0] = -1;
-    if (!set_nonblocking(worker.socket_fd)) {
+    if (!set_nonblocking(worker.socket_fd) ||
+        !set_nonblocking(worker.fault_fd)) {
         goto cleanup;
     }
 
@@ -1077,17 +1359,26 @@ static int run_device_worker(
     }
     signals_blocked = false;
 
-    startup_deadline = add_milliseconds(monotonic_milliseconds(),
-                                        NB_SESSION_HEARTBEAT_TIMEOUT_MS);
-    next_ping = add_milliseconds(monotonic_milliseconds(),
-                                 NB_SESSION_HEARTBEAT_INTERVAL_MS);
+    nb_session_watchdog_init(&watchdog, monotonic_milliseconds());
     for (;;) {
         bool eof;
         uint64_t now;
         uint64_t pong;
+        uint64_t ping_token;
         uint64_t shutdown_id;
+        enum nb_session_watchdog_action watchdog_action;
         pid_t waited;
+        bool fault_received;
+        enum nb_session_fault_command fault_command;
 
+        waited = waitpid(sentinel_pid, &sentinel_status, WNOHANG);
+        if (waited == sentinel_pid) {
+            sentinel_reaped = true;
+            break;
+        }
+        if (waited < 0 && errno != EINTR) {
+            break;
+        }
         waited = waitpid(worker.core_pid, &core_status, WNOHANG);
         if (waited == worker.core_pid) {
             core_reaped = true;
@@ -1096,7 +1387,44 @@ static int run_device_worker(
         if (waited < 0 && errno != EINTR) {
             break;
         }
+        if (!take_fault_command(&worker,
+                                &fault_received,
+                                &fault_command)) {
+            break;
+        }
+        if (fault_received) {
+            const enum nb_wsdisplay_session_core_failure requested =
+                fault_command == NB_SESSION_FAULT_COMMAND_CRASH
+                    ? NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH
+                    : NB_WSDISPLAY_SESSION_CORE_FAILURE_HANG;
+            const int signal_number =
+                requested == NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH
+                    ? SIGKILL
+                    : SIGSTOP;
+
+            if (injected_core_failure !=
+                    NB_WSDISPLAY_SESSION_CORE_FAILURE_NONE ||
+                requested != required_core_failure ||
+                kill(worker.core_pid, signal_number) != 0) {
+                break;
+            }
+            injected_core_failure = requested;
+            printf("Device worker injected the required core %s.\n",
+                   requested == NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH
+                       ? "crash"
+                       : "hang");
+            (void)fflush(stdout);
+            if (requested == NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH) {
+                crash_containment = true;
+                break;
+            }
+        }
         if (!drain_core(&worker, &eof) || eof) {
+            break;
+        }
+        now = monotonic_milliseconds();
+        if (nb_privsep_helper_is_ready(worker.helper) &&
+            !nb_session_watchdog_note_ready(&watchdog, now)) {
             break;
         }
         if (!core_reported &&
@@ -1146,46 +1474,37 @@ static int run_device_worker(
             break;
         }
         now = monotonic_milliseconds();
-        if (!nb_privsep_helper_is_ready(worker.helper)) {
-            if (now >= startup_deadline) {
-                (void)nb_privsep_helper_report_fatal(
-                    worker.helper,
-                    NB_PRIVSEP_FATAL_CORE_UNRESPONSIVE,
-                    0,
-                    "desktop core handshake timed out");
-                (void)flush_helper(&worker);
-                break;
-            }
-        } else {
-            if (nb_privsep_helper_take_pong(worker.helper, &pong)) {
-                (void)pong;
-                next_ping = add_milliseconds(
-                    now,
-                    NB_SESSION_HEARTBEAT_INTERVAL_MS);
-            }
-            if (nb_privsep_helper_ping_outstanding(worker.helper)) {
-                if (now >= pong_deadline) {
-                    (void)nb_privsep_helper_report_fatal(
-                        worker.helper,
-                        NB_PRIVSEP_FATAL_CORE_UNRESPONSIVE,
-                        0,
-                        "desktop core heartbeat expired");
-                    (void)flush_helper(&worker);
-                    break;
-                }
-            } else if (now >= next_ping) {
-                if (!nb_privsep_helper_send_ping(worker.helper,
-                                                 ping_token)) {
-                    break;
-                }
-                ++ping_token;
-                if (ping_token == 0) {
-                    ping_token = 1;
-                }
-                pong_deadline = add_milliseconds(
-                    now,
-                    NB_SESSION_HEARTBEAT_TIMEOUT_MS);
-            }
+        if (nb_privsep_helper_take_pong(worker.helper, &pong) &&
+            !nb_session_watchdog_note_pong(&watchdog, pong, now)) {
+            break;
+        }
+        watchdog_action = nb_session_watchdog_advance(&watchdog,
+                                                       now,
+                                                       &ping_token);
+        if (watchdog_action ==
+            NB_SESSION_WATCHDOG_ACTION_STARTUP_EXPIRED) {
+            (void)nb_privsep_helper_report_fatal(
+                worker.helper,
+                NB_PRIVSEP_FATAL_CORE_UNRESPONSIVE,
+                0,
+                "desktop core handshake timed out");
+            (void)flush_helper(&worker);
+            break;
+        }
+        if (watchdog_action ==
+            NB_SESSION_WATCHDOG_ACTION_HEARTBEAT_EXPIRED) {
+            heartbeat_expired = true;
+            (void)nb_privsep_helper_report_fatal(
+                worker.helper,
+                NB_PRIVSEP_FATAL_CORE_UNRESPONSIVE,
+                0,
+                "desktop core heartbeat expired");
+            (void)flush_helper(&worker);
+            break;
+        }
+        if (watchdog_action == NB_SESSION_WATCHDOG_ACTION_SEND_PING &&
+            !nb_privsep_helper_send_ping(worker.helper, ping_token)) {
+            break;
         }
         if (!wait_for_worker_event(&worker)) {
             break;
@@ -1206,13 +1525,26 @@ cleanup:
     if (worker.socket_fd >= 0) {
         (void)close(worker.socket_fd);
     }
+    if (worker.fault_fd >= 0) {
+        (void)close(worker.fault_fd);
+    }
     if (sockets[0] >= 0) {
         (void)close(sockets[0]);
     }
     if (sockets[1] >= 0) {
         (void)close(sockets[1]);
     }
-    if (worker.core_pid > 0 && !core_reaped) {
+    if (sentinel_sockets[0] >= 0) {
+        (void)close(sentinel_sockets[0]);
+    }
+    if (sentinel_sockets[1] >= 0) {
+        (void)close(sentinel_sockets[1]);
+    }
+    if (worker.core_pid > 0 && !core_reaped && crash_containment) {
+        (void)contain_crashed_core(worker.core_pid,
+                                   &core_status,
+                                   &core_cleanup_complete);
+    } else if (worker.core_pid > 0 && !core_reaped) {
         success = stop_core(worker.core_pid,
                             success && orderly,
                             &core_status,
@@ -1222,6 +1554,18 @@ cleanup:
             stop_reaped_core_process_group(worker.core_pid);
         success = success && core_cleanup_complete && orderly &&
                   WIFEXITED(core_status) && WEXITSTATUS(core_status) == 0;
+    }
+    if (sentinel_pid > 0) {
+        runtime_cleanup_complete =
+            finish_runtime_sentinel(sentinel_pid,
+                                    &sentinel_fd,
+                                    sentinel_ready,
+                                    core_cleanup_complete,
+                                    &sentinel_reaped,
+                                    &sentinel_status);
+    } else if (sentinel_fd >= 0) {
+        (void)close(sentinel_fd);
+        sentinel_fd = -1;
     }
     if (session_lock_fd >= 0) {
         (void)close(session_lock_fd);
@@ -1234,17 +1578,29 @@ cleanup:
     if (signals_blocked) {
         (void)sigprocmask(SIG_SETMASK, &previous_mask, NULL);
     }
-    if (!core_cleanup_complete) {
+    if (!core_cleanup_complete || !runtime_cleanup_complete) {
         return NB_SESSION_WORKER_CLEANUP_INCOMPLETE_EXIT;
+    }
+    if (crash_containment && injected_core_failure ==
+            NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH &&
+        WIFSIGNALED(core_status) && WTERMSIG(core_status) == SIGKILL) {
+        return NB_SESSION_WORKER_CORE_CRASH_EXIT;
+    }
+    if (injected_core_failure == NB_WSDISPLAY_SESSION_CORE_FAILURE_HANG &&
+        heartbeat_expired) {
+        return NB_SESSION_WORKER_CORE_HANG_EXIT;
     }
     return success ? 0 : 1;
 }
 
 static const int supervisor_signals[] = {
-    SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGPIPE,
+    SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGPIPE, SIGUSR1,
     SIGTSTP, SIGTTIN, SIGTTOU
 };
 static volatile sig_atomic_t supervisor_signal;
+static volatile sig_atomic_t supervisor_fault_trigger;
+static volatile sig_atomic_t supervisor_fault_trigger_early;
+static volatile sig_atomic_t supervisor_fault_armed;
 
 struct supervisor_signal_state {
     struct sigaction saved[sizeof(supervisor_signals) /
@@ -1259,7 +1615,13 @@ struct supervisor_signal_state {
 
 static void supervisor_signal_handler(int signal_number)
 {
-    if (supervisor_signal == 0) {
+    if (signal_number == SIGUSR1) {
+        if (supervisor_fault_armed) {
+            supervisor_fault_trigger = 1;
+        } else {
+            supervisor_fault_trigger_early = 1;
+        }
+    } else if (supervisor_signal == 0) {
         supervisor_signal = signal_number;
     }
 }
@@ -1292,6 +1654,9 @@ static bool prepare_supervisor_signals(
     action.sa_handler = supervisor_signal_handler;
     action.sa_mask = state->set;
     supervisor_signal = 0;
+    supervisor_fault_trigger = 0;
+    supervisor_fault_trigger_early = 0;
+    supervisor_fault_armed = 0;
     for (index = 0;
          index < sizeof(supervisor_signals) / sizeof(supervisor_signals[0]);
          ++index) {
@@ -1387,11 +1752,48 @@ static bool signal_process(pid_t process, int signal_number)
     return false;
 }
 
+static bool arm_supervisor_fault_trigger(
+    enum nb_wsdisplay_session_core_failure required_core_failure)
+{
+    sigset_t blocked;
+    sigset_t previous;
+    bool printed;
+
+    if (required_core_failure ==
+        NB_WSDISPLAY_SESSION_CORE_FAILURE_NONE) {
+        return true;
+    }
+    if (sigemptyset(&blocked) != 0 || sigaddset(&blocked, SIGUSR1) != 0 ||
+        sigprocmask(SIG_BLOCK, &blocked, &previous) != 0) {
+        return false;
+    }
+    printed = printf("Required core %s trigger armed: sudo -n "
+                     "/bin/kill -USR1 %ld\n",
+                     required_core_failure ==
+                             NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH
+                         ? "crash"
+                         : "hang",
+                     (long)getpid()) >= 0 &&
+              fflush(stdout) == 0;
+    if (printed) {
+        supervisor_fault_armed = 1;
+    }
+    if (sigprocmask(SIG_SETMASK, &previous, NULL) != 0) {
+        supervisor_fault_armed = 0;
+        return false;
+    }
+    return printed;
+}
+
 struct supervision_result {
     int status;
     bool worker_gone;
+    bool worker_cleanup_complete;
     bool core_session_gone;
     bool sigterm_drove_shutdown;
+    bool fault_trigger_received;
+    bool fault_injection_delivered;
+    enum nb_wsdisplay_session_core_failure observed_core_failure;
     bool independent_failure;
 };
 
@@ -1401,16 +1803,23 @@ static struct supervision_result supervise_device_worker(
     const char *core_path,
     const char *nixclock_path,
     int session_lock_fd,
+    enum nb_wsdisplay_session_core_failure required_core_failure,
     const struct supervisor_signal_state *signals)
 {
     struct supervision_result outcome = {
         .status = 1,
         .worker_gone = true,
+        .worker_cleanup_complete = true,
         .core_session_gone = true,
         .sigterm_drove_shutdown = false,
+        .fault_trigger_received = false,
+        .fault_injection_delivered = false,
+        .observed_core_failure =
+            NB_WSDISPLAY_SESSION_CORE_FAILURE_NONE,
         .independent_failure = true
     };
     int report_pipe[2] = {-1, -1};
+    int fault_pipe[2] = {-1, -1};
     pid_t worker;
     pid_t core = -1;
     int status = 0;
@@ -1422,18 +1831,29 @@ static struct supervision_result supervise_device_worker(
     bool term_sent = false;
     bool kill_sent = false;
     bool wait_failed = false;
+    bool fault_trigger_handled = false;
+    bool fault_command_sent = false;
     uint64_t report_deadline;
     uint64_t orderly_deadline = 0;
     uint64_t escalation_deadline = 0;
+    uint64_t fault_deadline = 0;
 
-    if (pipe(report_pipe) != 0 ||
+    if (pipe(report_pipe) != 0 || pipe(fault_pipe) != 0 ||
         !set_cloexec(report_pipe[0], true) ||
-        !set_cloexec(report_pipe[1], true)) {
+        !set_cloexec(report_pipe[1], true) ||
+        !set_cloexec(fault_pipe[0], true) ||
+        !set_cloexec(fault_pipe[1], true)) {
         if (report_pipe[0] >= 0) {
             (void)close(report_pipe[0]);
         }
         if (report_pipe[1] >= 0) {
             (void)close(report_pipe[1]);
+        }
+        if (fault_pipe[0] >= 0) {
+            (void)close(fault_pipe[0]);
+        }
+        if (fault_pipe[1] >= 0) {
+            (void)close(fault_pipe[1]);
         }
         return outcome;
     }
@@ -1441,27 +1861,34 @@ static struct supervision_result supervise_device_worker(
     if (worker < 0) {
         (void)close(report_pipe[0]);
         (void)close(report_pipe[1]);
+        (void)close(fault_pipe[0]);
+        (void)close(fault_pipe[1]);
         return outcome;
     }
     outcome.worker_gone = false;
+    outcome.worker_cleanup_complete = false;
     outcome.core_session_gone = false;
     outcome.independent_failure = false;
     if (worker == 0) {
         int result;
 
         (void)close(report_pipe[0]);
+        (void)close(fault_pipe[1]);
         restore_supervisor_signals(signals, false);
         result = run_device_worker(saved,
                                    credentials,
                                    core_path,
                                    nixclock_path,
                                    report_pipe[1],
+                                   fault_pipe[0],
+                                   required_core_failure,
                                    session_lock_fd);
         _exit(result);
     }
     (void)close(report_pipe[1]);
+    (void)close(fault_pipe[0]);
     report_deadline = add_milliseconds(monotonic_milliseconds(),
-                                       NB_SESSION_HEARTBEAT_TIMEOUT_MS);
+                                       NB_SESSION_CORE_REPORT_TIMEOUT_MS);
     if (!set_nonblocking(report_pipe[0])) {
         fputs("Could not establish the supervisor report channel\n", stderr);
         (void)close(report_pipe[0]);
@@ -1485,6 +1912,13 @@ static struct supervision_result supervise_device_worker(
 
             if (count == (ssize_t)sizeof(core) && core > 0) {
                 report_complete = true;
+                if (!arm_supervisor_fault_trigger(
+                        required_core_failure)) {
+                    fputs("Could not arm the required core fault trigger.\n",
+                          stderr);
+                    forced = true;
+                    outcome.independent_failure = true;
+                }
             } else if (count == 0) {
                 report_complete = true;
                 report_reliable = false;
@@ -1535,6 +1969,58 @@ static struct supervision_result supervise_device_worker(
             forced = true;
         }
         now = monotonic_milliseconds();
+        if (supervisor_fault_trigger_early != 0 &&
+            !fault_trigger_handled) {
+            outcome.fault_trigger_received = true;
+            fault_trigger_handled = true;
+            outcome.independent_failure = true;
+            forced = true;
+            orderly_deadline = now;
+            fputs("Core fault trigger arrived before the validated core "
+                  "was armed.\n",
+                  stderr);
+        }
+        if (supervisor_fault_trigger != 0 && !fault_trigger_handled) {
+            outcome.fault_trigger_received = true;
+            if (required_core_failure ==
+                NB_WSDISPLAY_SESSION_CORE_FAILURE_NONE) {
+                fault_trigger_handled = true;
+                outcome.independent_failure = true;
+                forced = true;
+            } else if (report_complete && report_reliable && core > 0) {
+                const unsigned char command =
+                    required_core_failure ==
+                            NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH
+                        ? NB_SESSION_FAULT_COMMAND_CRASH
+                        : NB_SESSION_FAULT_COMMAND_HANG;
+
+                fault_trigger_handled = true;
+                if (!write_all(fault_pipe[1], &command, sizeof(command))) {
+                    outcome.independent_failure = true;
+                    forced = true;
+                } else {
+                    fault_command_sent = true;
+                    fault_deadline = add_milliseconds(
+                        now,
+                        NB_SESSION_FAULT_GATE_TIMEOUT_MS);
+                    printf("Supervisor delivered the required core %s "
+                           "injection command.\n",
+                           required_core_failure ==
+                                   NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH
+                               ? "crash"
+                               : "hang");
+                    (void)fflush(stdout);
+                }
+            }
+        }
+        if (fault_command_sent && !reaped && now >= fault_deadline) {
+            fputs("Required core fault did not reach verified containment "
+                  "before its hard deadline.\n",
+                  stderr);
+            outcome.independent_failure = true;
+            forced = true;
+            orderly_deadline = now;
+        }
         if (!report_complete && now >= report_deadline) {
             fputs("Timed out waiting for the core PID report\n", stderr);
             (void)close(report_pipe[0]);
@@ -1606,10 +2092,24 @@ static struct supervision_result supervise_device_worker(
     if (report_pipe[0] >= 0) {
         (void)close(report_pipe[0]);
     }
+    (void)close(fault_pipe[1]);
     outcome.worker_gone = reaped;
     if (reaped) {
         if (WIFEXITED(status)) {
-            if (WEXITSTATUS(status) != 0) {
+            outcome.worker_cleanup_complete =
+                WEXITSTATUS(status) !=
+                    NB_SESSION_WORKER_CLEANUP_INCOMPLETE_EXIT;
+            if (WEXITSTATUS(status) ==
+                NB_SESSION_WORKER_CORE_CRASH_EXIT) {
+                outcome.observed_core_failure =
+                    NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH;
+                outcome.fault_injection_delivered = true;
+            } else if (WEXITSTATUS(status) ==
+                       NB_SESSION_WORKER_CORE_HANG_EXIT) {
+                outcome.observed_core_failure =
+                    NB_WSDISPLAY_SESSION_CORE_FAILURE_HANG;
+                outcome.fault_injection_delivered = true;
+            } else if (WEXITSTATUS(status) != 0) {
                 outcome.independent_failure = true;
             }
         } else {
@@ -1649,8 +2149,11 @@ static struct supervision_result supervise_device_worker(
         forced = true;
     }
     if (!wait_failed && !outcome.independent_failure && outcome.worker_gone &&
-        outcome.core_session_gone && WIFEXITED(status) &&
-        WEXITSTATUS(status) == 0) {
+        outcome.worker_cleanup_complete && outcome.core_session_gone &&
+        WIFEXITED(status) &&
+        WEXITSTATUS(status) == 0 &&
+        outcome.observed_core_failure ==
+            NB_WSDISPLAY_SESSION_CORE_FAILURE_NONE) {
         outcome.status = 0;
     }
     return outcome;
@@ -1665,8 +2168,13 @@ int nb_wsdisplay_session_run(
     struct supervision_result supervision = {
         .status = 1,
         .worker_gone = true,
+        .worker_cleanup_complete = true,
         .core_session_gone = true,
         .sigterm_drove_shutdown = false,
+        .fault_trigger_received = false,
+        .fault_injection_delivered = false,
+        .observed_core_failure =
+            NB_WSDISPLAY_SESSION_CORE_FAILURE_NONE,
         .independent_failure = true
     };
     char credential_error[NB_SESSION_CREDENTIALS_ERROR_CAPACITY];
@@ -1683,7 +2191,14 @@ int nb_wsdisplay_session_run(
     recovery_error[0] = '\0';
     if (options == NULL ||
         options->action < NB_WSDISPLAY_SESSION_ACTION_RUN ||
-        options->action > NB_WSDISPLAY_SESSION_ACTION_RECOVER) {
+        options->action > NB_WSDISPLAY_SESSION_ACTION_RECOVER ||
+        options->required_core_failure <
+            NB_WSDISPLAY_SESSION_CORE_FAILURE_NONE ||
+        options->required_core_failure >
+            NB_WSDISPLAY_SESSION_CORE_FAILURE_HANG ||
+        (options->require_supervisor_sigterm &&
+         options->required_core_failure !=
+             NB_WSDISPLAY_SESSION_CORE_FAILURE_NONE)) {
         return 2;
     }
     if (!nb_session_credentials_prepare_parent_stdio()) {
@@ -1773,6 +2288,7 @@ int nb_wsdisplay_session_run(
                                           core_path,
                                           nixclock_path,
                                           session_lock_fd,
+                                          options->required_core_failure,
                                           &signals);
     result = supervision.status;
     if (!supervision.worker_gone) {
@@ -1792,6 +2308,13 @@ int nb_wsdisplay_session_run(
         goto release_lock;
     }
     console_restored = true;
+    if (!supervision.worker_cleanup_complete) {
+        fputs("DEVICE WORKER CLEANUP WAS NOT VERIFIED. The console was "
+              "restored, but the recovery record was retained.\n",
+              stderr);
+        result = 1;
+        goto release_lock;
+    }
     if (!supervision.core_session_gone) {
         fputs("CORE/APPLICATION LIVENESS WAS NOT CLEARED. The console was "
               "restored, but the recovery record was retained.\n",
@@ -1840,7 +2363,52 @@ release_lock:
                 }
                 result = 1;
             }
-        } else if (supervisor_signal != 0) {
+        } else if (options->required_core_failure !=
+                   NB_WSDISPLAY_SESSION_CORE_FAILURE_NONE) {
+            const struct nb_wsdisplay_session_core_failure_gate gate = {
+                .expected = options->required_core_failure,
+                .observed = supervision.observed_core_failure,
+                .fault_trigger_received =
+                    supervision.fault_trigger_received,
+                .fault_injection_delivered =
+                    supervision.fault_injection_delivered,
+                .supervisor_signal_received = supervisor_signal != 0,
+                .independent_failure = supervision.independent_failure,
+                .worker_gone = supervision.worker_gone,
+                .core_session_gone = supervision.core_session_gone,
+                .console_restored = console_restored,
+                .recovery_record_removed = recovery_record_removed
+            };
+
+            if (nb_wsdisplay_session_core_failure_gate_passes(&gate)) {
+                printf("Required core %s was injected and observed; worker "
+                       "and core cleanup, console restoration, and "
+                       "recovery-record removal completed.\n",
+                       options->required_core_failure ==
+                               NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH
+                           ? "crash"
+                           : "hang");
+                result = 0;
+            } else {
+                fprintf(stderr,
+                        "Required core %s recovery gate did not complete "
+                        "exactly (observed: %s).\n",
+                        options->required_core_failure ==
+                                NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH
+                            ? "crash"
+                            : "hang",
+                        supervision.observed_core_failure ==
+                                NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH
+                            ? "crash"
+                        : supervision.observed_core_failure ==
+                                  NB_WSDISPLAY_SESSION_CORE_FAILURE_HANG
+                            ? "hang"
+                            : "none");
+                result = 1;
+            }
+        } else if (supervisor_signal != 0 ||
+                   supervisor_fault_trigger != 0 ||
+                   supervisor_fault_trigger_early != 0) {
             result = 1;
         }
     }

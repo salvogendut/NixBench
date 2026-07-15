@@ -38,6 +38,14 @@ static void test_actions(void)
         "session", "--acknowledge-console-takeover",
         "--require-supervisor-sigterm"
     };
+    char *crash_run[] = {
+        "session", "--acknowledge-console-takeover",
+        "--require-core-crash"
+    };
+    char *hang_run[] = {
+        "session", "--require-core-hang",
+        "--acknowledge-console-takeover"
+    };
     char *core[] = {
         "session", "--core", "/opt/nixbench/core",
         "--acknowledge-console-takeover"
@@ -57,6 +65,16 @@ static void test_actions(void)
     CHECK(options.action == NB_WSDISPLAY_SESSION_ACTION_RUN);
     CHECK(options.acknowledge_console_takeover);
     CHECK(options.require_supervisor_sigterm);
+    CHECK(options.required_core_failure ==
+          NB_WSDISPLAY_SESSION_CORE_FAILURE_NONE);
+    CHECK(parse(3, crash_run, &options));
+    CHECK(!options.require_supervisor_sigterm);
+    CHECK(options.required_core_failure ==
+          NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH);
+    CHECK(parse(3, hang_run, &options));
+    CHECK(!options.require_supervisor_sigterm);
+    CHECK(options.required_core_failure ==
+          NB_WSDISPLAY_SESSION_CORE_FAILURE_HANG);
     CHECK(parse(4, core, &options));
     CHECK(strcmp(options.core_path, "/opt/nixbench/core") == 0);
 }
@@ -91,6 +109,24 @@ static void test_rejections(void)
         "--require-supervisor-sigterm",
         "--require-supervisor-sigterm"
     };
+    char *action_crash[] = {
+        "session", "--recover", "--require-core-crash"
+    };
+    char *crash_without_ack[] = {
+        "session", "--require-core-crash"
+    };
+    char *mixed_core_gates[] = {
+        "session", "--acknowledge-console-takeover",
+        "--require-core-crash", "--require-core-hang"
+    };
+    char *mixed_sigterm_crash[] = {
+        "session", "--acknowledge-console-takeover",
+        "--require-supervisor-sigterm", "--require-core-crash"
+    };
+    char *duplicate_hang[] = {
+        "session", "--acknowledge-console-takeover",
+        "--require-core-hang", "--require-core-hang"
+    };
 
     CHECK(!parse(1, none, &options));
     CHECK(!parse(2, unknown, &options));
@@ -102,6 +138,11 @@ static void test_rejections(void)
     CHECK(!parse(3, action_sigterm, &options));
     CHECK(!parse(2, sigterm_without_ack, &options));
     CHECK(!parse(4, duplicate_sigterm, &options));
+    CHECK(!parse(3, action_crash, &options));
+    CHECK(!parse(2, crash_without_ack, &options));
+    CHECK(!parse(4, mixed_core_gates, &options));
+    CHECK(!parse(4, mixed_sigterm_crash, &options));
+    CHECK(!parse(4, duplicate_hang, &options));
     CHECK(!nb_wsdisplay_session_parse_options(0, NULL, &options, NULL));
     CHECK(!nb_wsdisplay_session_parse_options(1, none, NULL, NULL));
 }
@@ -169,6 +210,59 @@ static void test_sigterm_gate(void)
     CHECK(!nb_wsdisplay_session_sigterm_gate_passes(&gate));
 }
 
+static void test_core_failure_gate(void)
+{
+    struct nb_wsdisplay_session_core_failure_gate gate = {
+        .expected = NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH,
+        .observed = NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH,
+        .fault_trigger_received = true,
+        .fault_injection_delivered = true,
+        .supervisor_signal_received = false,
+        .independent_failure = false,
+        .worker_gone = true,
+        .core_session_gone = true,
+        .console_restored = true,
+        .recovery_record_removed = true
+    };
+
+    CHECK(nb_wsdisplay_session_core_failure_gate_passes(&gate));
+    CHECK(!nb_wsdisplay_session_core_failure_gate_passes(NULL));
+
+    gate.expected = NB_WSDISPLAY_SESSION_CORE_FAILURE_NONE;
+    CHECK(!nb_wsdisplay_session_core_failure_gate_passes(&gate));
+    gate.expected = (enum nb_wsdisplay_session_core_failure)99;
+    gate.observed = gate.expected;
+    CHECK(!nb_wsdisplay_session_core_failure_gate_passes(&gate));
+    gate.expected = NB_WSDISPLAY_SESSION_CORE_FAILURE_HANG;
+    gate.observed = NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH;
+    CHECK(!nb_wsdisplay_session_core_failure_gate_passes(&gate));
+    gate.observed = NB_WSDISPLAY_SESSION_CORE_FAILURE_HANG;
+    CHECK(nb_wsdisplay_session_core_failure_gate_passes(&gate));
+    gate.fault_trigger_received = false;
+    CHECK(!nb_wsdisplay_session_core_failure_gate_passes(&gate));
+    gate.fault_trigger_received = true;
+    gate.fault_injection_delivered = false;
+    CHECK(!nb_wsdisplay_session_core_failure_gate_passes(&gate));
+    gate.fault_injection_delivered = true;
+    gate.supervisor_signal_received = true;
+    CHECK(!nb_wsdisplay_session_core_failure_gate_passes(&gate));
+    gate.supervisor_signal_received = false;
+    gate.independent_failure = true;
+    CHECK(!nb_wsdisplay_session_core_failure_gate_passes(&gate));
+    gate.independent_failure = false;
+    gate.worker_gone = false;
+    CHECK(!nb_wsdisplay_session_core_failure_gate_passes(&gate));
+    gate.worker_gone = true;
+    gate.core_session_gone = false;
+    CHECK(!nb_wsdisplay_session_core_failure_gate_passes(&gate));
+    gate.core_session_gone = true;
+    gate.console_restored = false;
+    CHECK(!nb_wsdisplay_session_core_failure_gate_passes(&gate));
+    gate.console_restored = true;
+    gate.recovery_record_removed = false;
+    CHECK(!nb_wsdisplay_session_core_failure_gate_passes(&gate));
+}
+
 static void test_frame_completion_across_vt_cycles(void)
 {
     struct nb_wsdisplay_session_frame_state state;
@@ -204,6 +298,7 @@ int main(void)
     test_rejections();
     test_core_paths();
     test_sigterm_gate();
+    test_core_failure_gate();
     test_frame_completion_across_vt_cycles();
 
     if (failures != 0) {

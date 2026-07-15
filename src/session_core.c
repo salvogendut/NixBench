@@ -41,6 +41,7 @@ struct nb_session_runtime_directory {
     char path[NB_SESSION_CORE_RUNTIME_PATH_CAPACITY];
     char display_name[NB_SESSION_CORE_DISPLAY_NAME_CAPACITY];
     bool created;
+    bool owned;
 };
 
 struct nb_session_core {
@@ -135,6 +136,7 @@ static bool create_runtime_directory(
     }
     (void)umask(previous_umask);
     directory->created = true;
+    directory->owned = true;
     if (!runtime_directory_is_private(directory->path)) {
         fputs("The new Wayland runtime directory failed its ownership or "
               "mode check\n",
@@ -151,6 +153,42 @@ static bool create_runtime_directory(
                 "%s\n",
                 strerror(saved_error));
         (void)rmdir(directory->path);
+        memset(directory, 0, sizeof(*directory));
+        return false;
+    }
+    return true;
+}
+
+static bool use_runtime_directory(
+    struct nb_session_runtime_directory *directory,
+    const char *path)
+{
+    const size_t length = path != NULL ? strlen(path) : 0;
+
+    if (path == NULL) {
+        return create_runtime_directory(directory);
+    }
+    memset(directory, 0, sizeof(*directory));
+    if (length == 0 || length >= sizeof(directory->path) ||
+        path[0] != '/' || path[length - 1] == '/') {
+        fputs("The supplied Wayland runtime directory path is invalid\n",
+              stderr);
+        return false;
+    }
+    (void)memcpy(directory->path, path, length + 1);
+    directory->created = true;
+    if (!runtime_directory_is_private(directory->path)) {
+        fputs("The supplied Wayland runtime directory failed its ownership "
+              "or mode check\n",
+              stderr);
+        memset(directory, 0, sizeof(*directory));
+        return false;
+    }
+    if (setenv("XDG_RUNTIME_DIR", directory->path, 1) != 0) {
+        fprintf(stderr,
+                "Could not select the supplied Wayland runtime directory: "
+                "%s\n",
+                strerror(errno));
         memset(directory, 0, sizeof(*directory));
         return false;
     }
@@ -388,6 +426,10 @@ static bool destroy_runtime_directory(
     bool success = true;
 
     if (!directory->created) {
+        return true;
+    }
+    if (!directory->owned) {
+        memset(directory, 0, sizeof(*directory));
         return true;
     }
     if (directory->display_name[0] != '\0') {
@@ -718,7 +760,8 @@ static bool core_identity_is_unprivileged(void)
 }
 
 int nb_session_core_run(int protocol_descriptor,
-                        const char *initial_application_path)
+                        const char *initial_application_path,
+                        const char *runtime_directory_path)
 {
     struct nb_session_core core;
     struct nb_desktop_runtime_options desktop_options;
@@ -777,7 +820,8 @@ int nb_session_core_run(int protocol_descriptor,
         goto cleanup;
     }
     if (!wait_for_ready(&core, &output) ||
-        !create_runtime_directory(&core.runtime_directory)) {
+        !use_runtime_directory(&core.runtime_directory,
+                               runtime_directory_path)) {
         goto cleanup;
     }
 

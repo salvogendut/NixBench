@@ -876,7 +876,7 @@ if(UNIX AND (BUILD_TESTING OR NIXBENCH_BUILD_WSDISPLAY_SESSION))
   )
   target_link_libraries(
     nixbench_wsdisplay_session_runner
-    PRIVATE nixbench_session_watchdog
+    PRIVATE nixbench_session_runtime_sentinel nixbench_session_watchdog
   )
   if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
     target_link_libraries(
@@ -897,7 +897,7 @@ if(NIXBENCH_BUILD_WSDISPLAY_SESSION)
   add_executable(nixbench-session-core src/session_core_main.c)
   target_link_libraries(
     nixbench-session-core
-    PRIVATE nixbench_session_core
+    PRIVATE nixbench_session_core nixbench_session_runtime_sentinel
   )
   nixbench_configure_c_target(nixbench-session-core)
 

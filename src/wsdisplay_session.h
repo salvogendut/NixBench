@@ -17,12 +17,19 @@ enum nb_wsdisplay_session_action {
     NB_WSDISPLAY_SESSION_ACTION_RECOVER
 };
 
+enum nb_wsdisplay_session_core_failure {
+    NB_WSDISPLAY_SESSION_CORE_FAILURE_NONE,
+    NB_WSDISPLAY_SESSION_CORE_FAILURE_CRASH,
+    NB_WSDISPLAY_SESSION_CORE_FAILURE_HANG
+};
+
 struct nb_wsdisplay_session_options {
     enum nb_wsdisplay_session_action action;
     const char *program_path;
     const char *core_path;
     bool acknowledge_console_takeover;
     bool require_supervisor_sigterm;
+    enum nb_wsdisplay_session_core_failure required_core_failure;
 };
 
 struct nb_wsdisplay_session_sigterm_gate {
@@ -37,6 +44,22 @@ struct nb_wsdisplay_session_sigterm_gate {
 
 bool nb_wsdisplay_session_sigterm_gate_passes(
     const struct nb_wsdisplay_session_sigterm_gate *gate);
+
+struct nb_wsdisplay_session_core_failure_gate {
+    enum nb_wsdisplay_session_core_failure expected;
+    enum nb_wsdisplay_session_core_failure observed;
+    bool fault_trigger_received;
+    bool fault_injection_delivered;
+    bool supervisor_signal_received;
+    bool independent_failure;
+    bool worker_gone;
+    bool core_session_gone;
+    bool console_restored;
+    bool recovery_record_removed;
+};
+
+bool nb_wsdisplay_session_core_failure_gate_passes(
+    const struct nb_wsdisplay_session_core_failure_gate *gate);
 
 enum nb_wsdisplay_session_frame_completion {
     NB_WSDISPLAY_SESSION_FRAME_CURRENT,

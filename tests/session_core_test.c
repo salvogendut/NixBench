@@ -548,6 +548,8 @@ static void test_session_core_with_fake_helper(
 {
     char application_result[] =
         "/tmp/nixbench-session-app-result-XXXXXX";
+    char runtime_directory[] =
+        "/tmp/nixbench-session-runtime-XXXXXX";
     int sockets[2] = {-1, -1};
     struct wire_reader reader;
     struct nb_privsep_message message;
@@ -573,6 +575,11 @@ static void test_session_core_with_fake_helper(
             return;
         }
         CHECK(close(temporary) == 0);
+        if (mkdtemp(runtime_directory) == NULL) {
+            CHECK(false);
+            (void)unlink(application_result);
+            return;
+        }
     }
     memset(&reader, 0, sizeof(reader));
     nb_privsep_parser_init(&reader.parser, NB_PRIVSEP_ENDPOINT_CORE);
@@ -580,6 +587,7 @@ static void test_session_core_with_fake_helper(
     if (sockets[0] < 0 || sockets[1] < 0) {
         if (verify_application_cleanup) {
             (void)unlink(application_result);
+            (void)rmdir(runtime_directory);
         }
         return;
     }
@@ -590,6 +598,7 @@ static void test_session_core_with_fake_helper(
         (void)close(sockets[1]);
         if (verify_application_cleanup) {
             (void)unlink(application_result);
+            (void)rmdir(runtime_directory);
         }
         return;
     }
@@ -616,7 +625,10 @@ static void test_session_core_with_fake_helper(
                 _exit(121);
             }
         }
-        result = nb_session_core_run(sockets[0], application_path);
+        result = nb_session_core_run(
+            sockets[0],
+            application_path,
+            verify_application_cleanup ? runtime_directory : NULL);
         if (trigger == SESSION_CORE_SHUTDOWN_BY_SIGTERM) {
             struct sigaction restored_action;
 
@@ -732,6 +744,7 @@ static void test_session_core_with_fake_helper(
         CHECK(application_result_matches(application_result,
                                          "socket-alive\n"));
         (void)unlink(application_result);
+        CHECK(rmdir(runtime_directory) == 0);
     }
 }
 
@@ -771,7 +784,9 @@ static void test_session_core_rejects_unlaunchable_application(void)
         return;
     }
     if (child == 0) {
-        const int result = nb_session_core_run(sockets[0], missing_path);
+        const int result = nb_session_core_run(sockets[0],
+                                               missing_path,
+                                               NULL);
 
         _exit(result);
     }

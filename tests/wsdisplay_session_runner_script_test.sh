@@ -55,57 +55,50 @@ ln -s stub "$temporary/bin/ctest"
 ln -s stub "$temporary/bin/sudo"
 
 unset NIXBENCH_EXPECT_SUPERVISOR_TERM || :
+unset NIXBENCH_EXPECT_CORE_FAILURE || :
 
 run_session()
 {
-    mode=$1
-    launch_status=$2
-    absence_status=$3
-    restored_vt=$4
-    log=$5
-    output=$6
+    supervisor_mode=$1
+    core_failure=$2
+    launch_status=$3
+    absence_status=$4
+    restored_vt=$5
+    log=$6
+    output=$7
 
-    if [ "$mode" = unset ]; then
-        printf '%s\n' START-NIXBENCH |
-            env PATH="$temporary/bin:/usr/bin:/bin" \
-                SSH_CONNECTION='test test test test' \
-                NIXBENCH_BUILD_DIR="$temporary/build" \
-                NB_LAUNCH_STATUS="$launch_status" \
-                NB_ABSENCE_STATUS="$absence_status" \
-                NB_INITIAL_VT=1 \
-                NB_RESTORED_VT="$restored_vt" \
-                NB_VT_COUNT_FILE="$log.vt-count" \
-                NB_TEST_LOG="$log" \
-                "$runner" >"$output" 2>&1
-    else
-        printf '%s\n' START-NIXBENCH |
-            env PATH="$temporary/bin:/usr/bin:/bin" \
-                SSH_CONNECTION='test test test test' \
-                NIXBENCH_BUILD_DIR="$temporary/build" \
-                NIXBENCH_EXPECT_SUPERVISOR_TERM="$mode" \
-                NB_LAUNCH_STATUS="$launch_status" \
-                NB_ABSENCE_STATUS="$absence_status" \
-                NB_INITIAL_VT=1 \
-                NB_RESTORED_VT="$restored_vt" \
-                NB_VT_COUNT_FILE="$log.vt-count" \
-                NB_TEST_LOG="$log" \
-                "$runner" >"$output" 2>&1
-    fi
+    printf '%s\n' START-NIXBENCH |
+        env PATH="$temporary/bin:/usr/bin:/bin" \
+            SSH_CONNECTION='test test test test' \
+            NIXBENCH_BUILD_DIR="$temporary/build" \
+            NIXBENCH_EXPECT_SUPERVISOR_TERM="$supervisor_mode" \
+            NIXBENCH_EXPECT_CORE_FAILURE="$core_failure" \
+            NB_LAUNCH_STATUS="$launch_status" \
+            NB_ABSENCE_STATUS="$absence_status" \
+            NB_INITIAL_VT=1 \
+            NB_RESTORED_VT="$restored_vt" \
+            NB_VT_COUNT_FILE="$log.vt-count" \
+            NB_TEST_LOG="$log" \
+            "$runner" >"$output" 2>&1
 }
 
 expected_log=$temporary/expected.log
 expected_output=$temporary/expected.out
-run_session 1 0 0 1 "$expected_log" "$expected_output"
+run_session 1 '' 0 0 1 "$expected_log" "$expected_output"
 grep -F -- '--require-supervisor-sigterm' "$expected_log" >/dev/null
-grep -F -- 'Success' "$expected_output" >/dev/null
+grep -F -- 'Success: supervisor SIGTERM recovery' "$expected_output" >/dev/null
 if grep -F -- '/usr/sbin/wsconscfg -s' "$expected_output" >/dev/null; then
     echo "supervisor-termination trial printed VT-switch instructions" >&2
+    exit 1
+fi
+if grep -F -- '--require-core-' "$expected_log" >/dev/null; then
+    echo "supervisor-termination trial also required a core-failure gate" >&2
     exit 1
 fi
 
 failed_log=$temporary/failed.log
 failed_output=$temporary/failed.out
-if run_session 1 7 0 1 "$failed_log" "$failed_output"; then
+if run_session 1 '' 7 0 1 "$failed_log" "$failed_output"; then
     echo "supervisor-termination trial accepted a failed launcher" >&2
     exit 1
 fi
@@ -117,24 +110,113 @@ fi
 
 normal_log=$temporary/normal.log
 normal_output=$temporary/normal.out
-run_session unset 0 0 1 "$normal_log" "$normal_output"
+run_session 0 '' 0 0 1 "$normal_log" "$normal_output"
 grep -F -- '/usr/sbin/wsconscfg -s 2' "$normal_output" >/dev/null
 grep -F -- '/usr/sbin/wsconscfg -s 1' "$normal_output" >/dev/null
 if grep -F -- '--require-supervisor-sigterm' "$normal_log" >/dev/null; then
     echo "normal standalone session required supervisor termination" >&2
     exit 1
 fi
+if grep -F -- '--require-core-' "$normal_log" >/dev/null; then
+    echo "normal standalone session required a core-failure gate" >&2
+    exit 1
+fi
+
+crash_log=$temporary/crash.log
+crash_output=$temporary/crash.out
+run_session 0 crash 0 0 1 "$crash_log" "$crash_output"
+grep -F -- '--require-core-crash' "$crash_log" >/dev/null
+grep -F -- 'exact sudo kill -USR1 command' "$crash_output" >/dev/null
+grep -F -- 'Signal the supervisor only' "$crash_output" >/dev/null
+grep -F -- 'Success: core-crash recovery' "$crash_output" >/dev/null
+if grep -F -- '/usr/sbin/wsconscfg -s' "$crash_output" >/dev/null; then
+    echo "core-crash trial printed VT-switch instructions" >&2
+    exit 1
+fi
+if grep -F -- '--require-supervisor-sigterm' "$crash_log" >/dev/null; then
+    echo "core-crash trial also required supervisor termination" >&2
+    exit 1
+fi
+if grep -F -- '--require-core-hang' "$crash_log" >/dev/null; then
+    echo "core-crash trial also required a core hang" >&2
+    exit 1
+fi
+
+hang_log=$temporary/hang.log
+hang_output=$temporary/hang.out
+run_session 0 hang 0 0 1 "$hang_log" "$hang_output"
+grep -F -- '--require-core-hang' "$hang_log" >/dev/null
+grep -F -- 'exact sudo kill -USR1 command' "$hang_output" >/dev/null
+grep -F -- 'do not send SIGCONT' "$hang_output" >/dev/null
+grep -F -- 'Success: core-hang watchdog recovery' "$hang_output" >/dev/null
+if grep -F -- '/usr/sbin/wsconscfg -s' "$hang_output" >/dev/null; then
+    echo "core-hang trial printed VT-switch instructions" >&2
+    exit 1
+fi
+if grep -F -- '--require-supervisor-sigterm' "$hang_log" >/dev/null; then
+    echo "core-hang trial also required supervisor termination" >&2
+    exit 1
+fi
+if grep -F -- '--require-core-crash' "$hang_log" >/dev/null; then
+    echo "core-hang trial also required a core crash" >&2
+    exit 1
+fi
+
+crash_failed_log=$temporary/crash-failed.log
+crash_failed_output=$temporary/crash-failed.out
+if run_session 0 crash 7 0 1 \
+    "$crash_failed_log" "$crash_failed_output"; then
+    echo "core-crash trial accepted a failed launcher" >&2
+    exit 1
+fi
+grep -F -- '--require-core-crash' "$crash_failed_log" >/dev/null
+if grep -F -- 'Success:' "$crash_failed_output" >/dev/null; then
+    echo "failed core-crash trial reported success" >&2
+    exit 1
+fi
+
+hang_failed_log=$temporary/hang-failed.log
+hang_failed_output=$temporary/hang-failed.out
+if run_session 0 hang 7 0 1 \
+    "$hang_failed_log" "$hang_failed_output"; then
+    echo "core-hang trial accepted a failed launcher" >&2
+    exit 1
+fi
+grep -F -- '--require-core-hang' "$hang_failed_log" >/dev/null
+if grep -F -- 'Success:' "$hang_failed_output" >/dev/null; then
+    echo "failed core-hang trial reported success" >&2
+    exit 1
+fi
 
 invalid_log=$temporary/invalid.log
 invalid_output=$temporary/invalid.out
-if run_session bogus 0 0 1 "$invalid_log" "$invalid_output"; then
+if run_session bogus '' 0 0 1 "$invalid_log" "$invalid_output"; then
     echo "invalid NIXBENCH_EXPECT_SUPERVISOR_TERM value was accepted" >&2
     exit 1
 fi
 
+invalid_core_log=$temporary/invalid-core.log
+invalid_core_output=$temporary/invalid-core.out
+if run_session 0 stall 0 0 1 \
+    "$invalid_core_log" "$invalid_core_output"; then
+    echo "invalid NIXBENCH_EXPECT_CORE_FAILURE value was accepted" >&2
+    exit 1
+fi
+grep -F -- 'NIXBENCH_EXPECT_CORE_FAILURE must be crash or hang' \
+    "$invalid_core_output" >/dev/null
+
+conflict_log=$temporary/conflict.log
+conflict_output=$temporary/conflict.out
+if run_session 1 crash 0 0 1 "$conflict_log" "$conflict_output"; then
+    echo "conflicting recovery gates were accepted" >&2
+    exit 1
+fi
+grep -F -- 'supervisor SIGTERM and core-failure gates are mutually exclusive' \
+    "$conflict_output" >/dev/null
+
 absence_log=$temporary/absence.log
 absence_output=$temporary/absence.out
-if run_session 1 0 9 1 "$absence_log" "$absence_output"; then
+if run_session 1 '' 0 9 1 "$absence_log" "$absence_output"; then
     echo "failed recovery-record absence check was accepted" >&2
     exit 1
 fi
@@ -143,7 +225,7 @@ grep -F -- 'could not independently verify recovery-record removal' \
 
 changed_vt_log=$temporary/changed-vt.log
 changed_vt_output=$temporary/changed-vt.out
-if run_session 1 0 0 2 "$changed_vt_log" "$changed_vt_output"; then
+if run_session 1 '' 0 0 2 "$changed_vt_log" "$changed_vt_output"; then
     echo "restored VT mismatch was accepted" >&2
     exit 1
 fi

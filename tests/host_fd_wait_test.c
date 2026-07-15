@@ -227,11 +227,11 @@ static void test_external_only_wakes_without_host_event(void)
     close_pipe(external);
 }
 
-static void test_three_external_descriptors(void)
+static void test_maximum_external_descriptors(void)
 {
     int primary[2] = {-1, -1};
-    int external[3][2] = {{-1, -1}, {-1, -1}, {-1, -1}};
-    int external_fds[3];
+    int external[NB_HOST_FD_WAIT_MAX_EXTERNAL][2];
+    int external_fds[NB_HOST_FD_WAIT_MAX_EXTERNAL];
     struct callback_context context;
     struct nb_host_event event;
     struct nb_host_fd_wait_result result;
@@ -240,7 +240,11 @@ static void test_three_external_descriptors(void)
     if (!make_pipe(primary)) {
         return;
     }
-    for (index = 0; index < 3U; ++index) {
+    for (index = 0;
+         index < (size_t)NB_HOST_FD_WAIT_MAX_EXTERNAL;
+         ++index) {
+        external[index][0] = -1;
+        external[index][1] = -1;
         if (!make_pipe(external[index])) {
             while (index != 0U) {
                 --index;
@@ -251,12 +255,12 @@ static void test_three_external_descriptors(void)
         }
         external_fds[index] = external[index][0];
     }
-    CHECK(write_wake(external[2][1]));
+    CHECK(write_wake(external[NB_HOST_FD_WAIT_MAX_EXTERNAL - 1][1]));
     context = empty_context(primary[0]);
 
     CHECK(nb_host_fd_wait_event(primary[0],
                                 external_fds,
-                                3,
+                                NB_HOST_FD_WAIT_MAX_EXTERNAL,
                                 100,
                                 callback,
                                 &context,
@@ -265,10 +269,13 @@ static void test_three_external_descriptors(void)
     CHECK(!result.primary_ready);
     CHECK(!result.external_ready[0]);
     CHECK(!result.external_ready[1]);
-    CHECK(result.external_ready[2]);
+    CHECK(!result.external_ready[2]);
+    CHECK(result.external_ready[3]);
     CHECK(!result.timed_out);
 
-    for (index = 0; index < 3U; ++index) {
+    for (index = 0;
+         index < (size_t)NB_HOST_FD_WAIT_MAX_EXTERNAL;
+         ++index) {
         close_pipe(external[index]);
     }
     close_pipe(primary);
@@ -582,7 +589,7 @@ static void test_invalid_arguments(void)
 {
     int primary[2] = {-1, -1};
     int other[2] = {-1, -1};
-    int external_fds[4];
+    int external_fds[NB_HOST_FD_WAIT_MAX_EXTERNAL + 1];
     struct nb_host_event event;
     struct nb_host_fd_wait_result result;
 
@@ -598,7 +605,12 @@ static void test_invalid_arguments(void)
 
     check_invalid_call(-1, NULL, 0, callback, &event, &result);
     check_invalid_call(primary[0], NULL, 1, callback, &event, &result);
-    check_invalid_call(primary[0], external_fds, 4, callback, &event, &result);
+    check_invalid_call(primary[0],
+                       external_fds,
+                       NB_HOST_FD_WAIT_MAX_EXTERNAL + 1,
+                       callback,
+                       &event,
+                       &result);
     external_fds[0] = -1;
     check_invalid_call(primary[0], external_fds, 1, callback, &event, &result);
     external_fds[0] = primary[0];
@@ -617,7 +629,7 @@ int main(void)
 {
     test_queued_host_event_precedes_external();
     test_external_only_wakes_without_host_event();
-    test_three_external_descriptors();
+    test_maximum_external_descriptors();
     test_zero_timeout_checks_descriptors_once();
     test_primary_wake_becomes_host_event();
     test_lifecycle_event_has_simultaneous_priority();

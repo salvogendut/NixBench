@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 enum {
-    NB_HOST_FD_WAIT_MAX_EXTERNAL = 3
+    NB_HOST_FD_WAIT_MAX_EXTERNAL = 4
 };
 
 /*
@@ -30,7 +30,7 @@ struct nb_host_fd_wait_result {
 };
 
 /*
- * Wait for a lifecycle event or for one of at most three external owners to
+ * Wait for a lifecycle event or for one of at most four external owners to
  * need service. External descriptors are wake-only: readiness is reported in
  * result while the function returns NB_HOST_EVENT_STATUS_EMPTY unless the
  * lifecycle callback produced an event or an error.
