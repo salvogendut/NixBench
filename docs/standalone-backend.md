@@ -550,6 +550,17 @@ with the saved console state. Failure of an orderly in-band shutdown request is
 expected after the watchdog has invalidated the hung helper session. Malformed
 protocol, worker or supervisor hard failure, and repeated-session recovery
 remain later hardware gates.
+
+The first physical existing-toolkit probe selected Midori 9.0. Its
+ordinary-user process reached the private Wayland display, but GTK emitted
+null-`GdkSeat` diagnostics and no toplevel mapped before the client closed its
+connection. GTK 3.24 defers creating a seat until the registry contains both
+`wl_seat` and `wl_data_device_manager`; NixBench exposed only the former. The
+compositor did not post a protocol error, the shell remained alive, and normal
+exit restored the console and cleared the recovery record. A minimal version-1
+data-device discovery skeleton is therefore the next protocol increment;
+clipboard and drag-and-drop behavior remain explicitly out of scope for it.
+
 The older all-root smoke harness remains useful only for bounded research and
 does not become an application launcher.
 

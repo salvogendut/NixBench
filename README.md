@@ -568,6 +568,16 @@ failure, and repeated sessions remain later gates. The guided command therefore
 remains an opt-in development test rather than a login-session installation
 procedure.
 
+The first physical GTK3 compatibility probe selected the installed Midori 9.0
+binary. The ordinary-user process connected to the private Wayland display,
+but no window mapped. GTK reported a null `GdkSeat` and the client closed its
+connection. GTK 3.24 intentionally waits for both `wl_seat` and
+`wl_data_device_manager` before constructing a seat; NixBench advertised the
+former but not the latter. The shell remained available, and normal exit again
+restored the console, cleared the recovery record, and returned to one-based
+VT 1. The next probe will advertise a minimal version-1 data-device discovery
+skeleton. Clipboard and drag-and-drop data transfer remain unimplemented.
+
 The opt-in `wsdisplay` presentation harness must run as root. Start with its
 query-only preflight:
 

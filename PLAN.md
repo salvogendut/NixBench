@@ -175,11 +175,17 @@ recovery, and deterministic core-crash and core-hang recovery are complete.
 The standalone launcher now also accepts one operator-selected absolute
 executable as its initial ordinary-user client. This is a diagnostic startup
 selector, not desktop-managed installation or launching. The installed GTK3
-Midori browser is the first compatibility probe; its physical result will
-identify the next concrete Wayland protocol or rendering gap. Malformed
-protocol, harder supervisor/worker failures, and repeated-session validation
-remain. Desktop-managed installation, popup/subsurface/data protocols,
-toolkit trials, and broader application-menu bridges also remain outstanding.
+Midori browser is the first compatibility probe. Its initial physical run
+connected to the private display but mapped no window: GTK 3.24 deferred
+creating its `GdkSeat` because NixBench did not advertise the core
+`wl_data_device_manager` global. Midori then closed its client connection; the
+session then exited normally, and the supervisor restored the console and
+removed the recovery record. A minimal version-1 data-device
+discovery skeleton is the next compatibility step, without yet claiming
+clipboard or drag-and-drop support. Malformed protocol, harder supervisor/
+worker failures, and repeated-session validation remain. Desktop-managed
+installation, popup/subsurface/data transfer, broader toolkit trials, and
+application-menu bridges also remain outstanding.
 
 ## Milestone 6: Package and validate the hosted prototype
 
