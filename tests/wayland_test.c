@@ -2436,9 +2436,6 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(nb_wayland_server_window_count(server) == 0);
 
 cleanup:
-    if (display != NULL) {
-        wl_display_disconnect(display);
-    }
     if (server != NULL) {
         nb_wayland_server_destroy(server);
     }
