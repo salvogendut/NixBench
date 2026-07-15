@@ -317,6 +317,22 @@ static bool launch_application(struct nb_session_core *core,
     return true;
 }
 
+static void report_application_exit(pid_t application_pid,
+                                    int child_status)
+{
+    if (WIFEXITED(child_status)) {
+        fprintf(stderr,
+                "Initial application pid %ld exited with code %d\n",
+                (long)application_pid,
+                WEXITSTATUS(child_status));
+    } else if (WIFSIGNALED(child_status)) {
+        fprintf(stderr,
+                "Initial application pid %ld terminated by signal %d\n",
+                (long)application_pid,
+                WTERMSIG(child_status));
+    }
+}
+
 static void reap_application_nonblocking(struct nb_session_core *core)
 {
     int child_status;
@@ -328,8 +344,10 @@ static void reap_application_nonblocking(struct nb_session_core *core)
     do {
         result = waitpid(core->application_pid, &child_status, WNOHANG);
     } while (result < 0 && errno == EINTR);
-    if (result == core->application_pid ||
-        (result < 0 && errno == ECHILD)) {
+    if (result == core->application_pid) {
+        report_application_exit(core->application_pid, child_status);
+        core->application_pid = -1;
+    } else if (result < 0 && errno == ECHILD) {
         core->application_pid = -1;
     }
 }
@@ -368,13 +386,20 @@ static void stop_application(struct nb_session_core *core)
         }
     }
     if (core->application_pid > 0) {
+        const pid_t application_pid = core->application_pid;
+        int child_status;
+        pid_t result;
+
         if (kill(core->application_pid, SIGKILL) != 0 && errno != ESRCH) {
             fprintf(stderr,
                     "Could not kill the initial application: %s\n",
                     strerror(errno));
         }
-        while (waitpid(core->application_pid, NULL, 0) < 0 &&
-               errno == EINTR) {
+        do {
+            result = waitpid(application_pid, &child_status, 0);
+        } while (result < 0 && errno == EINTR);
+        if (result == application_pid) {
+            report_application_exit(application_pid, child_status);
         }
         core->application_pid = -1;
     }

@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #if NIXBENCH_TEST_SESSION_CORE
 #include <sys/wait.h>
 #endif
@@ -491,9 +492,95 @@ enum session_core_shutdown_trigger {
     SESSION_CORE_SHUTDOWN_BY_SIGTERM
 };
 
+enum application_exit_diagnostic {
+    APPLICATION_EXIT_DIAGNOSTIC_CODE_ZERO,
+    APPLICATION_EXIT_DIAGNOSTIC_SIGNAL_TERM
+};
+
 static void prior_sigterm_handler(int signal_number)
 {
     (void)signal_number;
+}
+
+static bool application_exit_diagnostic_matches(
+    int descriptor,
+    enum application_exit_diagnostic expected)
+{
+    static const char prefix[] = "Initial application pid ";
+    char expected_suffix[64];
+    char output[4096];
+    size_t used = 0;
+    char *diagnostic;
+    char *end;
+    long process_id;
+    int suffix_length;
+
+    for (;;) {
+        ssize_t count;
+
+        if (used + 1 == sizeof(output)) {
+            return false;
+        }
+        do {
+            count = read(descriptor,
+                         output + used,
+                         sizeof(output) - used - 1);
+        } while (count < 0 && errno == EINTR);
+        if (count > 0) {
+            used += (size_t)count;
+        } else if (count == 0) {
+            break;
+        } else {
+            return false;
+        }
+    }
+    output[used] = '\0';
+    diagnostic = strstr(output, prefix);
+    if (diagnostic == NULL ||
+        strstr(diagnostic + sizeof(prefix) - 1, prefix) != NULL) {
+        return false;
+    }
+    errno = 0;
+    process_id = strtol(diagnostic + sizeof(prefix) - 1, &end, 10);
+    if (errno != 0 || process_id <= 0) {
+        return false;
+    }
+    if (expected == APPLICATION_EXIT_DIAGNOSTIC_CODE_ZERO) {
+        suffix_length = snprintf(expected_suffix,
+                                 sizeof(expected_suffix),
+                                 " exited with code 0\n");
+    } else {
+        suffix_length = snprintf(expected_suffix,
+                                 sizeof(expected_suffix),
+                                 " terminated by signal %d\n",
+                                 SIGTERM);
+    }
+    return suffix_length > 0 &&
+           (size_t)suffix_length < sizeof(expected_suffix) &&
+           strncmp(end,
+                   expected_suffix,
+                   (size_t)suffix_length) == 0;
+}
+
+static bool create_signal_application(char *path)
+{
+    static const char contents[] = "#!/bin/sh\nkill -TERM $$\n";
+    int descriptor = mkstemp(path);
+
+    if (descriptor < 0) {
+        return false;
+    }
+    if (!write_all(descriptor, contents, sizeof(contents) - 1) ||
+        fchmod(descriptor, S_IRUSR | S_IWUSR | S_IXUSR) != 0) {
+        (void)close(descriptor);
+        (void)unlink(path);
+        return false;
+    }
+    if (close(descriptor) != 0) {
+        (void)unlink(path);
+        return false;
+    }
+    return true;
 }
 
 static bool application_result_matches(const char *path,
@@ -544,13 +631,15 @@ static bool wait_for_application_ready(const char *path)
 static void test_session_core_with_fake_helper(
     const char *application_path,
     enum session_core_shutdown_trigger trigger,
-    bool verify_application_cleanup)
+    bool verify_application_cleanup,
+    enum application_exit_diagnostic expected_diagnostic)
 {
     char application_result[] =
         "/tmp/nixbench-session-app-result-XXXXXX";
     char runtime_directory[] =
         "/tmp/nixbench-session-runtime-XXXXXX";
     int sockets[2] = {-1, -1};
+    int standard_error_pipe[2] = {-1, -1};
     struct wire_reader reader;
     struct nb_privsep_message message;
     const struct nb_privsep_output output = runtime_output();
@@ -581,10 +670,20 @@ static void test_session_core_with_fake_helper(
             return;
         }
     }
+    CHECK(pipe(standard_error_pipe) == 0);
+    if (standard_error_pipe[0] < 0 || standard_error_pipe[1] < 0) {
+        if (verify_application_cleanup) {
+            (void)unlink(application_result);
+            (void)rmdir(runtime_directory);
+        }
+        return;
+    }
     memset(&reader, 0, sizeof(reader));
     nb_privsep_parser_init(&reader.parser, NB_PRIVSEP_ENDPOINT_CORE);
     CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
     if (sockets[0] < 0 || sockets[1] < 0) {
+        (void)close(standard_error_pipe[0]);
+        (void)close(standard_error_pipe[1]);
         if (verify_application_cleanup) {
             (void)unlink(application_result);
             (void)rmdir(runtime_directory);
@@ -596,6 +695,8 @@ static void test_session_core_with_fake_helper(
     if (child < 0) {
         (void)close(sockets[0]);
         (void)close(sockets[1]);
+        (void)close(standard_error_pipe[0]);
+        (void)close(standard_error_pipe[1]);
         if (verify_application_cleanup) {
             (void)unlink(application_result);
             (void)rmdir(runtime_directory);
@@ -607,6 +708,11 @@ static void test_session_core_with_fake_helper(
         int result;
 
         (void)close(sockets[1]);
+        (void)close(standard_error_pipe[0]);
+        if (dup2(standard_error_pipe[1], STDERR_FILENO) < 0 ||
+            close(standard_error_pipe[1]) != 0) {
+            _exit(124);
+        }
         if (verify_application_cleanup &&
             setenv("NIXBENCH_TEST_APPLICATION_RESULT",
                    application_result,
@@ -643,6 +749,8 @@ static void test_session_core_with_fake_helper(
     }
     (void)close(sockets[0]);
     sockets[0] = -1;
+    (void)close(standard_error_pipe[1]);
+    standard_error_pipe[1] = -1;
 
     CHECK(receive_core_message(sockets[1], &reader, &message));
     CHECK(message.type == NB_PRIVSEP_MESSAGE_CORE_HELLO);
@@ -740,6 +848,10 @@ static void test_session_core_with_fake_helper(
     (void)close(sockets[1]);
     CHECK(WIFEXITED(child_status));
     CHECK(WEXITSTATUS(child_status) == 0);
+    CHECK(application_exit_diagnostic_matches(standard_error_pipe[0],
+                                              expected_diagnostic));
+    (void)close(standard_error_pipe[0]);
+    standard_error_pipe[0] = -1;
     if (verify_application_cleanup) {
         CHECK(application_result_matches(application_result,
                                          "socket-alive\n"));
@@ -814,6 +926,8 @@ int main(int argc, char *argv[])
 #if NIXBENCH_TEST_SESSION_CORE
     const char *application_path = argc > 1 ? argv[1] : "/usr/bin/true";
     const bool verify_application_cleanup = argc > 1;
+    char signal_application[] =
+        "/tmp/nixbench-session-signal-app-XXXXXX";
 #else
     (void)argc;
     (void)argv;
@@ -827,11 +941,22 @@ int main(int argc, char *argv[])
     test_session_core_with_fake_helper(
         application_path,
         SESSION_CORE_SHUTDOWN_BY_ESCAPE,
-        verify_application_cleanup);
+        verify_application_cleanup,
+        APPLICATION_EXIT_DIAGNOSTIC_CODE_ZERO);
     test_session_core_with_fake_helper(
         application_path,
         SESSION_CORE_SHUTDOWN_BY_SIGTERM,
-        verify_application_cleanup);
+        verify_application_cleanup,
+        APPLICATION_EXIT_DIAGNOSTIC_CODE_ZERO);
+    CHECK(create_signal_application(signal_application));
+    if (access(signal_application, X_OK) == 0) {
+        test_session_core_with_fake_helper(
+            signal_application,
+            SESSION_CORE_SHUTDOWN_BY_ESCAPE,
+            false,
+            APPLICATION_EXIT_DIAGNOSTIC_SIGNAL_TERM);
+        CHECK(unlink(signal_application) == 0);
+    }
     test_session_core_rejects_unlaunchable_application();
 #endif
 
