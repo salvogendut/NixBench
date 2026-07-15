@@ -450,7 +450,7 @@ performs query-only preflight, requires `START-NIXBENCH`, and then runs without
 an automatic deadline under the root recovery supervisor. A second SSH session
 and the printed supervisor cancellation/manual `--recover` commands remain
 mandatory. The exact opt-in configuration now builds on NetBSD and passes all
-45 device-free tests; the staged root launcher links only NetBSD libc, and its
+46 device-free tests; the staged root launcher links only NetBSD libc, and its
 query-only preflight preserved the expected console state. The first physical
 session also launched NixClock on the private Wayland display, exited normally,
 cleared the recovery record, and restored screen 0, emulation mode, automatic

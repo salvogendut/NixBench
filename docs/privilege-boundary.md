@@ -212,7 +212,7 @@ and core liveness are cleared, console restoration is verified, and the
 recovery record is removed. The guided script additionally verifies record
 absence and return to the original active VT.
 
-The exact opt-in targets build natively on the NetBSD test host and all 45
+The exact opt-in targets build natively on the NetBSD test host and all 46
 device-free tests pass. Dynamic-link inspection reports only NetBSD libc for
 the root launcher, while SDL3 and Wayland remain on the ordinary-user side.
 The root-owned staged launcher and mode-0600 lock were verified, and query-only

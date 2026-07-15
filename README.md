@@ -475,7 +475,7 @@ sudo /var/run/nixbench-wsdisplay-session --recover
 ```
 
 `sudo /var/run/nixbench-wsdisplay-session --preflight` is query-only. The new
-targets build natively on the NetBSD test host and all 45 device-free tests
+targets build natively on the NetBSD test host and all 46 device-free tests
 pass there, including the ordinary-user core integration and failed-client
 launch path. `ldd` reports only NetBSD libc for the staged root launcher; SDL3,
 Wayland, and their client-side dependencies are confined to the ordinary-user

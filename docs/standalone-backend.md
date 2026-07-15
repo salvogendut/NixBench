@@ -475,7 +475,7 @@ sudo /var/run/nixbench-wsdisplay-session --recover
 ```
 
 The process split and device-free integration coverage are implemented. The
-exact configuration builds natively on NetBSD and passes all 45 device-free
+exact configuration builds natively on NetBSD and passes all 46 device-free
 tests. The staged root launcher links only NetBSD libc, has verified root
 ownership, and completed query-only preflight without changing the saved
 console state. The first physical takeover launched the desktop and NixClock
