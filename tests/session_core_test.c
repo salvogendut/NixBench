@@ -679,7 +679,7 @@ static void test_session_core_rejects_unlaunchable_application(void)
 int main(int argc, char *argv[])
 {
 #if NIXBENCH_TEST_SESSION_CORE
-    const char *application_path = argc > 1 ? argv[1] : "/bin/true";
+    const char *application_path = argc > 1 ? argv[1] : "/usr/bin/true";
 #else
     (void)argc;
     (void)argv;
