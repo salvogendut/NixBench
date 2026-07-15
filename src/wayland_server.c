@@ -22,6 +22,7 @@ enum {
     NB_WAYLAND_OUTPUT_VERSION = 2,
     NB_WAYLAND_SEAT_VERSION = 5,
     NB_WAYLAND_DATA_DEVICE_MANAGER_VERSION = 1,
+    NB_WAYLAND_SUBCOMPOSITOR_VERSION = 1,
     NB_WAYLAND_XDG_SHELL_VERSION = 1,
     NB_WAYLAND_MAX_FRAME_CALLBACKS = 16,
     NB_WAYLAND_INITIAL_CONTENT_WIDTH = 560,
@@ -41,6 +42,7 @@ enum nb_wayland_surface_role {
     NB_WAYLAND_SURFACE_ROLE_NONE,
     NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL,
     NB_WAYLAND_SURFACE_ROLE_XDG_POPUP,
+    NB_WAYLAND_SURFACE_ROLE_SUBSURFACE,
     NB_WAYLAND_SURFACE_ROLE_CURSOR
 };
 
@@ -108,6 +110,7 @@ struct nb_wayland_surface {
     struct wl_resource *xdg_surface_resource;
     struct wl_resource *toplevel_resource;
     struct wl_resource *popup_resource;
+    struct wl_resource *subsurface_resource;
     struct wl_resource *wm_base_resource;
     struct nb_wayland_surface *popup_parent;
     struct nb_wayland_positioner popup_positioner;
@@ -116,6 +119,7 @@ struct nb_wayland_surface {
     uint64_t popup_sequence;
     bool popup_grabbed;
     bool popup_dismissed;
+    bool subsurface_synchronized;
     bool window_geometry_set;
     int window_geometry_x;
     int window_geometry_y;
@@ -165,6 +169,7 @@ struct nb_wayland_server {
     struct wl_global *output_global;
     struct wl_global *seat_global;
     struct wl_global *data_device_manager_global;
+    struct wl_global *subcompositor_global;
     struct wl_global *xdg_wm_base_global;
     struct wl_global *application_menu_global;
     struct wl_list output_resources;
@@ -207,6 +212,8 @@ static const struct wl_surface_interface surface_implementation;
 static const struct wl_output_interface output_implementation;
 static const struct wl_pointer_interface pointer_implementation;
 static const struct wl_keyboard_interface keyboard_implementation;
+static const struct wl_subcompositor_interface subcompositor_implementation;
+static const struct wl_subsurface_interface subsurface_implementation;
 static const struct xdg_surface_interface xdg_surface_implementation;
 static const struct xdg_toplevel_interface toplevel_implementation;
 static const struct xdg_popup_interface popup_implementation;
@@ -409,13 +416,22 @@ static bool surface_has_xdg_role(
             surface->popup_resource != NULL);
 }
 
+static bool surface_has_overlay_role(
+    const struct nb_wayland_surface *surface)
+{
+    return surface != NULL &&
+           (surface->popup_resource != NULL ||
+            surface->subsurface_resource != NULL);
+}
+
 static struct nb_wayland_surface *surface_root_toplevel(
     struct nb_wayland_surface *surface)
 {
     size_t depth = 0;
 
     while (surface != NULL &&
-           surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_POPUP &&
+           (surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_POPUP ||
+            surface->role == NB_WAYLAND_SURFACE_ROLE_SUBSURFACE) &&
            depth < NB_WAYLAND_MAX_SURFACES) {
         surface = surface->popup_parent;
         ++depth;
@@ -432,7 +448,8 @@ static const struct nb_wayland_surface *surface_root_toplevel_const(
     size_t depth = 0;
 
     while (surface != NULL &&
-           surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_POPUP &&
+           (surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_POPUP ||
+            surface->role == NB_WAYLAND_SURFACE_ROLE_SUBSURFACE) &&
            depth < NB_WAYLAND_MAX_SURFACES) {
         surface = surface->popup_parent;
         ++depth;
@@ -453,10 +470,17 @@ static bool surface_is_mapped(const struct nb_wayland_surface *surface)
         return surface->toplevel_resource != NULL &&
                surface->window != NB_WINDOW_ID_NONE;
     }
-    return surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_POPUP &&
-           surface->popup_resource != NULL && surface->configured &&
-           !surface->popup_dismissed &&
-           surface_is_mapped(surface->popup_parent);
+    if (surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_POPUP) {
+        return surface->popup_resource != NULL && surface->configured &&
+               !surface->popup_dismissed &&
+               surface_is_mapped(surface->popup_parent);
+    }
+    if (surface->role == NB_WAYLAND_SURFACE_ROLE_SUBSURFACE) {
+        return surface->subsurface_resource != NULL &&
+               surface->popup_parent != NULL &&
+               surface_is_mapped(surface->popup_parent);
+    }
+    return false;
 }
 
 static void surface_window_geometry(
@@ -498,32 +522,39 @@ static bool surface_buffer_origin_in_root(
         *origin_y = 0;
         return true;
     }
-    if (surface->role != NB_WAYLAND_SURFACE_ROLE_XDG_POPUP ||
-        surface->popup_parent == NULL ||
+    if (surface->popup_parent == NULL ||
         !surface_buffer_origin_in_root(surface->popup_parent,
                                        origin_x,
                                        origin_y)) {
         return false;
     }
-    surface_window_geometry(surface->popup_parent,
-                            &parent_geometry_x,
-                            &parent_geometry_y,
-                            &parent_geometry_width,
-                            &parent_geometry_height);
-    surface_window_geometry(surface,
-                            &surface_geometry_x,
-                            &surface_geometry_y,
-                            &surface_geometry_width,
-                            &surface_geometry_height);
-    *origin_x += (int64_t)parent_geometry_x + surface->popup_x -
-                 surface_geometry_x;
-    *origin_y += (int64_t)parent_geometry_y + surface->popup_y -
-                 surface_geometry_y;
-    (void)parent_geometry_width;
-    (void)parent_geometry_height;
-    (void)surface_geometry_width;
-    (void)surface_geometry_height;
-    return true;
+    if (surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_POPUP) {
+        surface_window_geometry(surface->popup_parent,
+                                &parent_geometry_x,
+                                &parent_geometry_y,
+                                &parent_geometry_width,
+                                &parent_geometry_height);
+        surface_window_geometry(surface,
+                                &surface_geometry_x,
+                                &surface_geometry_y,
+                                &surface_geometry_width,
+                                &surface_geometry_height);
+        *origin_x += (int64_t)parent_geometry_x + surface->popup_x -
+                     surface_geometry_x;
+        *origin_y += (int64_t)parent_geometry_y + surface->popup_y -
+                     surface_geometry_y;
+        (void)parent_geometry_width;
+        (void)parent_geometry_height;
+        (void)surface_geometry_width;
+        (void)surface_geometry_height;
+        return true;
+    }
+    if (surface->role == NB_WAYLAND_SURFACE_ROLE_SUBSURFACE) {
+        *origin_x += surface->popup_x;
+        *origin_y += surface->popup_y;
+        return true;
+    }
+    return false;
 }
 
 static uint32_t blend_premultiplied_argb(uint32_t source,
@@ -555,26 +586,27 @@ static uint32_t blend_premultiplied_argb(uint32_t source,
            (output_blue > 255 ? 255 : output_blue);
 }
 
-static void composite_popup(struct nb_wayland_surface *root,
-                            const struct nb_wayland_surface *popup)
+static void composite_overlay(struct nb_wayland_surface *root,
+                              const struct nb_wayland_surface *overlay)
 {
     int64_t origin_x;
     int64_t origin_y;
     int source_y;
 
-    if (root->composite_pixels == NULL || !surface_is_mapped(popup) ||
-        popup->role != NB_WAYLAND_SURFACE_ROLE_XDG_POPUP ||
-        !surface_buffer_origin_in_root(popup, &origin_x, &origin_y)) {
+    if (root->composite_pixels == NULL || !surface_is_mapped(overlay) ||
+        (overlay->role != NB_WAYLAND_SURFACE_ROLE_XDG_POPUP &&
+         overlay->role != NB_WAYLAND_SURFACE_ROLE_SUBSURFACE) ||
+        !surface_buffer_origin_in_root(overlay, &origin_x, &origin_y)) {
         return;
     }
-    for (source_y = 0; source_y < popup->height; ++source_y) {
+    for (source_y = 0; source_y < overlay->height; ++source_y) {
         const int64_t destination_y = origin_y + source_y;
         int source_x;
 
         if (destination_y < 0 || destination_y >= root->height) {
             continue;
         }
-        for (source_x = 0; source_x < popup->width; ++source_x) {
+        for (source_x = 0; source_x < overlay->width; ++source_x) {
             const int64_t destination_x = origin_x + source_x;
             size_t destination_index;
             size_t source_index;
@@ -586,11 +618,11 @@ static void composite_popup(struct nb_wayland_surface *root,
                 (size_t)destination_y * (size_t)root->width +
                 (size_t)destination_x;
             source_index =
-                (size_t)source_y * (size_t)popup->width +
+                (size_t)source_y * (size_t)overlay->width +
                 (size_t)source_x;
             root->composite_pixels[destination_index] =
                 blend_premultiplied_argb(
-                    popup->pixels[source_index],
+                    overlay->pixels[source_index],
                     root->composite_pixels[destination_index]);
         }
     }
@@ -600,7 +632,7 @@ static void refresh_toplevel_composite(struct nb_wayland_surface *root)
 {
     uint64_t previous_sequence = 0;
     size_t pixel_count;
-    bool has_popup = false;
+    bool has_overlay = false;
     size_t index;
 
     if (root == NULL ||
@@ -620,13 +652,14 @@ static void refresh_toplevel_composite(struct nb_wayland_surface *root)
             &root->server->surfaces[index];
 
         if (candidate->occupied && surface_is_mapped(candidate) &&
-            candidate->role == NB_WAYLAND_SURFACE_ROLE_XDG_POPUP &&
+            (candidate->role == NB_WAYLAND_SURFACE_ROLE_XDG_POPUP ||
+             candidate->role == NB_WAYLAND_SURFACE_ROLE_SUBSURFACE) &&
             surface_root_toplevel_const(candidate) == root) {
-            has_popup = true;
+            has_overlay = true;
             break;
         }
     }
-    if (!has_popup) {
+    if (!has_overlay) {
         return;
     }
     pixel_count = (size_t)root->width * (size_t)root->height;
@@ -646,7 +679,8 @@ static void refresh_toplevel_composite(struct nb_wayland_surface *root)
                 &root->server->surfaces[index];
 
             if (!candidate->occupied || !surface_is_mapped(candidate) ||
-                candidate->role != NB_WAYLAND_SURFACE_ROLE_XDG_POPUP ||
+                (candidate->role != NB_WAYLAND_SURFACE_ROLE_XDG_POPUP &&
+                 candidate->role != NB_WAYLAND_SURFACE_ROLE_SUBSURFACE) ||
                 surface_root_toplevel_const(candidate) != root ||
                 candidate->popup_sequence <= previous_sequence ||
                 (next != NULL && candidate->popup_sequence >=
@@ -658,7 +692,7 @@ static void refresh_toplevel_composite(struct nb_wayland_surface *root)
         if (next == NULL) {
             break;
         }
-        composite_popup(root, next);
+        composite_overlay(root, next);
         previous_sequence = next->popup_sequence;
     }
 }
@@ -1325,14 +1359,14 @@ static void clear_surface_pointer_state(struct nb_wayland_surface *surface,
     pointer_cancel_internal(server, server->pointer_time, send_events);
 }
 
-static void dismiss_popup_descendants(
+static void dismiss_overlay_descendants(
     struct nb_wayland_surface *parent,
     bool send_client_events);
 
 static void unmap_surface(struct nb_wayland_surface *surface,
                           bool send_client_events)
 {
-    dismiss_popup_descendants(surface, send_client_events);
+    dismiss_overlay_descendants(surface, send_client_events);
     if (surface->window != NB_WINDOW_ID_NONE) {
         if (send_client_events) {
             surface_send_output_membership(surface, false);
@@ -1451,7 +1485,7 @@ static void clear_pending_attach(struct nb_wayland_surface *surface)
     surface->pending_attach = false;
 }
 
-static void dismiss_popup_descendants(
+static void dismiss_overlay_descendants(
     struct nb_wayland_surface *parent,
     bool send_client_events)
 {
@@ -1463,43 +1497,48 @@ static void dismiss_popup_descendants(
     }
     server = parent->server;
     for (index = 0; index < NB_WAYLAND_MAX_SURFACES; ++index) {
-        struct nb_wayland_surface *popup = &server->surfaces[index];
+        struct nb_wayland_surface *child = &server->surfaces[index];
         struct nb_wayland_surface *root;
         bool was_mapped;
 
-        if (!popup->occupied ||
-            popup->role != NB_WAYLAND_SURFACE_ROLE_XDG_POPUP ||
-            popup->popup_resource == NULL ||
-            popup->popup_parent != parent) {
+        if (!child->occupied ||
+            child->popup_parent != parent ||
+            (child->role != NB_WAYLAND_SURFACE_ROLE_XDG_POPUP &&
+             child->role != NB_WAYLAND_SURFACE_ROLE_SUBSURFACE)) {
             continue;
         }
-        root = surface_root_toplevel(popup);
-        was_mapped = surface_is_mapped(popup);
-        dismiss_popup_descendants(popup, send_client_events);
-        if (!popup->popup_dismissed) {
-            popup->popup_dismissed = true;
-            if (send_client_events && !server->destroying) {
-                xdg_popup_send_popup_done(popup->popup_resource);
+        root = surface_root_toplevel(child);
+        was_mapped = surface_is_mapped(child);
+        dismiss_overlay_descendants(child, send_client_events);
+        if (child->role == NB_WAYLAND_SURFACE_ROLE_XDG_POPUP) {
+            if (!child->popup_dismissed) {
+                child->popup_dismissed = true;
+                if (send_client_events && !server->destroying) {
+                    xdg_popup_send_popup_done(child->popup_resource);
+                }
             }
         }
-        clear_surface_keyboard_state(popup, send_client_events);
-        clear_surface_pointer_state(popup, send_client_events);
-        clear_pending_attach(popup);
-        destroy_frame_resources(popup);
+        clear_surface_keyboard_state(child, send_client_events);
+        clear_surface_pointer_state(child, send_client_events);
+        clear_pending_attach(child);
+        destroy_frame_resources(child);
         if (was_mapped && send_client_events) {
-            surface_send_output_membership(popup, false);
+            surface_send_output_membership(child, false);
         }
-        free(popup->pixels);
-        free(popup->composite_pixels);
-        popup->pixels = NULL;
-        popup->composite_pixels = NULL;
-        popup->width = 0;
-        popup->height = 0;
-        popup->configure_sent = false;
-        popup->configured = false;
-        popup->configure_serial = 0;
-        popup->popup_parent = NULL;
-        popup->popup_grabbed = false;
+        free(child->pixels);
+        free(child->composite_pixels);
+        child->pixels = NULL;
+        child->composite_pixels = NULL;
+        child->width = 0;
+        child->height = 0;
+        child->configure_sent = false;
+        child->configured = false;
+        child->configure_serial = 0;
+        child->popup_parent = NULL;
+        child->popup_grabbed = false;
+        if (child->role == NB_WAYLAND_SURFACE_ROLE_SUBSURFACE) {
+            child->subsurface_synchronized = true;
+        }
         if (root != NULL) {
             surface_tree_changed(root, false);
         }
@@ -1511,7 +1550,7 @@ static void maybe_release_surface_slot(struct nb_wayland_surface *surface)
     if (surface->surface_resource != NULL ||
         surface->xdg_surface_resource != NULL ||
         surface->toplevel_resource != NULL ||
-        surface->popup_resource != NULL) {
+        surface_has_overlay_role(surface)) {
         return;
     }
 
@@ -1728,7 +1767,7 @@ static void surface_destroy(struct wl_client *client,
     (void)client;
     if (surface->xdg_surface_resource != NULL ||
         surface->toplevel_resource != NULL ||
-        surface->popup_resource != NULL) {
+        surface_has_overlay_role(surface)) {
         wl_resource_post_error(resource,
                                WL_SURFACE_ERROR_DEFUNCT_ROLE_OBJECT,
                                "destroy xdg role objects first");
@@ -1884,7 +1923,7 @@ static void surface_commit(struct wl_client *client,
         }
 
         if (buffer == NULL && was_mapped) {
-            dismiss_popup_descendants(surface, true);
+            dismiss_overlay_descendants(surface, true);
         }
 
         detach_pending_buffer_listener(surface);
@@ -2084,6 +2123,222 @@ static void bind_compositor(struct wl_client *client,
                                    data,
                                    NULL);
 }
+
+static void bind_subcompositor(struct wl_client *client,
+                               void *data,
+                               uint32_t version,
+                               uint32_t id)
+{
+    struct wl_resource *resource = wl_resource_create(
+        client,
+        &wl_subcompositor_interface,
+        protocol_version(version, NB_WAYLAND_SUBCOMPOSITOR_VERSION),
+        id);
+
+    if (resource == NULL) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(resource,
+                                   &subcompositor_implementation,
+                                   data,
+                                   NULL);
+}
+
+static void subsurface_resource_destroyed(struct wl_resource *resource)
+{
+    struct nb_wayland_surface *surface =
+        wl_resource_get_user_data(resource);
+    struct nb_wayland_surface *root;
+
+    if (surface == NULL || !surface->occupied) {
+        return;
+    }
+    root = surface_root_toplevel(surface);
+    dismiss_overlay_descendants(surface, false);
+    clear_surface_pointer_state(surface, false);
+    clear_surface_keyboard_state(surface, false);
+    clear_pending_attach(surface);
+    destroy_frame_resources(surface);
+    if (surface->pixels != NULL) {
+        surface_send_output_membership(surface, false);
+    }
+    free(surface->pixels);
+    free(surface->composite_pixels);
+    surface->pixels = NULL;
+    surface->composite_pixels = NULL;
+    surface->width = 0;
+    surface->height = 0;
+    surface->configure_sent = false;
+    surface->configured = false;
+    surface->configure_serial = 0;
+    surface->subsurface_resource = NULL;
+    surface->popup_parent = NULL;
+    surface->subsurface_synchronized = true;
+    if (surface->role == NB_WAYLAND_SURFACE_ROLE_SUBSURFACE) {
+        surface->role = NB_WAYLAND_SURFACE_ROLE_NONE;
+    }
+    if (root != NULL) {
+        surface_tree_changed(root, false);
+    }
+    maybe_release_surface_slot(surface);
+}
+
+static void subcompositor_destroy(struct wl_client *client,
+                                  struct wl_resource *resource)
+{
+    (void)client;
+    wl_resource_destroy(resource);
+}
+
+static void subsurface_destroy(struct wl_client *client,
+                               struct wl_resource *resource)
+{
+    struct nb_wayland_surface *surface =
+        wl_resource_get_user_data(resource);
+
+    (void)client;
+    wl_resource_destroy(resource);
+    (void)surface;
+}
+
+static void subsurface_set_position(struct wl_client *client,
+                                    struct wl_resource *resource,
+                                    int32_t x,
+                                    int32_t y)
+{
+    struct nb_wayland_surface *surface =
+        wl_resource_get_user_data(resource);
+    struct nb_wayland_surface *root = surface_root_toplevel(surface);
+
+    (void)client;
+    if (surface->role != NB_WAYLAND_SURFACE_ROLE_SUBSURFACE) {
+        return;
+    }
+    surface->popup_x = x;
+    surface->popup_y = y;
+    if (root != NULL) {
+        surface_tree_changed(surface, false);
+    }
+}
+
+static void subsurface_place_above(struct wl_client *client,
+                                   struct wl_resource *resource,
+                                   struct wl_resource *sibling)
+{
+    (void)client;
+    (void)resource;
+    (void)sibling;
+}
+
+static void subsurface_place_below(struct wl_client *client,
+                                   struct wl_resource *resource,
+                                   struct wl_resource *sibling)
+{
+    (void)client;
+    (void)resource;
+    (void)sibling;
+}
+
+static void subsurface_set_sync(struct wl_client *client,
+                               struct wl_resource *resource)
+{
+    struct nb_wayland_surface *surface =
+        wl_resource_get_user_data(resource);
+
+    (void)client;
+    if (surface->role == NB_WAYLAND_SURFACE_ROLE_SUBSURFACE) {
+        surface->subsurface_synchronized = true;
+    }
+}
+
+static void subsurface_set_desync(struct wl_client *client,
+                                  struct wl_resource *resource)
+{
+    struct nb_wayland_surface *surface =
+        wl_resource_get_user_data(resource);
+
+    (void)client;
+    if (surface->role == NB_WAYLAND_SURFACE_ROLE_SUBSURFACE) {
+        surface->subsurface_synchronized = false;
+    }
+}
+
+static const struct wl_subsurface_interface subsurface_implementation = {
+    .destroy = subsurface_destroy,
+    .set_position = subsurface_set_position,
+    .place_above = subsurface_place_above,
+    .place_below = subsurface_place_below,
+    .set_sync = subsurface_set_sync,
+    .set_desync = subsurface_set_desync
+};
+
+static void subcompositor_get_subsurface(struct wl_client *client,
+                                         struct wl_resource *resource,
+                                         uint32_t id,
+                                         struct wl_resource *surface,
+                                         struct wl_resource *parent)
+{
+    struct nb_wayland_server *server =
+        wl_resource_get_user_data(resource);
+    struct nb_wayland_surface *child;
+    struct nb_wayland_surface *parent_surface;
+
+    if (!wl_resource_instance_of(surface,
+                                 &wl_surface_interface,
+                                 &surface_implementation) ||
+        !wl_resource_instance_of(parent,
+                                 &wl_surface_interface,
+                                 &surface_implementation)) {
+        wl_resource_post_error(resource,
+                               WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE,
+                               "subsurface uses a foreign surface");
+        return;
+    }
+    child = wl_resource_get_user_data(surface);
+    parent_surface = wl_resource_get_user_data(parent);
+    if (child == NULL || parent_surface == NULL ||
+        child->server != server || parent_surface->server != server ||
+        wl_resource_get_client(surface) != client ||
+        wl_resource_get_client(parent) != client || child == parent_surface ||
+        (child->role != NB_WAYLAND_SURFACE_ROLE_NONE &&
+         child->role != NB_WAYLAND_SURFACE_ROLE_SUBSURFACE) ||
+        child->surface_resource != surface || parent_surface->surface_resource != parent ||
+        surface_has_xdg_role(child) || child->subsurface_resource != NULL) {
+        wl_resource_post_error(resource,
+                               WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE,
+                               "subsurface surface is invalid");
+        return;
+    }
+    child->subsurface_resource = wl_resource_create(
+        client,
+        &wl_subsurface_interface,
+        wl_resource_get_version(resource),
+        id);
+    if (child->subsurface_resource == NULL) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    child->role = NB_WAYLAND_SURFACE_ROLE_SUBSURFACE;
+    child->popup_parent = parent_surface;
+    child->popup_x = 0;
+    child->popup_y = 0;
+    child->popup_sequence = ++server->next_popup_sequence;
+    if (server->next_popup_sequence == 0) {
+        server->next_popup_sequence = 1;
+    }
+    child->subsurface_synchronized = true;
+    wl_resource_set_implementation(child->subsurface_resource,
+                                   &subsurface_implementation,
+                                   child,
+                                   subsurface_resource_destroyed);
+}
+
+static const struct wl_subcompositor_interface
+    subcompositor_implementation = {
+        .destroy = subcompositor_destroy,
+        .get_subsurface = subcompositor_get_subsurface
+    };
 
 static void pointer_resource_destroyed(struct wl_resource *resource)
 {
@@ -2959,7 +3214,7 @@ static void popup_resource_destroyed(struct wl_resource *resource)
         return;
     }
     root = surface_root_toplevel(surface);
-    dismiss_popup_descendants(surface, false);
+    dismiss_overlay_descendants(surface, false);
     clear_surface_pointer_state(surface, false);
     clear_surface_keyboard_state(surface, false);
     clear_pending_attach(surface);
@@ -4070,6 +4325,12 @@ struct nb_wayland_server *nb_wayland_server_create(
                                              NB_WAYLAND_OUTPUT_VERSION,
                                              server,
                                              bind_output);
+    server->subcompositor_global = wl_global_create(
+        server->display,
+        &wl_subcompositor_interface,
+        NB_WAYLAND_SUBCOMPOSITOR_VERSION,
+        server,
+        bind_subcompositor);
     server->seat_global = wl_global_create(server->display,
                                            &wl_seat_interface,
                                            NB_WAYLAND_SEAT_VERSION,

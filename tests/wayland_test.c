@@ -97,6 +97,7 @@ struct output_state {
 
 struct client_state {
     struct wl_compositor *compositor;
+    struct wl_subcompositor *subcompositor;
     struct wl_shm *shm;
     struct wl_seat *seat;
     struct wl_pointer *pointer;
@@ -1046,6 +1047,9 @@ static void registry_global(void *data,
     } else if (strcmp(interface, wl_shm_interface.name) == 0) {
         state->shm = wl_registry_bind(
             registry, name, &wl_shm_interface, 1);
+    } else if (strcmp(interface, wl_subcompositor_interface.name) == 0) {
+        state->subcompositor = wl_registry_bind(
+            registry, name, &wl_subcompositor_interface, 1);
     } else if (strcmp(interface, wl_output_interface.name) == 0) {
         const uint32_t bind_version = version < 2 ? version : 2;
 
@@ -2452,10 +2456,247 @@ cleanup:
     }
 }
 
+static void test_wayland_subsurface_lifecycle(void)
+{
+    struct nb_shell shell;
+    struct nb_wayland_server *server = NULL;
+    struct wl_display *display = NULL;
+    struct wl_registry *registry = NULL;
+    struct wl_surface *surface = NULL;
+    struct wl_surface *child_surface = NULL;
+    struct wl_shm_pool *pool = NULL;
+    struct wl_buffer *root_buffer = NULL;
+    struct wl_buffer *child_buffer = NULL;
+    struct wl_subsurface *subsurface = NULL;
+    struct xdg_surface *xdg_surface = NULL;
+    struct xdg_toplevel *toplevel = NULL;
+    struct client_state client = {0};
+    struct nb_wayland_surface_snapshot snapshot;
+    uint32_t *pixels = MAP_FAILED;
+    uint32_t *root_pixels = NULL;
+    uint32_t *child_pixels = NULL;
+    const int root_width = 256;
+    const int root_height = 160;
+    const int child_width = 48;
+    const int child_height = 32;
+    const int child_x = 37;
+    const int child_y = 29;
+    const uint32_t child_pixel = UINT32_C(0xff224466);
+    const size_t root_pixel_count =
+        (size_t)root_width * (size_t)root_height;
+    const size_t child_pixel_count =
+        (size_t)child_width * (size_t)child_height;
+    const size_t root_bytes = root_pixel_count * sizeof(*pixels);
+    const size_t child_bytes = child_pixel_count * sizeof(*pixels);
+    const size_t total_bytes = root_bytes + child_bytes;
+    int sockets[2] = {-1, -1};
+    int shm_fd = -1;
+    char shm_path[] = "/tmp/nixbench-wayland-subsurface-XXXXXX";
+
+    nb_shell_init(&shell, DESKTOP_MENU_SOURCE, &empty_menu_model);
+    server = nb_wayland_server_create(&shell,
+                                      WAYLAND_MENU_SOURCE,
+                                      &empty_menu_model,
+                                      OUTPUT_WIDTH,
+                                      OUTPUT_HEIGHT);
+    REQUIRE(server != NULL);
+    REQUIRE(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    REQUIRE(add_server_client(server, sockets[0]));
+    sockets[0] = -1;
+
+    display = wl_display_connect_to_fd(sockets[1]);
+    sockets[1] = -1;
+    REQUIRE(display != NULL);
+    registry = wl_display_get_registry(display);
+    REQUIRE(registry != NULL);
+    REQUIRE(wl_registry_add_listener(registry,
+                                     &registry_listener,
+                                     &client) == 0);
+
+    REQUIRE(pump_barrier(server, display));
+    REQUIRE(client.compositor != NULL);
+    REQUIRE(client.subcompositor != NULL);
+    REQUIRE(client.shm != NULL);
+    REQUIRE(client.wm_base != NULL);
+
+    surface = wl_compositor_create_surface(client.compositor);
+    REQUIRE(surface != NULL);
+    REQUIRE(wl_surface_add_listener(surface,
+                                    &surface_listener,
+                                    &client) == 0);
+    xdg_surface = xdg_wm_base_get_xdg_surface(client.wm_base, surface);
+    REQUIRE(xdg_surface != NULL);
+    REQUIRE(xdg_surface_add_listener(xdg_surface,
+                                     &xdg_surface_listener,
+                                     &client) == 0);
+    toplevel = xdg_surface_get_toplevel(xdg_surface);
+    REQUIRE(toplevel != NULL);
+    REQUIRE(xdg_toplevel_add_listener(toplevel,
+                                      &toplevel_listener,
+                                      &client) == 0);
+
+    wl_surface_commit(surface);
+    REQUIRE(pump_barrier(server, display));
+    CHECK(nb_wayland_server_window_count(server) == 0);
+    REQUIRE(pump_barrier(server, display));
+
+    shm_fd = mkstemp(shm_path);
+    REQUIRE(shm_fd >= 0);
+    REQUIRE(unlink(shm_path) == 0);
+    REQUIRE(ftruncate(shm_fd, (off_t)total_bytes) == 0);
+    pixels = mmap(NULL,
+                  total_bytes,
+                  PROT_READ | PROT_WRITE,
+                  MAP_SHARED,
+                  shm_fd,
+                  0);
+    REQUIRE(pixels != MAP_FAILED);
+    root_pixels = pixels;
+    child_pixels = (uint32_t *)((unsigned char *)pixels + root_bytes);
+    fill_pixels(root_pixels, root_pixel_count);
+    for (size_t index = 0; index < child_pixel_count; ++index) {
+        child_pixels[index] = child_pixel;
+    }
+
+    pool = wl_shm_create_pool(client.shm, shm_fd, (int32_t)total_bytes);
+    REQUIRE(pool != NULL);
+    root_buffer = wl_shm_pool_create_buffer(pool,
+                                            0,
+                                            root_width,
+                                            root_height,
+                                            root_width * BYTES_PER_PIXEL,
+                                            WL_SHM_FORMAT_ARGB8888);
+    REQUIRE(root_buffer != NULL);
+    child_buffer = wl_shm_pool_create_buffer(pool,
+                                             (int32_t)root_bytes,
+                                             child_width,
+                                             child_height,
+                                             child_width * BYTES_PER_PIXEL,
+                                             WL_SHM_FORMAT_ARGB8888);
+    REQUIRE(child_buffer != NULL);
+    REQUIRE(wl_buffer_add_listener(root_buffer,
+                                   &buffer_listener,
+                                   &client) == 0);
+    REQUIRE(wl_buffer_add_listener(child_buffer,
+                                   &buffer_listener,
+                                   &client) == 0);
+
+    xdg_surface_set_window_geometry(xdg_surface,
+                                    0,
+                                    0,
+                                    root_width,
+                                    root_height);
+    wl_surface_attach(surface, root_buffer, 0, 0);
+    wl_surface_damage(surface, 0, 0, root_width, root_height);
+    wl_surface_commit(surface);
+    REQUIRE(pump_barrier(server, display));
+    CHECK(nb_wayland_server_window_count(server) == 1);
+    CHECK(nb_wayland_server_take_redraw(server));
+    CHECK(!nb_wayland_server_take_redraw(server));
+    REQUIRE(nb_wayland_server_surface_snapshot(server,
+                                               nb_wayland_server_window_at(
+                                                   server, 0),
+                                               &snapshot));
+    CHECK(snapshot.width == root_width);
+    CHECK(snapshot.height == root_height);
+    CHECK(memcmp(snapshot.pixels, root_pixels, root_bytes) == 0);
+
+    child_surface = wl_compositor_create_surface(client.compositor);
+    REQUIRE(child_surface != NULL);
+    subsurface = wl_subcompositor_get_subsurface(client.subcompositor,
+                                                 child_surface,
+                                                 surface);
+    REQUIRE(subsurface != NULL);
+    wl_subsurface_set_desync(subsurface);
+    wl_subsurface_set_position(subsurface, child_x, child_y);
+    wl_surface_attach(child_surface, child_buffer, 0, 0);
+    wl_surface_damage(child_surface, 0, 0, child_width, child_height);
+    wl_surface_commit(child_surface);
+    REQUIRE(pump_barrier(server, display));
+    CHECK(nb_wayland_server_window_count(server) == 1);
+    CHECK(nb_wayland_server_take_redraw(server));
+    CHECK(!nb_wayland_server_take_redraw(server));
+    REQUIRE(nb_wayland_server_surface_snapshot(server,
+                                               nb_wayland_server_window_at(
+                                                   server, 0),
+                                               &snapshot));
+    CHECK(snapshot.pixels[(size_t)child_y * (size_t)root_width +
+                          (size_t)child_x] == child_pixel);
+    CHECK(snapshot.pixels[(size_t)(child_y + child_height - 1) *
+                              (size_t)root_width +
+                          (size_t)(child_x + child_width - 1)] ==
+          child_pixel);
+
+    wl_subsurface_destroy(subsurface);
+    subsurface = NULL;
+    REQUIRE(pump_barrier(server, display));
+    CHECK(nb_wayland_server_window_count(server) == 1);
+    CHECK(nb_wayland_server_take_redraw(server));
+    CHECK(!nb_wayland_server_take_redraw(server));
+    REQUIRE(nb_wayland_server_surface_snapshot(server,
+                                               nb_wayland_server_window_at(
+                                                   server, 0),
+                                               &snapshot));
+    CHECK(snapshot.pixels[(size_t)child_y * (size_t)root_width +
+                          (size_t)child_x] ==
+          root_pixels[(size_t)child_y * (size_t)root_width +
+                      (size_t)child_x]);
+
+    wl_surface_destroy(child_surface);
+    child_surface = NULL;
+    xdg_toplevel_destroy(toplevel);
+    toplevel = NULL;
+    xdg_surface_destroy(xdg_surface);
+    xdg_surface = NULL;
+    wl_surface_destroy(surface);
+    surface = NULL;
+    REQUIRE(pump_barrier(server, display));
+    CHECK(nb_wayland_server_window_count(server) == 0);
+
+cleanup:
+    if (subsurface != NULL) {
+        wl_subsurface_destroy(subsurface);
+    }
+    if (child_surface != NULL) {
+        wl_surface_destroy(child_surface);
+    }
+    if (toplevel != NULL) {
+        xdg_toplevel_destroy(toplevel);
+    }
+    if (xdg_surface != NULL) {
+        xdg_surface_destroy(xdg_surface);
+    }
+    if (surface != NULL) {
+        wl_surface_destroy(surface);
+    }
+    if (display != NULL) {
+        wl_display_disconnect(display);
+    }
+    if (server != NULL) {
+        nb_wayland_server_destroy(server);
+    }
+    if (pixels != MAP_FAILED) {
+        (void)munmap(pixels, total_bytes);
+    }
+    if (pool != NULL) {
+        wl_shm_pool_destroy(pool);
+    }
+    if (shm_fd >= 0) {
+        (void)close(shm_fd);
+    }
+    if (sockets[0] >= 0) {
+        (void)close(sockets[0]);
+    }
+    if (sockets[1] >= 0) {
+        (void)close(sockets[1]);
+    }
+}
+
 int main(void)
 {
     test_menu_source_reservation();
     test_wayland_surface_lifecycle();
+    test_wayland_subsurface_lifecycle();
 
     if (failures != 0) {
         fprintf(stderr, "wayland tests: %d failure(s)\n", failures);
