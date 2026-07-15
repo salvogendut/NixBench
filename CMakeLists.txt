@@ -424,6 +424,13 @@ target_include_directories(
 )
 nixbench_configure_c_target(nixbench_host_fd_wait)
 
+add_library(nixbench_privsep_protocol STATIC src/privsep_protocol.c)
+target_include_directories(
+  nixbench_privsep_protocol
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+nixbench_configure_c_target(nixbench_privsep_protocol)
+
 add_library(nixbench_host_sdl STATIC src/host_sdl.c)
 target_include_directories(
   nixbench_host_sdl
@@ -778,6 +785,16 @@ if(BUILD_TESTING)
   )
   nixbench_configure_c_target(nixbench_host_fd_wait_tests)
 
+  add_executable(
+    nixbench_privsep_protocol_tests
+    tests/privsep_protocol_test.c
+  )
+  target_link_libraries(
+    nixbench_privsep_protocol_tests
+    PRIVATE nixbench_privsep_protocol
+  )
+  nixbench_configure_c_target(nixbench_privsep_protocol_tests)
+
   add_executable(nixbench_host_sdl_tests tests/host_sdl_test.c)
   target_link_libraries(
     nixbench_host_sdl_tests
@@ -959,6 +976,10 @@ if(BUILD_TESTING)
   add_test(NAME nixbench.desktop.model COMMAND nixbench_desktop_tests)
   add_test(NAME nixbench.host.contract COMMAND nixbench_host_tests)
   add_test(NAME nixbench.host.fd-wait COMMAND nixbench_host_fd_wait_tests)
+  add_test(
+    NAME nixbench.privsep.protocol
+    COMMAND nixbench_privsep_protocol_tests
+  )
   add_test(NAME nixbench.host.sdl COMMAND nixbench_host_sdl_tests)
   set_tests_properties(
     nixbench.host.sdl
