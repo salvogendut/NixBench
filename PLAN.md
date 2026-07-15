@@ -160,14 +160,16 @@ publication, checked and enabled state, command delivery, surface lifetime,
 clock geometry, redraw timing, and command-line behavior have dedicated tests.
 The earlier `nixbench-wayland-demo` remains an input/protocol probe.
 
-NixClock is deliberately hosted-only at this checkpoint. The root
-`wsdisplay` research harness does not publish a Wayland socket or launch
-external applications: the compositor and desktop still run in the privileged
-worker. Standalone clients remain gated on implementing and validating the
-audited root device-helper/watchdog and ordinary-user core split. After that
-boundary, desktop-managed launching and installation, popup/subsurface/data
-protocols, toolkit trials, and broader application-menu bridges are still
-outstanding.
+Hosted NixBench remains the physically validated NixClock development path.
+The root `wsdisplay` research harness still does not publish a Wayland socket
+or launch external applications: its compositor and desktop run in the
+privileged worker. A separate opt-in `nixbench-wsdisplay-session` milestone now
+implements the audited root supervisor/device-helper and ordinary-user core
+split, publishes a private Wayland display, and launches NixClock after the
+credential drop. Its device-free integration path is covered, but its first
+physical console takeover is still pending. Desktop-managed installation,
+popup/subsurface/data protocols, toolkit trials, and broader application-menu
+bridges also remain outstanding.
 
 ## Milestone 6: Package and validate the hosted prototype
 
@@ -340,10 +342,12 @@ changed row's first-through-last changed-pixel span. It invalidates on every
 map/unmap and falls back to full conversion if the optional shadow cannot be
 allocated. Physical X220 validation of this damage-suppressed path averaged
 5 ms from userspace input read through framebuffer-copy completion.
-This is still a supervised hardware-validation mode rather than a desktop session:
-broader hardware validation, complete wscons keymap/seat/hotplug support,
-failure-injection tests, privilege separation, and a separate privileged
-watchdog that can recover after a compositor crash are the next safety gates.
+This root-only harness remains a supervised hardware-validation mode rather
+than a desktop session. Broader hardware validation and complete wscons
+keymap/seat/hotplug support are still required. Privilege separation and a
+separate recovery supervisor now exist in the distinct opt-in session path
+described below, but that path still needs its hardware crash, hang, VT, and
+repeated-session acceptance trials.
 The active-map controls are shell navigation only; general text, modifiers,
 client keymap reconciliation, and multi-device seat handling remain in that
 broader input gate.
@@ -382,8 +386,9 @@ input reduction, shell interaction, and refusal gates using device-free data;
 CTest never opens wscons or performs a takeover. The first 2000 ms X220
 diagnostic presentation completed with automatic restoration and an
 independent SSH watch; production wscons input/session integration, failure
-injection, privilege separation, broader hardware coverage, and a production
-crash watchdog remain later gates.
+injection, broader hardware coverage, and a production login-session review
+remain later gates. The privilege-separated session is a different executable
+and does not change the root-only nature of this historical harness.
 A subsequent 5000 ms `--desktop-preview` run completed through the same X220
 software-framebuffer path. The supervisor verified restoration, and separate
 postflight checks found the original console state with no recovery record or
@@ -426,13 +431,31 @@ postflight verification restored screen 0 in emulation mode with automatic VT
 handling, video on, and VT 1 active. The remaining active-map menu-navigation
 bindings retain device-free coverage but still await a focused physical trial.
 
-The first real external application, NixClock, now exercises the hosted
-application and global-menu path. Near-term standalone priority remains the
-audited root-helper/ordinary-user-core boundary documented in
-[`docs/privilege-boundary.md`](docs/privilege-boundary.md); only after that
-split may the `wsdisplay` runtime publish its Wayland service and launch
-external clients. Direct KMS remains a Milestone 7 deliverable but is not on
-that immediate critical path.
+The first real external application, NixClock, now exercises both the hosted
+application/global-menu path and the device-free integration path of the new
+opt-in privilege-separated session. `nixbench-wsdisplay-session` reserves
+standard descriptors before privileged opens, holds a root-owned flock across
+both the supervisor and live device worker, creates the recovery record
+exclusively, and supervises that worker. The worker retains fixed `wsdisplay`,
+wscons, VT, presentation, and heartbeat authority. Its anonymous bounded
+protocol connects to `nixbench-session-core`, which is executed only after the
+trusted child irreversibly changes to the invoking sudo user. The core publishes
+a private Wayland socket in a session-owned runtime directory and launches
+NixClock. The core and application inherit no console or recovery descriptor.
+
+`tools/run-wsdisplay-session.sh` configures the opt-in targets, builds and tests,
+stages only the privileged launcher as a root-owned `/var/run` executable,
+performs query-only preflight, requires `START-NIXBENCH`, and then runs without
+an automatic deadline under the root recovery supervisor. A second SSH session
+and the printed supervisor cancellation/manual `--recover` commands remain
+mandatory. The exact opt-in configuration now builds on NetBSD and passes all
+45 device-free tests; the staged root launcher links only NetBSD libc, and its
+query-only preflight preserved the expected console state. No physical takeover
+result is recorded for this new path yet. Its next gate is normal exit plus VT,
+core crash, stopped/hung core, malformed protocol, supervisor termination, and
+repeated-session validation on the X220.
+Direct KMS remains a Milestone 7 deliverable but is not on that immediate
+critical path.
 
 ## Milestone 8: Add standalone X11 compatibility
 

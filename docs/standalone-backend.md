@@ -6,39 +6,46 @@ embedded Wayland server remain unprivileged. Display and session mechanisms
 are replaceable platform adapters, not part of application or shell policy.
 
 > **Current prototype limits:** the supported development path is still the SDL
-> hosted window. The `wsdisplay` adapter is an experimental, output-only
-> bring-up path. An explicitly selected research harness can compose it with a
-> narrow wscons input provider, but there is no production privileged
-> helper/watchdog, complete seat/input support, acceleration, or broad hardware
-> coverage. It must not yet be treated as a production login session or
-> crash-safe console owner.
+> hosted window. The older `nixbench-wsdisplay-smoke` command remains an
+> all-root hardware-research harness. A separate, opt-in
+> `nixbench-wsdisplay-session` milestone now splits root console ownership from
+> an ordinary-user desktop, private Wayland server, and NixClock client. Its
+> device-free integration tests pass, but this new path has not yet completed a
+> physical takeover trial and has neither complete seat/input support,
+> acceleration, nor broad hardware coverage. It is not a production login
+> session or a default crash-safe console owner.
 
 ## Process and backend boundaries
 
 ```text
-native/Wayland clients
-          |
-unprivileged NixBench core (shell, policy, composition)
-          |
-nb_software_canvas_finish() -> struct nb_host_frame
-          |
-          +-- SDL host (nested X11/Wayland development window)
-          +-- wsdisplay host (first standalone software bring-up)
-          `-- DRM/KMS host (later modesetting and page flips)
+hosted development:
+  native/Wayland clients -> ordinary-user core -> canonical frame -> SDL host
 
-privileged session helper/watchdog
-          `-- only device acquisition, VT control, and emergency restore
+opt-in standalone milestone:
+  root recovery supervisor
+    `-- root device worker -> wsdisplay, wscons, and VT ownership
+          ^
+          | private fixed protocol
+          v
+        ordinary-user core <- private Wayland clients
+
+later output adapter:
+  root device worker -> DRM/KMS modesetting and page flips
 ```
 
-The core must not run as root. A future trusted launcher starts a small helper
-which opens only the selected console/display devices, records their original
-state, and then starts or hands narrowly scoped descriptors to the
-unprivileged core. Its local protocol must expose fixed operations such as
-acquire, release, query, and restore; it must not accept arbitrary paths,
-ioctls, or memory ranges from the core. The helper retains enough authority to
-restore the console if the core exits, crashes, or stops responding. This
-follows the useful separation in [Arcan's privileged process][arcan-suid], but
-NixBench does not depend on Arcan or adopt its protocol.
+The core must not run as root. In the opt-in implementation, the trusted root
+launcher records the original console state and retains a recovery supervisor.
+A root device worker opens only fixed console and wscons paths, performs VT and
+presentation operations, and exchanges fixed, bounded messages with the core.
+It does not accept arbitrary paths, ioctls, memory ranges, executable paths, or
+environment assignments from the core. The child performs and verifies an
+irreversible drop to the invoking account before executing
+`nixbench-session-core`; neither it nor its Wayland clients receive console,
+recovery, or helper descriptors. The supervisor retains enough authority to
+restore the console if the core or device worker exits, crashes, or stops
+responding. This follows the useful separation in
+[Arcan's privileged process][arcan-suid], but NixBench does not depend on Arcan
+or adopt its protocol.
 
 The audited authority inventory, protocol restrictions, credential-drop rules,
 and hardware acceptance gates are recorded in
@@ -361,7 +368,8 @@ If the supervisor itself fails, a second SSH session can run
 `sudo ./build/nixbench-wsdisplay-smoke --recover` against the persisted record.
 This manual fallback is why the command explicitly acknowledges the absence of
 a production crash watchdog. The harness still runs both parent and worker as
-root and must not be confused with the future least-privilege session helper.
+root and must not be confused with the separately built privilege-separated
+session milestone described below.
 
 CTest registers only device-free parser, reducer, rendering, interaction, and
 help checks for the executable. It never opens `/dev/wskbd` or `/dev/wsmouse`,
@@ -412,15 +420,68 @@ input-associated frame completed in 5 ms. Supervisor and independent
 postflight checks restored screen 0 in emulation mode with automatic VT
 handling and video on, with one-based VT 1 active and no recovery record left.
 
-### 3. Production supervised standalone sessions
+### 3. Opt-in privilege-separated standalone session
 
-Move device ownership and final restoration from the compositor process into
-the helper/watchdog. Use a private, inherited local channel with peer and
-message validation. The helper monitors both child exit and bounded
-heartbeats, performs an idempotent restore, and drops every privilege not
-needed for console/session recovery. Closing the core or killing it with a
-fatal signal must return the display to text mode without relying on core
-cleanup handlers.
+Configure with `-DNIXBENCH_BUILD_WSDISPLAY_SESSION=ON` together with the
+Wayland server, Wayland client, and application options. This builds three
+roles:
+
+- `nixbench-wsdisplay-session`, the root launcher and recovery supervisor;
+- a root device worker forked by that launcher, which alone owns `wsdisplay`,
+  wscons input, VT lifecycle, frame presentation, and the core heartbeat; and
+- `nixbench-session-core`, which runs as the invoking ordinary user, creates a
+  session-owned runtime directory and private Wayland display, then launches
+  the unprivileged `nixclock` client.
+
+Before any privileged state or device open, the launcher ensures descriptors
+0, 1, and 2 are occupied by valid standard streams. Privileged descriptors
+cannot therefore leak into an inherited closed standard slot. A root-owned
+mode-0600 flock at `/var/run/nixbench-wsdisplay-session.lock` serializes launch,
+preflight, and recovery; both the supervisor and live device worker retain it.
+The root-only recovery record at
+`/var/run/nixbench-wsdisplay-session.state` is created exclusively, and its
+continued presence independently prevents another launch. It is removed only
+after the worker and core are gone and restoration has been verified.
+
+The worker and core communicate through a private anonymous socketpair using
+versioned, fixed-size, state-dependent messages. The actual security boundary
+is that private channel plus the trusted child performing and verifying an
+irreversible credential drop before `execve()`. The PID and real, effective,
+and saved IDs repeated in `CORE_HELLO` are consistency checks supplied by the
+core; they are not OS-authenticated peer credentials, independent proof of the
+drop, or authorization for any broader operation.
+
+The device worker monitors the core's bounded heartbeat. The supervisor tracks
+the worker and core lifetimes, escalates TERM to KILL when needed, and performs
+idempotent restoration without relying on core cleanup handlers. The guided
+entry point is:
+
+```sh
+./tools/run-wsdisplay-session.sh
+```
+
+It configures and builds the opt-in targets, runs device-free tests, stages the
+privileged launcher as the root-owned, non-writable
+`/var/run/nixbench-wsdisplay-session`, performs a query-only preflight, and
+requires explicit takeover confirmation. The user-owned core path is passed
+separately and is executed only after the drop; the script never sudo-executes
+the build-tree launcher. The session has no automatic presentation deadline.
+Keep a second SSH connection open so the printed supervisor PID can be
+terminated if necessary; if orderly recovery does not complete, use:
+
+```sh
+sudo /var/run/nixbench-wsdisplay-session --recover
+```
+
+The process split and device-free integration coverage are implemented, but a
+physical takeover with this new command has not yet been claimed. The exact
+configuration builds natively on NetBSD and passes all 45 device-free tests.
+The staged root launcher links only NetBSD libc, has verified root ownership,
+and completed query-only preflight without changing the saved console state.
+Normal exit, VT release/acquire, core crash or hang, malformed protocol, worker
+and supervisor failure, and repeated-session recovery remain NetBSD hardware
+gates. The older all-root smoke harness remains useful only for bounded
+research and does not become an application launcher.
 
 ### 4. DRM/KMS, then GBM/EGL
 
@@ -465,10 +526,10 @@ safe notification (a `sig_atomic_t` flag and nonblocking self-pipe write); all
 ioctls, allocation, logging, and state changes happen in the event loop.
 The experimental adapter also turns `SIGINT`, `SIGTERM`, `SIGHUP`, and
 `SIGQUIT` into a normal host quit event so the event loop can restore the
-console. This depends on the caller continuing to service the event loop and is
-not a substitute for the future external watchdog. Its process-global signal
-handling also makes this first adapter single-threaded-only from creation
-through destruction.
+console. This depends on the caller continuing to service the event loop and
+does not make the old all-root smoke harness equivalent to the separate
+recovery supervisor. Its process-global signal handling also makes this first
+adapter single-threaded-only from creation through destruction.
 
 On release request, NixBench stops accepting frames, cancels focus, held input,
 and pointer capture, then acknowledges through
@@ -481,11 +542,12 @@ Required-cycle mode records acknowledgement and suspended-away timing and
 enforces balanced release/acquire and input suspend/resume counts, complete
 non-regressing timing samples, and a post-acquire frame.
 
-The watchdog records enough original state to restore emulation mode, video
-state, and automatic VT handling. Restoration is ordered, best-effort, and
-idempotent so it is safe after partial setup. The implementation should use the
-NetBSD [`wsdisplay` USL compatibility source][wsdisplay-usl] as the reference
-for `VT_SETMODE`/`VT_RELDISP` semantics rather than assuming Linux behaviour.
+The research supervisor and the new recovery supervisor record enough original
+state to restore emulation mode, video state, and automatic VT handling.
+Restoration is ordered, best-effort, and idempotent so it is safe after partial
+setup. The implementation uses the NetBSD
+[`wsdisplay` USL compatibility source][wsdisplay-usl] as the reference for
+`VT_SETMODE`/`VT_RELDISP` semantics rather than assuming Linux behaviour.
 
 ## Safety and testing gates
 

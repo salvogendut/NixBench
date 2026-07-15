@@ -134,21 +134,30 @@ provides an orderly early exit. Repeated downs are marked as repeats and
 with the same shared desktop runtime used by the hosted SDL frontend, including
 the real NixInfo application and application-owned global menus. It keeps
 Wayland publication disabled and still uses only the software canvas,
-`wsdisplay`, and wscons devices. The adapter and harness are not a crash-safe
-login session: a production wscons input/session layer and privileged recovery
-watchdog are still required before this can become a standalone desktop
-session. See
+`wsdisplay`, and wscons devices. That research harness is not a crash-safe
+login session because its desktop runtime and device worker both remain root.
+See
 [the standalone backend architecture](docs/standalone-backend.md) for the
 staged safety and implementation boundaries.
 The root-helper versus ordinary-user-core decision is detailed in the
 [standalone privilege-boundary assessment](docs/privilege-boundary.md).
 
-Consequently, the standalone `wsdisplay` research harness neither publishes a
-Wayland socket nor launches NixClock or any other external application. Its
-desktop runtime still executes as root. External clients will be enabled there
-only after the device helper/watchdog has been separated from the ordinary-user
-shell, compositor, and Wayland service; hosted NixBench is the NixClock
-development path in the meantime.
+The separate, opt-in `nixbench-wsdisplay-session` milestone now implements that
+process split without changing the old harness. A root recovery supervisor and
+root device worker retain `wsdisplay`, wscons, VT, presentation, heartbeat, and
+restoration authority. The trusted child irreversibly changes to the invoking
+sudo account before it executes `nixbench-session-core`, which creates the
+desktop, publishes a private Wayland display, and launches NixClock. The core
+receives only a bounded anonymous protocol endpoint; NixClock does not receive
+that endpoint, and neither process receives a framebuffer, wscons, recovery,
+or VT descriptor. This new path has device-free coverage but has not yet
+completed a physical console-takeover trial; it remains an explicitly
+acknowledged development milestone rather than a supported login session.
+
+The older `nixbench-wsdisplay-smoke` research harness deliberately remains
+available for framebuffer and input experiments. It neither publishes Wayland
+nor launches external applications, and its runtime continues to execute as
+root. Do not confuse it with the privilege-separated session.
 
 [sdl-kmsbsd]: https://wiki.libsdl.org/SDL3/README-kmsbsd
 
@@ -339,9 +348,21 @@ normal CMake search locations and NetBSD's base-system `/usr/X11R7/include`,
 `/usr/X11R7/include/libdrm`, and `/usr/X11R7/lib` layout directly, so it does
 not require `pkg-config`.
 
-`nixbench-wsdisplay-smoke` is an explicitly opt-in hardware harness and is not
-built by default. Enable it with `-DNIXBENCH_BUILD_WSDISPLAY_SMOKE=ON`. This
-does not make `wsdisplay` a supported desktop runtime.
+The privilege-separated NetBSD session is also excluded by default. Enabling
+`-DNIXBENCH_BUILD_WSDISPLAY_SESSION=ON` requires Wayland server support,
+Wayland client development files, and `NIXBENCH_BUILD_APPLICATIONS=ON`. It
+builds:
+
+- `nixbench-wsdisplay-session`, the root recovery supervisor and device-helper
+  launcher;
+- `nixbench-session-core`, its internal ordinary-user desktop process; and
+- `nixclock`, the initial native application launched on the core's private
+  Wayland display.
+
+`nixbench-wsdisplay-smoke` is the older, explicitly opt-in root hardware
+harness and is not built by default. Enable it separately with
+`-DNIXBENCH_BUILD_WSDISPLAY_SMOKE=ON`. Neither option makes `wsdisplay` a
+supported production runtime.
 
 SDL3 is available from NetBSD pkgsrc as `devel/SDL3`. Configure, build, and test
 with:
@@ -387,6 +408,67 @@ one connected connector has a cached mode. This is a conservative preflight,
 not proof that modesetting or ordinary page flips will work. Alternate device
 paths can be supplied with `--wsdisplay`, `--keyboard`, `--mouse`, and
 `--drm-directory`; use `--help` for details.
+
+### Opt-in privilege-separated wsdisplay session
+
+The guided entry point for the new standalone milestone is NetBSD-only and must
+be started over SSH while the physical console is visible:
+
+```sh
+./tools/run-wsdisplay-session.sh
+```
+
+The script requires passwordless `sudo` for recovery, configures
+`NIXBENCH_WAYLAND=ON`, `NIXBENCH_BUILD_APPLICATIONS=ON`, and
+`NIXBENCH_BUILD_WSDISPLAY_SESSION=ON`, builds, runs the non-destructive tests,
+stages the device launcher as the root-owned, non-writable
+`/var/run/nixbench-wsdisplay-session`, and performs a query-only preflight with
+that copy. The ordinary-user core and NixClock remain in the build tree and are
+never executed until after the credential drop. The script changes no display
+state until the operator types `START-NIXBENCH`. The session has no automatic
+deadline: exit from the desktop menu, press Escape while no Wayland client owns
+keyboard focus, or use the printed supervisor `SIGTERM` command from the
+retained second SSH session.
+
+Before any privileged device is opened, the launcher reserves standard file
+descriptors 0, 1, and 2 so a closed standard stream cannot accidentally become
+an inherited device capability. A root-owned mode-0600 flock at
+`/var/run/nixbench-wsdisplay-session.lock` serializes launch, preflight, and
+recovery and remains held by both the supervisor and live device worker. The
+launcher captures the console and exclusively creates the root-owned recovery
+record at `/var/run/nixbench-wsdisplay-session.state`, so unresolved recovery
+also prevents another launch. The root supervisor remains unmapped, tracks the
+worker and core lifetimes, applies bounded TERM/KILL escalation, and restores
+and independently verifies the saved console state before removing the record.
+The device worker enforces the core handshake and heartbeat.
+
+The device worker alone opens `wsdisplay` and wscons, owns `VT_PROCESS`, maps
+the framebuffer, and converts canonical frames. The core receives a private
+anonymous socket endpoint after an irreversible `setgid()`/`setuid()`
+transition to the sudo account. It creates a session-owned runtime directory,
+publishes a private Wayland socket, and launches NixClock with the matching
+`XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY`. NixClock participates in the normal
+global-menu path but receives neither the helper protocol descriptor nor any
+console capability.
+
+Keep a second SSH session open throughout the first hardware trials. If the
+launcher leaves the recovery record, first verify that no
+`nixbench-wsdisplay-session` helper remains, then run:
+
+```sh
+sudo /var/run/nixbench-wsdisplay-session --recover
+```
+
+`sudo /var/run/nixbench-wsdisplay-session --preflight` is query-only. The new
+targets build natively on the NetBSD test host and all 45 device-free tests
+pass there, including the ordinary-user core integration and failed-client
+launch path. `ldd` reports only NetBSD libc for the staged root launcher; SDL3,
+Wayland, and their client-side dependencies are confined to the ordinary-user
+side. A staged-launcher preflight also confirmed screen 0 in emulation mode,
+automatic VT handling, and video on without changing display state. The new
+privilege-separated takeover itself has not yet been physically validated, so
+the guided command remains an opt-in development test rather than a
+login-session installation procedure.
 
 The opt-in `wsdisplay` presentation harness must run as root. Start with its
 query-only preflight:
@@ -559,7 +641,8 @@ for an interactive/runtime preview and fails unless the worker closes input,
 acknowledges release, reacquires and reconfigures, reopens input, and then
 completes a full redraw. It also rejects lifecycle timestamp regressions,
 missing timing samples, and a missing post-acquire frame. The keyboard
-navigation and complete VT-cycle paths still require physical validation.
+menu-navigation bindings still require focused physical validation; the
+complete release/acquire cycle and Escape exit have already passed on the X220.
 
 Interactive input is acquired only by the framebuffer worker. Both mux
 descriptors are closed and held button/keyboard state is discarded before an
@@ -583,11 +666,12 @@ supervisor itself dies, recover from another session with:
 sudo ./build/nixbench-wsdisplay-smoke --recover
 ```
 
-This supervisor is a development safeguard, not the production privileged
-helper/watchdog. The worker still runs privileged, and its fixed-mux input is a
-short-lived research path rather than a general text/modifier keymap, hotplug,
-multi-device, production seat, or session implementation. The second
-acknowledgement recognizes that supervisor
+This all-root supervisor is a development safeguard, not the separate
+privilege-separated session described above or a production helper/watchdog.
+The worker still runs privileged, and its fixed-mux input is a short-lived
+research path rather than a general text/modifier keymap, hotplug, multi-device,
+production seat, or session implementation. The second acknowledgement
+recognizes that supervisor
 failure still needs manual recovery. CTest exercises parsers, reducers,
 rendering, help, and refusal with synthetic input only; automated tests never
 open wscons devices or perform a console takeover.

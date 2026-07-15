@@ -14,22 +14,42 @@ rendering, NixInfo, framebuffer host, and wscons input provider as root. That
 is acceptable only for the explicitly acknowledged hardware-research harness.
 It is not acceptable for a desktop that starts external applications.
 
-The production boundary is therefore:
+The separately built `nixbench-wsdisplay-session` milestone now implements the
+first opt-in version of the required boundary. Its root recovery supervisor
+captures and persists the original console state, watches a root device worker,
+and performs final restoration independently. The device worker owns the fixed
+`wsdisplay` and wscons devices, VT lifecycle, frame presentation, and core
+heartbeat. `nixbench-session-core` runs as the invoking ordinary user, publishes
+a private Wayland display, and launches NixClock. Device-free tests exercise the
+split, but this new command has not yet completed a physical takeover trial and
+is not a production login session.
+
+The implemented boundary is:
 
 ```text
-ordinary-user NixBench core
-  shell, compositor, Wayland service, applications, user files
-  canonical software frames
-                    |
-       private fixed-message channel
-                    |
-root device helper/watchdog
-  wsdisplay, wscons, VT lifecycle, presentation, recovery record
+root recovery supervisor
+  exclusive recovery record, worker/core lifetime, final restore/verify
+  `-- root device worker
+        wsdisplay, wscons, VT lifecycle, presentation, heartbeat
+                         |
+            private fixed-message channel
+                         |
+        ordinary-user NixBench core
+          shell, compositor, private Wayland service, applications, user files
+          canonical software frames
 ```
 
-The helper owns device authority and recovery. The core owns desktop and
-application policy. External applications are children or clients of the
-ordinary-user side and never inherit the helper's descriptors or credentials.
+The root side owns device authority and recovery: the supervisor retains the
+recovery record and final-restore duty, while the worker owns live device and
+protocol handling. The core owns desktop and application policy. External
+applications are children or clients of the ordinary-user side and never
+inherit privileged descriptors or credentials.
+A root-owned mode-0600 flock at the fixed session-lock path serializes launch,
+preflight, and recovery. Both the supervisor and live device worker retain a
+reference, so killing the supervisor alone cannot admit a competing recovery
+or launch. The separate root-only recovery record is created exclusively; its
+continued presence also prevents another launch. It is removed only after the
+worker and core are gone and restoration has been verified.
 
 ## Measured NetBSD device boundary
 
@@ -53,7 +73,7 @@ signal-pipe descriptor and no framebuffer mapping.
 
 ## Authority inventory
 
-The privileged helper is allowed to:
+The privileged supervisor and device worker are collectively allowed to:
 
 - select the active screen from the fixed `ttyEstat` status node;
 - open the corresponding fixed `ttyE` screen and fixed wscons mux devices;
@@ -66,9 +86,9 @@ The privileged helper is allowed to:
 - monitor the core, enforce heartbeat and termination grace periods, and
   restore the saved console state after exit or failure.
 
-It is not allowed to accept a device path, ioctl number, VT number, memory
-address, mapping range, command, executable path, or environment assignment
-from the core.
+Neither root process is allowed to accept a device path, ioctl number, VT
+number, memory address, mapping range, command, executable path, or environment
+assignment from the core.
 
 The ordinary-user core is responsible for:
 
@@ -83,11 +103,19 @@ logic do not inherently require root.
 
 ## Private protocol constraints
 
-The first protocol should be local, inherited, versioned, and unavailable by
+The first protocol is local, inherited, versioned, and unavailable by
 filesystem name. Every message has a fixed header, a known type, an exact
 bounded payload size, and state-dependent validity. Unknown, malformed,
 oversized, duplicated, or out-of-order messages terminate the core and start
 restoration.
+
+The security boundary is the private anonymous socketpair plus the trusted
+fork child performing and verifying an irreversible credential drop before
+`execve()`. `CORE_HELLO` repeats the expected child PID and real, effective, and
+saved IDs as a consistency check against programming or launch mistakes. Those
+fields are supplied by the core and are therefore not OS-authenticated peer
+credentials; they must not be described as independent proof of the drop or as
+authorization for broader helper operations.
 
 The helper can send only:
 
@@ -117,10 +145,12 @@ the same idempotent restoration path. TERM and KILL escalation remains bounded.
 The recovery record is removed only after the core is reaped and every saved
 console property is independently verified.
 
-The helper itself remains a trusted failure domain. During development, a
-second SSH session and the root-only recovery record remain mandatory in case
-the helper fails. A later production-login review can decide whether the
-helper needs an even smaller recovery parent.
+The root recovery supervisor and root device worker remain trusted failure
+domains. The supervisor stays outside the desktop process tree, monitors the
+worker, and performs final restoration even when the core or worker fails.
+During development, a second SSH session and the root-only recovery record
+remain mandatory in case the supervisor itself fails. A later production-login
+review can decide whether that recovery parent must become smaller still.
 
 ## Credential-drop requirements
 
@@ -134,37 +164,64 @@ NetBSD applies those calls to the real, effective, and saved IDs for a
 privileged caller. The child verifies the resulting identity and that UID 0
 cannot be reacquired before calling `execve()`.
 
-The child also resets signal dispositions and masks, umask, working directory,
-and resource limits. It closes every descriptor except standard streams and
-its single protocol endpoint. Device, recovery, and helper self-pipe
-descriptors are close-on-exec and never appear in application processes. A
-`chroot` is not used as a substitute for this boundary because the desktop
-must execute normal user applications and access the user's home and system
-libraries.
+Before opening the recovery record, console devices, or internal pipes, the
+root launcher reserves descriptors 0, 1, and 2 with valid standard streams.
+That prevents an inherited closed standard descriptor from being reused by a
+privileged device or recovery-state open. The child also resets signal
+dispositions and masks, umask, working directory, and resource limits. It
+closes every descriptor except those standard streams and its single protocol
+endpoint. Device, recovery, and helper self-pipe descriptors are close-on-exec
+and never appear in application processes. A `chroot` is not used as a
+substitute for this boundary because the desktop must execute normal user
+applications and access the user's home and system libraries.
 
-The launcher stays single-threaded through `fork()` and `execve()`. The initial
-IPC design must validate the expected child PID and dropped credentials during
-its handshake; a pre-fork anonymous socket alone is not proof that the peer has
-dropped authority.
+The launcher stays single-threaded through `fork()` and `execve()`. The
+anonymous socketpair makes the channel private, while the child's verified,
+irreversible credential drop establishes the authority boundary. The
+`CORE_HELLO` PID and identity fields detect inconsistent launch state; because
+the core supplies them, they do not authenticate the peer or prove the drop.
 
 ## Implementation and acceptance order
 
-1. Extract console capture, restoration, and verification behind private,
-   high-level operations and inject failure after every acquisition step.
-2. Separately test recovery-record validation and supervisor reap/escalation
-   policy. Do not expose fake operations through a root command-line or
-   environment switch.
-3. Implement the fixed helper/core protocol and move the existing wsdisplay
-   host and wscons provider to the helper side.
-4. Run the desktop core as the invoking ordinary user and verify descriptor and
-   group state before enabling application launch.
-5. On NetBSD hardware, validate normal Escape exit, VT 1 -> 2 -> 1, `SIGTERM`,
-   `SIGKILL`, a stopped/hung core, malformed protocol, and repeated sessions.
+The opt-in milestone implements the first structural slice as three binaries:
+
+- `nixbench-wsdisplay-session` is the root launcher and recovery supervisor;
+- its root device worker owns the fixed console devices and bounded protocol;
+  and
+- `nixbench-session-core` runs as the invoking user, publishes a private
+  Wayland display, and launches the ordinary-user `nixclock` client.
+
+Device-free tests exercise recovery-record and supervisor policy, protocol
+state, credential selection, standard-descriptor reservation, descriptor
+isolation, and user-session startup. The actual launch path performs and
+verifies the irreversible credential drop before `execve()`. The guided
+`tools/run-wsdisplay-session.sh` command builds and tests this opt-in path,
+performs query-only preflight, and requires explicit takeover confirmation. It
+has no automatic presentation deadline, so the operator must keep a second SSH
+session available to terminate the printed supervisor PID or run:
+
+```sh
+sudo /var/run/nixbench-wsdisplay-session --recover
+```
+
+The exact opt-in targets build natively on the NetBSD test host and all 45
+device-free tests pass. Dynamic-link inspection reports only NetBSD libc for
+the root launcher, while SDL3 and Wayland remain on the ordinary-user side.
+The root-owned staged launcher and mode-0600 lock were verified, and query-only
+preflight preserved screen 0 in emulation mode with automatic VT handling and
+video on.
+
+Physical takeover validation of this new path is still pending. On NetBSD
+hardware it must validate normal exit, VT 1 -> 2 -> 1, `SIGTERM`, `SIGKILL`, a
+stopped or hung core, malformed protocol, supervisor failure, and repeated
+sessions.
 
 Every case must return to the saved screen in emulation mode with video on and
 automatic VT handling, leave no worker or recovery record, and require no
-manual recovery. Until those gates pass, the existing root harness remains an
-opt-in research tool and must not launch external applications.
+manual recovery. Until those gates pass, the new session remains an opt-in
+milestone rather than a production login session. The older
+`nixbench-wsdisplay-smoke` executable remains a separate all-root research
+harness and must not launch external applications.
 
 ## Primary NetBSD references
 
