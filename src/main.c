@@ -353,6 +353,7 @@ int main(int argc, char *argv[])
     host_options.minimum_width = NIXBENCH_WINDOW_MIN_WIDTH;
     host_options.minimum_height = NIXBENCH_WINDOW_MIN_HEIGHT;
     host_options.fullscreen = options.fullscreen;
+    host_options.resizable = false;
     frontend.host = nb_host_sdl_create(&host_options);
     if (frontend.host == NULL) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
