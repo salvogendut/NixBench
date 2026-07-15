@@ -255,6 +255,7 @@ int nb_wsdisplay_session_run(
 #include <sys/wait.h>
 
 #include <fcntl.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdint.h>
@@ -513,6 +514,8 @@ struct worker_context {
     pid_t core_pid;
     struct nb_wsdisplay_session_frame_state frame;
     uint64_t submitted_generation;
+    uint64_t release_completions;
+    uint64_t acquire_completions;
 };
 
 static bool convert_output(const struct nb_host_output *host,
@@ -718,11 +721,16 @@ static bool handle_host_event(struct worker_context *worker,
                                        event->milliseconds)) {
             return false;
         }
+        ++worker->release_completions;
         return true;
     case NB_HOST_EVENT_CONSOLE_ACQUIRE_REQUESTED:
-        return nb_host_complete_console_acquire(worker->host) ==
-                   NB_HOST_RESULT_OK &&
-               resume_input_and_helper(worker);
+        if (nb_host_complete_console_acquire(worker->host) !=
+                NB_HOST_RESULT_OK ||
+            !resume_input_and_helper(worker)) {
+            return false;
+        }
+        ++worker->acquire_completions;
+        return true;
     case NB_HOST_EVENT_OUTPUT_CHANGED:
         return true;
     case NB_HOST_EVENT_QUIT:
@@ -1189,6 +1197,11 @@ cleanup:
     if (session_lock_fd >= 0) {
         (void)close(session_lock_fd);
     }
+    printf("VT lifecycle: release-completions=%" PRIu64
+           " acquire-completions=%" PRIu64 "\n",
+           worker.release_completions,
+           worker.acquire_completions);
+    (void)fflush(stdout);
     if (signals_blocked) {
         (void)sigprocmask(SIG_SETMASK, &previous_mask, NULL);
     }
