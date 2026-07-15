@@ -849,6 +849,13 @@ if(
 endif()
 
 if(UNIX AND (BUILD_TESTING OR NIXBENCH_BUILD_WSDISPLAY_SESSION))
+  add_library(nixbench_session_watchdog STATIC src/session_watchdog.c)
+  target_include_directories(
+    nixbench_session_watchdog
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  )
+  nixbench_configure_c_target(nixbench_session_watchdog)
+
   add_library(
     nixbench_wsdisplay_session_runner STATIC
     src/wsdisplay_session_runner.c
@@ -856,6 +863,10 @@ if(UNIX AND (BUILD_TESTING OR NIXBENCH_BUILD_WSDISPLAY_SESSION))
   target_include_directories(
     nixbench_wsdisplay_session_runner
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  )
+  target_link_libraries(
+    nixbench_wsdisplay_session_runner
+    PRIVATE nixbench_session_watchdog
   )
   if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
     target_link_libraries(
@@ -973,6 +984,16 @@ if(BUILD_TESTING)
       PRIVATE nixbench_session_credentials
     )
     nixbench_configure_c_target(nixbench_session_credentials_tests)
+
+    add_executable(
+      nixbench_session_watchdog_tests
+      tests/session_watchdog_test.c
+    )
+    target_link_libraries(
+      nixbench_session_watchdog_tests
+      PRIVATE nixbench_session_watchdog
+    )
+    nixbench_configure_c_target(nixbench_session_watchdog_tests)
 
     add_executable(
       nixbench_host_privsep_client_tests
@@ -1213,6 +1234,10 @@ if(BUILD_TESTING)
     add_test(
       NAME nixbench.session.credentials
       COMMAND nixbench_session_credentials_tests
+    )
+    add_test(
+      NAME nixbench.session.watchdog
+      COMMAND nixbench_session_watchdog_tests
     )
     if(NIXBENCH_WAYLAND_ENABLED)
       add_test(
