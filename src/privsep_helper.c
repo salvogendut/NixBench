@@ -6,7 +6,17 @@
 
 enum {
     NB_PRIVSEP_HELPER_MAX_OUTBOUND_MESSAGE =
-        NB_PRIVSEP_HEADER_SIZE + 40
+        NB_PRIVSEP_HEADER_SIZE + 40,
+    NB_PRIVSEP_HELPER_MAX_OUTBOUND_MESSAGES =
+        NB_PRIVSEP_HELPER_OUTBOUND_CAPACITY /
+        (NB_PRIVSEP_HEADER_SIZE + 8)
+};
+
+struct nb_privsep_outbound_record {
+    size_t remaining;
+    uint64_t sequence;
+    bool input;
+    bool started;
 };
 
 struct nb_privsep_helper {
@@ -21,6 +31,10 @@ struct nb_privsep_helper {
     unsigned char outbound[NB_PRIVSEP_HELPER_OUTBOUND_CAPACITY];
     size_t outbound_head;
     size_t outbound_size;
+    struct nb_privsep_outbound_record
+        outbound_records[NB_PRIVSEP_HELPER_MAX_OUTBOUND_MESSAGES];
+    size_t outbound_record_head;
+    size_t outbound_record_count;
     uint64_t next_outbound_sequence;
     bool outbound_sequence_exhausted;
 
@@ -94,8 +108,11 @@ static bool enqueue_message(struct nb_privsep_helper *helper,
     size_t available;
     size_t tail;
     size_t first;
+    size_t record_tail;
 
     if (helper->outbound_sequence_exhausted ||
+        helper->outbound_record_count ==
+            NB_PRIVSEP_HELPER_MAX_OUTBOUND_MESSAGES ||
         !nb_privsep_message_encode(NB_PRIVSEP_ENDPOINT_HELPER,
                                    helper->next_outbound_sequence,
                                    message,
@@ -120,6 +137,15 @@ static bool enqueue_message(struct nb_privsep_helper *helper,
     memcpy(helper->outbound + tail, wire, first);
     memcpy(helper->outbound, wire + first, wire_size - first);
     helper->outbound_size += wire_size;
+    record_tail = (helper->outbound_record_head +
+                   helper->outbound_record_count) %
+                  NB_PRIVSEP_HELPER_MAX_OUTBOUND_MESSAGES;
+    helper->outbound_records[record_tail].remaining = wire_size;
+    helper->outbound_records[record_tail].sequence =
+        helper->next_outbound_sequence;
+    helper->outbound_records[record_tail].input = input;
+    helper->outbound_records[record_tail].started = false;
+    ++helper->outbound_record_count;
     if (helper->next_outbound_sequence == UINT64_MAX) {
         helper->outbound_sequence_exhausted = true;
     } else {
@@ -237,14 +263,12 @@ static void clear_frame(struct nb_privsep_helper *helper)
 static bool handle_frame_begin(struct nb_privsep_helper *helper,
                                const struct nb_privsep_frame_begin *begin)
 {
-    const bool stale = begin->generation < helper->generation;
-
     if (!helper->ready_sent || helper->frame_open ||
         helper->presentation_pending ||
-        begin->generation > helper->generation ||
-        (!stale && helper->suspended) ||
+        begin->generation != helper->generation ||
+        helper->suspended ||
         begin->serial <= helper->last_submitted_serial ||
-        (!stale && begin->frame_bytes != helper->output.frame_bytes)) {
+        begin->frame_bytes != helper->output.frame_bytes) {
         return fail_helper(helper,
                            NB_PRIVSEP_HELPER_ERROR_PROTOCOL,
                            NB_PRIVSEP_FATAL_PROTOCOL,
@@ -252,7 +276,7 @@ static bool handle_frame_begin(struct nb_privsep_helper *helper,
                            "out-of-order FRAME_BEGIN");
     }
     helper->frame_open = true;
-    helper->frame_stale = stale;
+    helper->frame_stale = false;
     helper->frame_generation = begin->generation;
     helper->frame_serial = begin->serial;
     helper->frame_expected = begin->frame_bytes;
@@ -529,14 +553,39 @@ bool nb_privsep_helper_consume_outbound(
     struct nb_privsep_helper *helper,
     size_t size)
 {
+    size_t remaining = size;
+
     if (helper == NULL || size > helper->outbound_size) {
         return false;
+    }
+    while (remaining != 0) {
+        struct nb_privsep_outbound_record *record;
+        size_t amount;
+
+        if (helper->outbound_record_count == 0) {
+            return false;
+        }
+        record = &helper->outbound_records[
+            helper->outbound_record_head];
+        amount = remaining < record->remaining
+                     ? remaining
+                     : record->remaining;
+        record->started = true;
+        record->remaining -= amount;
+        remaining -= amount;
+        if (record->remaining == 0) {
+            helper->outbound_record_head =
+                (helper->outbound_record_head + 1) %
+                NB_PRIVSEP_HELPER_MAX_OUTBOUND_MESSAGES;
+            --helper->outbound_record_count;
+        }
     }
     helper->outbound_head = (helper->outbound_head + size) %
                             NB_PRIVSEP_HELPER_OUTBOUND_CAPACITY;
     helper->outbound_size -= size;
     if (helper->outbound_size == 0) {
         helper->outbound_head = 0;
+        helper->outbound_record_head = 0;
     }
     return true;
 }
@@ -545,6 +594,121 @@ size_t nb_privsep_helper_outbound_size(
     const struct nb_privsep_helper *helper)
 {
     return helper != NULL ? helper->outbound_size : 0;
+}
+
+static void copy_outbound_span(const struct nb_privsep_helper *helper,
+                               size_t position,
+                               unsigned char *destination,
+                               size_t size)
+{
+    size_t first = NB_PRIVSEP_HELPER_OUTBOUND_CAPACITY - position;
+
+    if (first > size) {
+        first = size;
+    }
+    memcpy(destination, helper->outbound + position, first);
+    memcpy(destination + first, helper->outbound, size - first);
+}
+
+static void store_outbound_sequence(unsigned char *wire,
+                                    uint64_t sequence)
+{
+    size_t index;
+
+    for (index = 0; index < sizeof(sequence); ++index) {
+        const unsigned int shift =
+            (unsigned int)(sizeof(sequence) - index - 1U) * 8U;
+
+        wire[16U + index] = (unsigned char)(sequence >> shift);
+    }
+}
+
+/*
+ * Release input is stale once SUSPEND is observed. Remove every input message
+ * whose first byte has not left the helper, then close sequence gaps in the
+ * remaining unsent controls. A partially consumed head message is immutable:
+ * its already-written prefix and remaining suffix must stay one wire frame.
+ */
+static bool purge_unsent_input(struct nb_privsep_helper *helper)
+{
+    unsigned char compact[NB_PRIVSEP_HELPER_OUTBOUND_CAPACITY];
+    struct nb_privsep_outbound_record
+        records[NB_PRIVSEP_HELPER_MAX_OUTBOUND_MESSAGES];
+    const struct nb_privsep_outbound_record *first_record;
+    size_t read_position;
+    size_t write_position = 0;
+    size_t retained = 0;
+    size_t index;
+    uint64_t next_sequence;
+    bool sequence_available;
+
+    if (helper->outbound_record_count == 0) {
+        return helper->outbound_size == 0;
+    }
+    first_record = &helper->outbound_records[
+        helper->outbound_record_head];
+    next_sequence = first_record->sequence;
+    sequence_available = true;
+    if (first_record->started) {
+        if (next_sequence == UINT64_MAX) {
+            sequence_available = false;
+        } else {
+            ++next_sequence;
+        }
+    }
+
+    read_position = helper->outbound_head;
+    for (index = 0; index < helper->outbound_record_count; ++index) {
+        const size_t record_index =
+            (helper->outbound_record_head + index) %
+            NB_PRIVSEP_HELPER_MAX_OUTBOUND_MESSAGES;
+        const struct nb_privsep_outbound_record *source =
+            &helper->outbound_records[record_index];
+
+        if (source->remaining == 0 ||
+            (source->started && index != 0)) {
+            return false;
+        }
+        if (!source->input || source->started) {
+            struct nb_privsep_outbound_record *destination =
+                &records[retained];
+
+            copy_outbound_span(helper,
+                               read_position,
+                               compact + write_position,
+                               source->remaining);
+            *destination = *source;
+            if (!source->started) {
+                if (!sequence_available) {
+                    return false;
+                }
+                destination->sequence = next_sequence;
+                store_outbound_sequence(compact + write_position,
+                                        next_sequence);
+                if (next_sequence == UINT64_MAX) {
+                    sequence_available = false;
+                } else {
+                    ++next_sequence;
+                }
+            }
+            write_position += source->remaining;
+            ++retained;
+        }
+        read_position = (read_position + source->remaining) %
+                        NB_PRIVSEP_HELPER_OUTBOUND_CAPACITY;
+    }
+
+    memcpy(helper->outbound, compact, write_position);
+    memcpy(helper->outbound_records,
+           records,
+           retained * sizeof(records[0]));
+    helper->outbound_head = 0;
+    helper->outbound_size = write_position;
+    helper->outbound_record_head = 0;
+    helper->outbound_record_count = retained;
+    helper->next_outbound_sequence = next_sequence;
+    helper->outbound_sequence_exhausted = !sequence_available;
+    return true;
 }
 
 bool nb_privsep_helper_suspend(struct nb_privsep_helper *helper,
@@ -556,6 +720,13 @@ bool nb_privsep_helper_suspend(struct nb_privsep_helper *helper,
     if (helper == NULL || helper->failed || helper->shutdown_requested ||
         helper->suspended || helper->generation == UINT64_MAX) {
         return false;
+    }
+    if (helper->ready_sent && !purge_unsent_input(helper)) {
+        return fail_helper(helper,
+                           NB_PRIVSEP_HELPER_ERROR_INVALID_STATE,
+                           NB_PRIVSEP_FATAL_INTERNAL,
+                           0,
+                           "could not prioritize session suspension");
     }
     if (helper->presentation_pending) {
         abandoned = helper->presentation_serial;
@@ -745,7 +916,8 @@ bool nb_privsep_helper_send_ping(struct nb_privsep_helper *helper,
     struct nb_privsep_message message = {0};
 
     if (helper == NULL || helper->failed || helper->shutdown_requested ||
-        !helper->ready_sent || helper->ping_outstanding || token == 0) {
+        !helper->ready_sent || helper->ping_outstanding ||
+        helper->pong_available || token == 0) {
         return false;
     }
     message.type = NB_PRIVSEP_MESSAGE_PING;

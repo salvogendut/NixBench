@@ -436,6 +436,8 @@ static void test_input_heartbeat_and_shutdown(void)
     message.data.token = 90;
     CHECK(send_core(&session, &message, 1));
     CHECK(!nb_privsep_helper_ping_outstanding(session.helper));
+    CHECK(!nb_privsep_helper_send_ping(session.helper, 91));
+    CHECK(!nb_privsep_helper_failed(session.helper));
     CHECK(nb_privsep_helper_take_pong(session.helper, &token));
     CHECK(token == 90);
     CHECK(!nb_privsep_helper_take_pong(session.helper, &token));
@@ -449,6 +451,83 @@ static void test_input_heartbeat_and_shutdown(void)
     CHECK(pop_outbound(&session, &message));
     CHECK(message.type == NB_PRIVSEP_MESSAGE_SHUTDOWN_ACCEPTED);
     CHECK(message.data.token == 91);
+    session_destroy(&session);
+}
+
+static void test_suspend_prioritizes_control(void)
+{
+    struct test_session session;
+    struct nb_host_event event = {0};
+    struct nb_privsep_message message;
+    const unsigned char *bytes;
+    size_t size;
+    size_t consumed;
+    enum nb_privsep_parse_status status;
+
+    CHECK(session_create(&session));
+    CHECK(send_hello(&session, 0));
+    CHECK(pop_outbound(&session, &message));
+    event.type = NB_HOST_EVENT_POINTER_MOTION;
+    event.data.pointer_motion.x = 1;
+    event.data.pointer_motion.y = 1;
+    CHECK(nb_privsep_helper_send_input(session.helper, &event));
+    ++event.milliseconds;
+    CHECK(nb_privsep_helper_send_input(session.helper, &event));
+    CHECK(nb_privsep_helper_send_ping(session.helper, 77));
+    ++event.milliseconds;
+    CHECK(nb_privsep_helper_send_input(session.helper, &event));
+    CHECK(nb_privsep_helper_suspend(session.helper, 100));
+    CHECK(pop_outbound(&session, &message));
+    CHECK(message.type == NB_PRIVSEP_MESSAGE_PING);
+    CHECK(message.data.token == 77);
+    CHECK(pop_outbound(&session, &message));
+    CHECK(message.type == NB_PRIVSEP_MESSAGE_SUSPEND);
+    CHECK(nb_privsep_helper_outbound_size(session.helper) == 0);
+    session_destroy(&session);
+
+    CHECK(session_create(&session));
+    CHECK(send_hello(&session, 0));
+    CHECK(pop_outbound(&session, &message));
+    CHECK(nb_privsep_helper_send_input(session.helper, &event));
+    ++event.milliseconds;
+    CHECK(nb_privsep_helper_send_input(session.helper, &event));
+    CHECK(nb_privsep_helper_peek_outbound(session.helper, &bytes, &size));
+    CHECK(size > 7);
+    consumed = 0;
+    status = nb_privsep_parser_feed(&session.outbound_parser,
+                                    bytes,
+                                    7,
+                                    &consumed,
+                                    &message);
+    CHECK(status == NB_PRIVSEP_PARSE_NEED_MORE);
+    CHECK(consumed == 7);
+    CHECK(nb_privsep_helper_consume_outbound(session.helper, consumed));
+    CHECK(nb_privsep_helper_suspend(session.helper, 101));
+    CHECK(pop_outbound(&session, &message));
+    CHECK(message.type == NB_PRIVSEP_MESSAGE_POINTER_MOTION);
+    CHECK(pop_outbound(&session, &message));
+    CHECK(message.type == NB_PRIVSEP_MESSAGE_SUSPEND);
+    CHECK(nb_privsep_helper_outbound_size(session.helper) == 0);
+    session_destroy(&session);
+}
+
+static void test_fresh_stale_frame_is_rejected(void)
+{
+    struct test_session session;
+    struct nb_privsep_message message = {0};
+    struct nb_privsep_message outbound;
+
+    CHECK(session_create(&session));
+    CHECK(send_hello(&session, 0));
+    CHECK(pop_outbound(&session, &outbound));
+    CHECK(nb_privsep_helper_suspend(session.helper, 1));
+    CHECK(pop_outbound(&session, &outbound));
+    message.type = NB_PRIVSEP_MESSAGE_FRAME_BEGIN;
+    message.data.frame_begin.generation = 1;
+    message.data.frame_begin.serial = 1;
+    message.data.frame_begin.frame_bytes = output.frame_bytes;
+    CHECK(!send_core(&session, &message, 0));
+    CHECK(nb_privsep_helper_failed(session.helper));
     session_destroy(&session);
 }
 
@@ -525,6 +604,8 @@ int main(void)
     test_frame_order_rejections();
     test_suspend_stale_drain_and_resume();
     test_input_heartbeat_and_shutdown();
+    test_suspend_prioritizes_control();
+    test_fresh_stale_frame_is_rejected();
     test_queue_saturation();
     test_suspend_before_hello_and_late_completion();
 
