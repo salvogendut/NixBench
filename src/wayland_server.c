@@ -1325,9 +1325,14 @@ static void clear_surface_pointer_state(struct nb_wayland_surface *surface,
     pointer_cancel_internal(server, server->pointer_time, send_events);
 }
 
+static void dismiss_popup_descendants(
+    struct nb_wayland_surface *parent,
+    bool send_client_events);
+
 static void unmap_surface(struct nb_wayland_surface *surface,
                           bool send_client_events)
 {
+    dismiss_popup_descendants(surface, send_client_events);
     if (surface->window != NB_WINDOW_ID_NONE) {
         if (send_client_events) {
             surface_send_output_membership(surface, false);
@@ -1444,6 +1449,61 @@ static void clear_pending_attach(struct nb_wayland_surface *surface)
     detach_pending_buffer_listener(surface);
     surface->pending_buffer_resource = NULL;
     surface->pending_attach = false;
+}
+
+static void dismiss_popup_descendants(
+    struct nb_wayland_surface *parent,
+    bool send_client_events)
+{
+    struct nb_wayland_server *server;
+    size_t index;
+
+    if (parent == NULL || parent->server == NULL) {
+        return;
+    }
+    server = parent->server;
+    for (index = 0; index < NB_WAYLAND_MAX_SURFACES; ++index) {
+        struct nb_wayland_surface *popup = &server->surfaces[index];
+        struct nb_wayland_surface *root;
+        bool was_mapped;
+
+        if (!popup->occupied ||
+            popup->role != NB_WAYLAND_SURFACE_ROLE_XDG_POPUP ||
+            popup->popup_resource == NULL ||
+            popup->popup_parent != parent) {
+            continue;
+        }
+        root = surface_root_toplevel(popup);
+        was_mapped = surface_is_mapped(popup);
+        dismiss_popup_descendants(popup, send_client_events);
+        if (!popup->popup_dismissed) {
+            popup->popup_dismissed = true;
+            if (send_client_events && !server->destroying) {
+                xdg_popup_send_popup_done(popup->popup_resource);
+            }
+        }
+        clear_surface_keyboard_state(popup, send_client_events);
+        clear_surface_pointer_state(popup, send_client_events);
+        clear_pending_attach(popup);
+        destroy_frame_resources(popup);
+        if (was_mapped && send_client_events) {
+            surface_send_output_membership(popup, false);
+        }
+        free(popup->pixels);
+        free(popup->composite_pixels);
+        popup->pixels = NULL;
+        popup->composite_pixels = NULL;
+        popup->width = 0;
+        popup->height = 0;
+        popup->configure_sent = false;
+        popup->configured = false;
+        popup->configure_serial = 0;
+        popup->popup_parent = NULL;
+        popup->popup_grabbed = false;
+        if (root != NULL) {
+            surface_tree_changed(root, false);
+        }
+    }
 }
 
 static void maybe_release_surface_slot(struct nb_wayland_surface *surface)
@@ -1821,6 +1881,10 @@ static void surface_commit(struct wl_client *client,
                              &new_width,
                              &new_height)) {
             return;
+        }
+
+        if (buffer == NULL && was_mapped) {
+            dismiss_popup_descendants(surface, true);
         }
 
         detach_pending_buffer_listener(surface);
@@ -2838,6 +2902,53 @@ static bool positioner_calculate_geometry(
     return true;
 }
 
+static bool popup_has_live_child(
+    const struct nb_wayland_surface *parent,
+    const struct nb_wayland_surface *ignored_child)
+{
+    size_t index;
+
+    if (parent == NULL || parent->server == NULL) {
+        return false;
+    }
+    for (index = 0; index < NB_WAYLAND_MAX_SURFACES; ++index) {
+        const struct nb_wayland_surface *candidate =
+            &parent->server->surfaces[index];
+
+        if (candidate != ignored_child && candidate->occupied &&
+            candidate->role == NB_WAYLAND_SURFACE_ROLE_XDG_POPUP &&
+            candidate->popup_resource != NULL &&
+            candidate->popup_parent == parent) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool toplevel_has_other_popup_grab(
+    const struct nb_wayland_surface *root,
+    const struct nb_wayland_surface *ignored_popup)
+{
+    size_t index;
+
+    if (root == NULL || root->server == NULL) {
+        return false;
+    }
+    for (index = 0; index < NB_WAYLAND_MAX_SURFACES; ++index) {
+        const struct nb_wayland_surface *candidate =
+            &root->server->surfaces[index];
+
+        if (candidate != ignored_popup && candidate->occupied &&
+            candidate->role == NB_WAYLAND_SURFACE_ROLE_XDG_POPUP &&
+            candidate->popup_resource != NULL &&
+            candidate->popup_grabbed && !candidate->popup_dismissed &&
+            surface_root_toplevel_const(candidate) == root) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void popup_resource_destroyed(struct wl_resource *resource)
 {
     struct nb_wayland_surface *surface =
@@ -2848,6 +2959,7 @@ static void popup_resource_destroyed(struct wl_resource *resource)
         return;
     }
     root = surface_root_toplevel(surface);
+    dismiss_popup_descendants(surface, false);
     clear_surface_pointer_state(surface, false);
     clear_surface_keyboard_state(surface, false);
     clear_pending_attach(surface);
@@ -2877,7 +2989,17 @@ static void popup_resource_destroyed(struct wl_resource *resource)
 static void popup_destroy(struct wl_client *client,
                           struct wl_resource *resource)
 {
+    struct nb_wayland_surface *surface =
+        wl_resource_get_user_data(resource);
+
     (void)client;
+    if (popup_has_live_child(surface, NULL)) {
+        wl_resource_post_error(
+            surface->wm_base_resource,
+            XDG_WM_BASE_ERROR_NOT_THE_TOPMOST_POPUP,
+            "destroy the topmost child popup first");
+        return;
+    }
     wl_resource_destroy(resource);
 }
 
@@ -2888,26 +3010,40 @@ static void popup_grab(struct wl_client *client,
 {
     struct nb_wayland_surface *surface =
         wl_resource_get_user_data(resource);
+    struct nb_wayland_surface *parent = surface->popup_parent;
+    struct nb_wayland_surface *root =
+        surface_root_toplevel(surface);
 
     (void)client;
     (void)serial;
-    if (surface->configure_sent || surface->pixels != NULL) {
+    if (surface->popup_dismissed || parent == NULL ||
+        surface->configure_sent || surface->pixels != NULL) {
         wl_resource_post_error(resource,
                                XDG_POPUP_ERROR_INVALID_GRAB,
-                               "popup grab requested after mapping");
+                               "popup grab requested in an invalid state");
         return;
     }
     if (!wl_resource_instance_of(seat,
                                  &wl_seat_interface,
                                  &seat_implementation) ||
         wl_resource_get_user_data(seat) != surface->server) {
-        surface->popup_dismissed = true;
-        xdg_popup_send_popup_done(resource);
+        wl_resource_post_error(resource,
+                               XDG_POPUP_ERROR_INVALID_GRAB,
+                               "popup grab uses a foreign seat");
         return;
     }
-    /* Explicit popup grabs are deliberately denied without killing client. */
-    surface->popup_dismissed = true;
-    xdg_popup_send_popup_done(resource);
+    if ((parent->role == NB_WAYLAND_SURFACE_ROLE_XDG_POPUP &&
+         (!parent->popup_grabbed || parent->popup_dismissed ||
+          popup_has_live_child(parent, surface))) ||
+        (parent->role == NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL &&
+         toplevel_has_other_popup_grab(root, surface))) {
+        wl_resource_post_error(
+            surface->wm_base_resource,
+            XDG_WM_BASE_ERROR_NOT_THE_TOPMOST_POPUP,
+            "popup parent is not the topmost popup grab");
+        return;
+    }
+    surface->popup_grabbed = true;
 }
 
 static void popup_reposition(struct wl_client *client,
@@ -3173,10 +3309,12 @@ static void xdg_surface_get_popup(struct wl_client *client,
     int popup_x;
     int popup_y;
 
-    if (surface->role != NB_WAYLAND_SURFACE_ROLE_NONE) {
-        wl_resource_post_error(surface->wm_base_resource,
-                               XDG_WM_BASE_ERROR_ROLE,
-                               "wl_surface already has an xdg role");
+    if (surface->popup_resource != NULL ||
+        (surface->role != NB_WAYLAND_SURFACE_ROLE_NONE &&
+         surface->role != NB_WAYLAND_SURFACE_ROLE_XDG_POPUP)) {
+        wl_resource_post_error(resource,
+                               XDG_SURFACE_ERROR_ALREADY_CONSTRUCTED,
+                               "wl_surface already has an xdg role object");
         return;
     }
     if (parent == NULL ||

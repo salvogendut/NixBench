@@ -1696,6 +1696,7 @@ static void test_wayland_surface_lifecycle(void)
     root_revision_before_popup = snapshot.revision;
     pixels[0] = 0;
     CHECK(snapshot.pixels[0] != pixels[0]);
+    (void)nb_wayland_server_take_redraw(server);
 
     /*
      * A completed positioner is copied by get_popup.  Destroying it before
@@ -1731,6 +1732,8 @@ static void test_wayland_surface_lifecycle(void)
     REQUIRE(xdg_popup_add_listener(popup,
                                    &popup_listener,
                                    &popup_client) == 0);
+    /* GTK requests its completion/menu grab before the initial commit. */
+    xdg_popup_grab(popup, client.seat, UINT32_C(1));
     xdg_positioner_destroy(positioner);
     positioner = NULL;
 
