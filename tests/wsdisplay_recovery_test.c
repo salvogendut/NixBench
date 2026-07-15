@@ -1,3 +1,6 @@
+#if defined(__NetBSD__)
+#define _NETBSD_SOURCE 1
+#endif
 #define _POSIX_C_SOURCE 200809L
 
 #include "wsdisplay_recovery.h"
