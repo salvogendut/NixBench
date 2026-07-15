@@ -40,6 +40,10 @@ restore the console if the core exits, crashes, or stops responding. This
 follows the useful separation in [Arcan's privileged process][arcan-suid], but
 NixBench does not depend on Arcan or adopt its protocol.
 
+The audited authority inventory, protocol restrictions, credential-drop rules,
+and hardware acceptance gates are recorded in
+[`privilege-boundary.md`](privilege-boundary.md).
+
 Applications never receive console or DRM descriptors. They remain separate
 processes which submit surfaces through the compositor protocol.
 

@@ -133,6 +133,8 @@ watchdog are still required before this can become a standalone desktop
 session. See
 [the standalone backend architecture](docs/standalone-backend.md) for the
 staged safety and implementation boundaries.
+The root-helper versus ordinary-user-core decision is detailed in the
+[standalone privilege-boundary assessment](docs/privilege-boundary.md).
 
 [sdl-kmsbsd]: https://wiki.libsdl.org/SDL3/README-kmsbsd
 

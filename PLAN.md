@@ -413,6 +413,12 @@ postflight verification restored screen 0 in emulation mode with automatic VT
 handling, video on, and VT 1 active. The remaining active-map menu-navigation
 bindings retain device-free coverage but still await a focused physical trial.
 
+Near-term priority now moves to the audited root-helper/ordinary-user-core
+boundary documented in
+[`docs/privilege-boundary.md`](docs/privilege-boundary.md), followed by the
+first real external NixBench application. Direct KMS remains a Milestone 7
+deliverable but is not on that immediate critical path.
+
 ## Milestone 8: Add standalone X11 compatibility
 
 Allow legacy X11 applications to participate in a standalone NixBench session
