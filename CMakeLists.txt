@@ -19,6 +19,12 @@ option(
 )
 
 option(
+  NIXBENCH_BUILD_APPLICATIONS
+  "Build NixBench native applications"
+  ON
+)
+
+option(
   NIXBENCH_BUILD_WSDISPLAY_SMOKE
   "Build the supervised, console-taking wsdisplay smoke harness"
   OFF
@@ -266,12 +272,31 @@ if(NIXBENCH_WAYLAND_ENABLED)
     NIXBENCH_XDG_SHELL_PRIVATE_CODE
     "${NIXBENCH_WAYLAND_GENERATED_DIR}/xdg-shell-protocol.c"
   )
+  set(
+    NIXBENCH_APPLICATION_MENU_XML
+    "${CMAKE_CURRENT_SOURCE_DIR}/protocols/nixbench-application-menu-v1.xml"
+  )
+  set(
+    NIXBENCH_APPLICATION_MENU_SERVER_HEADER
+    "${NIXBENCH_WAYLAND_GENERATED_DIR}/nixbench-application-menu-v1-server-protocol.h"
+  )
+  set(
+    NIXBENCH_APPLICATION_MENU_CLIENT_HEADER
+    "${NIXBENCH_WAYLAND_GENERATED_DIR}/nixbench-application-menu-v1-client-protocol.h"
+  )
+  set(
+    NIXBENCH_APPLICATION_MENU_PRIVATE_CODE
+    "${NIXBENCH_WAYLAND_GENERATED_DIR}/nixbench-application-menu-v1-protocol.c"
+  )
 
   add_custom_command(
     OUTPUT
       "${NIXBENCH_XDG_SHELL_SERVER_HEADER}"
       "${NIXBENCH_XDG_SHELL_CLIENT_HEADER}"
       "${NIXBENCH_XDG_SHELL_PRIVATE_CODE}"
+      "${NIXBENCH_APPLICATION_MENU_SERVER_HEADER}"
+      "${NIXBENCH_APPLICATION_MENU_CLIENT_HEADER}"
+      "${NIXBENCH_APPLICATION_MENU_PRIVATE_CODE}"
     COMMAND
       "${CMAKE_COMMAND}" -E make_directory
       "${NIXBENCH_WAYLAND_GENERATED_DIR}"
@@ -287,8 +312,22 @@ if(NIXBENCH_WAYLAND_ENABLED)
       "${NIXBENCH_WAYLAND_SCANNER}" --strict private-code
       "${NIXBENCH_XDG_SHELL_XML}"
       "${NIXBENCH_XDG_SHELL_PRIVATE_CODE}"
-    DEPENDS "${NIXBENCH_XDG_SHELL_XML}"
-    COMMENT "Generating the xdg-shell protocol bindings"
+    COMMAND
+      "${NIXBENCH_WAYLAND_SCANNER}" --strict server-header
+      "${NIXBENCH_APPLICATION_MENU_XML}"
+      "${NIXBENCH_APPLICATION_MENU_SERVER_HEADER}"
+    COMMAND
+      "${NIXBENCH_WAYLAND_SCANNER}" --strict client-header
+      "${NIXBENCH_APPLICATION_MENU_XML}"
+      "${NIXBENCH_APPLICATION_MENU_CLIENT_HEADER}"
+    COMMAND
+      "${NIXBENCH_WAYLAND_SCANNER}" --strict private-code
+      "${NIXBENCH_APPLICATION_MENU_XML}"
+      "${NIXBENCH_APPLICATION_MENU_PRIVATE_CODE}"
+    DEPENDS
+      "${NIXBENCH_XDG_SHELL_XML}"
+      "${NIXBENCH_APPLICATION_MENU_XML}"
+    COMMENT "Generating the Wayland protocol bindings"
     VERBATIM
   )
 
@@ -298,12 +337,16 @@ if(NIXBENCH_WAYLAND_ENABLED)
       "${NIXBENCH_XDG_SHELL_SERVER_HEADER}"
       "${NIXBENCH_XDG_SHELL_CLIENT_HEADER}"
       "${NIXBENCH_XDG_SHELL_PRIVATE_CODE}"
+      "${NIXBENCH_APPLICATION_MENU_SERVER_HEADER}"
+      "${NIXBENCH_APPLICATION_MENU_CLIENT_HEADER}"
+      "${NIXBENCH_APPLICATION_MENU_PRIVATE_CODE}"
   )
 
   add_library(
     nixbench_wayland STATIC
     src/wayland_server.c
     "${NIXBENCH_XDG_SHELL_PRIVATE_CODE}"
+    "${NIXBENCH_APPLICATION_MENU_PRIVATE_CODE}"
   )
   add_dependencies(nixbench_wayland nixbench_wayland_protocol)
   target_include_directories(
@@ -646,6 +689,56 @@ if(NIXBENCH_WAYLAND_DEMO_AVAILABLE)
   nixbench_configure_c_target(nixbench-wayland-demo)
 endif()
 
+set(NIXBENCH_NIXCLOCK_AVAILABLE FALSE)
+if(
+  NIXBENCH_WAYLAND_ENABLED
+  AND NIXBENCH_WAYLAND_CLIENT_AVAILABLE
+  AND NIXBENCH_BUILD_APPLICATIONS
+)
+  set(NIXBENCH_NIXCLOCK_AVAILABLE TRUE)
+endif()
+
+if(BUILD_TESTING OR NIXBENCH_NIXCLOCK_AVAILABLE)
+  add_library(
+    nixbench_nixclock_ui STATIC
+    apps/nixclock/nixclock_ui.c
+  )
+  target_include_directories(
+    nixbench_nixclock_ui
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/apps/nixclock"
+  )
+  target_link_libraries(nixbench_nixclock_ui PUBLIC m)
+  nixbench_configure_c_target(nixbench_nixclock_ui)
+endif()
+
+if(NIXBENCH_NIXCLOCK_AVAILABLE)
+  add_executable(
+    nixclock
+    apps/nixclock/nixclock.c
+    "${NIXBENCH_XDG_SHELL_PRIVATE_CODE}"
+    "${NIXBENCH_APPLICATION_MENU_PRIVATE_CODE}"
+  )
+  add_dependencies(nixclock nixbench_wayland_protocol)
+  target_include_directories(
+    nixclock
+    PRIVATE
+      "${NIXBENCH_WAYLAND_GENERATED_DIR}"
+      "${NIXBENCH_WAYLAND_CLIENT_INCLUDE_DIR}"
+  )
+  target_compile_definitions(
+    nixclock
+    PRIVATE NIXCLOCK_VERSION="${PROJECT_VERSION}"
+  )
+  target_link_libraries(
+    nixclock
+    PRIVATE
+      nixbench_nixclock_ui
+      "${NIXBENCH_WAYLAND_CLIENT_LIBRARY}"
+  )
+  nixbench_configure_c_target(nixclock)
+  install(TARGETS nixclock RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+endif()
+
 if(BUILD_TESTING)
   add_executable(
     nixbench_backend_probe_tests
@@ -832,6 +925,16 @@ if(BUILD_TESTING)
   )
   nixbench_configure_c_target(nixbench_wayland_demo_ui_tests)
 
+  add_executable(
+    nixbench_nixclock_ui_tests
+    tests/nixclock_ui_test.c
+  )
+  target_link_libraries(
+    nixbench_nixclock_ui_tests
+    PRIVATE nixbench_nixclock_ui
+  )
+  nixbench_configure_c_target(nixbench_nixclock_ui_tests)
+
   if(NIXBENCH_WAYLAND_CLIENT_AVAILABLE)
     add_executable(nixbench_wayland_tests tests/wayland_test.c)
     add_dependencies(nixbench_wayland_tests nixbench_wayland_protocol)
@@ -939,6 +1042,10 @@ if(BUILD_TESTING)
     NAME nixbench.wayland.demo-ui
     COMMAND nixbench_wayland_demo_ui_tests
   )
+  add_test(
+    NAME nixbench.nixclock.ui
+    COMMAND nixbench_nixclock_ui_tests
+  )
   add_test(NAME nixbench.cli.version COMMAND nixbench --version)
   add_test(NAME nixbench.cli.help COMMAND nixbench --help)
   add_test(NAME nixbench.cli.unknown-option COMMAND nixbench --unknown-option)
@@ -950,5 +1057,15 @@ if(BUILD_TESTING)
   )
   if(NIXBENCH_WAYLAND_DEMO_AVAILABLE)
     add_test(NAME nixbench.wayland.demo-help COMMAND nixbench-wayland-demo --help)
+  endif()
+  if(NIXBENCH_NIXCLOCK_AVAILABLE)
+    add_test(NAME nixbench.nixclock.help COMMAND nixclock --help)
+    add_test(NAME nixbench.nixclock.version COMMAND nixclock --version)
+    add_test(NAME nixbench.nixclock.unknown-option
+             COMMAND nixclock --definitely-not-an-option)
+    set_tests_properties(
+      nixbench.nixclock.unknown-option
+      PROPERTIES WILL_FAIL TRUE
+    )
   endif()
 endif()

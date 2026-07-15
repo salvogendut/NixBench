@@ -18,6 +18,7 @@ enum {
     DESKTOP_SOURCE = 1,
     SOURCE_A = 2,
     SOURCE_B = 3,
+    SOURCE_C = 4,
     DESKTOP_COMMAND = 100,
     COMMAND_A = 200,
     COMMAND_A_UPDATED = 201,
@@ -259,6 +260,47 @@ static void test_shared_application_menu_source(void)
     CHECK(fixture.shell.active_menu_window == fixture.a);
 }
 
+static void test_per_window_menu_rebinding(void)
+{
+    const struct nb_rect viewport = {0, 0, 800, 600};
+    struct fixture fixture = make_fixture();
+
+    CHECK(nb_shell_pointer_down(&fixture.shell, 10, 10, viewport));
+    CHECK(nb_menu_is_open(&fixture.shell.menu));
+    CHECK(nb_shell_update_window_menu(&fixture.shell,
+                                      fixture.b,
+                                      SOURCE_C,
+                                      &model_b_updated));
+    CHECK(!nb_menu_is_open(&fixture.shell.menu));
+    CHECK(!nb_shell_has_pointer_interaction(&fixture.shell));
+    CHECK(fixture.shell.active_menu_source == SOURCE_C);
+    CHECK(fixture.shell.active_menu_window == fixture.b);
+    CHECK(fixture.shell.menu.model == &model_b_updated);
+
+    CHECK(nb_shell_activate_window(&fixture.shell, fixture.a));
+    CHECK(fixture.shell.active_menu_source == SOURCE_A);
+    CHECK(fixture.shell.menu.model == &model_a);
+    CHECK(!nb_shell_update_window_menu(&fixture.shell,
+                                       fixture.b,
+                                       SOURCE_A,
+                                       &model_b));
+    CHECK(!nb_shell_update_window_menu(&fixture.shell,
+                                       NB_WINDOW_ID_NONE,
+                                       SOURCE_C,
+                                       &model_b));
+    CHECK(!nb_shell_update_window_menu(&fixture.shell,
+                                       fixture.b,
+                                       NB_MENU_SOURCE_NONE,
+                                       &model_b));
+    CHECK(!nb_shell_update_window_menu(&fixture.shell,
+                                       fixture.b,
+                                       SOURCE_C,
+                                       NULL));
+    CHECK(nb_shell_activate_window(&fixture.shell, fixture.b));
+    CHECK(fixture.shell.active_menu_source == SOURCE_C);
+    CHECK(fixture.shell.menu.model == &model_b_updated);
+}
+
 static void test_window_capture_crosses_bar(void)
 {
     const struct nb_rect viewport = {0, 0, 800, 600};
@@ -403,6 +445,7 @@ int main(void)
     test_active_application_menu();
     test_menu_routing_and_actions();
     test_shared_application_menu_source();
+    test_per_window_menu_rebinding();
     test_window_capture_crosses_bar();
     test_pointer_target_query();
     test_close_and_keyboard_actions();

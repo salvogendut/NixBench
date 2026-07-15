@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="nixbench_application_menu_v1">
+  <copyright>
+    Copyright (c) 2026 NixBench contributors
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are
+    met:
+
+    1. Redistributions of source code must retain the above copyright
+       notice, this list of conditions and the following disclaimer.
+    2. Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in the
+       documentation and/or other materials provided with the distribution.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+    IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+    THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+    CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+    EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+    PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+    LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  </copyright>
+
+  <interface name="nixbench_application_menu_manager_v1" version="1">
+    <description summary="create a global menu for an application surface">
+      This opt-in interface lets an application publish the bounded menu model
+      shown by NixBench while its toplevel is focused. It augments standard
+      xdg-shell; it does not provide a widget toolkit or a surface role.
+    </description>
+
+    <enum name="error">
+      <entry name="foreign_surface" value="0"
+             summary="the wl_surface is not owned by this client"/>
+      <entry name="invalid_role" value="1"
+             summary="the wl_surface is not an xdg_toplevel"/>
+      <entry name="already_exists" value="2"
+             summary="the wl_surface already has an application menu"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the manager proxy"/>
+    </request>
+
+    <request name="get_menu">
+      <description summary="associate a menu with an xdg-toplevel surface">
+        The wl_surface must already have a live xdg_toplevel role and must
+        belong to the requesting client. Only one application-menu object may
+        exist for a surface at a time.
+      </description>
+      <arg name="id" type="new_id"
+           interface="nixbench_application_menu_v1"
+           summary="the new application-menu object"/>
+      <arg name="surface" type="object" interface="wl_surface"
+           summary="the xdg-toplevel wl_surface"/>
+    </request>
+  </interface>
+
+  <interface name="nixbench_application_menu_v1" version="1">
+    <description summary="transactional bounded application menu">
+      A newly created object starts an empty transaction. append_menu starts a
+      menu and append_item or append_separator adds to the most recently
+      appended menu. commit atomically replaces the surface's published menu.
+      reset starts another empty transaction. A transaction must contain at
+      least one menu before it can be committed.
+
+      Menu and item counts, string lengths, and command identifiers are
+      bounded by the compositor. Commands are nonzero and unique across one
+      committed model. Destroying this object restores the compositor's
+      fallback menu for the surface. Destroying the associated xdg_toplevel
+      makes this object defunct; a replacement toplevel needs a new menu
+      object.
+    </description>
+
+    <enum name="error">
+      <entry name="defunct_surface" value="0"
+             summary="the associated surface no longer exists"/>
+      <entry name="invalid_state" value="1"
+             summary="request is not valid in the current transaction"/>
+      <entry name="invalid_label" value="2"
+             summary="a label is empty or exceeds the compositor limit"/>
+      <entry name="limit_exceeded" value="3"
+             summary="the compositor's bounded menu capacity was exceeded"/>
+      <entry name="invalid_command" value="4"
+             summary="a command is zero or duplicated"/>
+      <entry name="invalid_flags" value="5"
+             summary="unknown item flags were supplied"/>
+    </enum>
+
+    <enum name="item_flags" bitfield="true">
+      <entry name="enabled" value="1"
+             summary="the command can currently be activated"/>
+      <entry name="checked" value="2"
+             summary="draw a check mark beside the command"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the menu and restore the fallback"/>
+    </request>
+
+    <request name="reset">
+      <description summary="discard the pending transaction and start over"/>
+    </request>
+
+    <request name="append_menu">
+      <description summary="append a top-level menu">
+        Subsequent items and separators are appended to this menu until the
+        next append_menu request.
+      </description>
+      <arg name="label" type="string" summary="top-level menu label"/>
+    </request>
+
+    <request name="append_item">
+      <description summary="append a command to the current menu"/>
+      <arg name="label" type="string" summary="command label"/>
+      <arg name="command" type="uint" summary="nonzero command identifier"/>
+      <arg name="flags" type="uint" enum="item_flags"
+           summary="enabled and checked state"/>
+    </request>
+
+    <request name="append_separator">
+      <description summary="append a separator to the current menu"/>
+    </request>
+
+    <request name="commit">
+      <description summary="atomically publish the pending menu model"/>
+    </request>
+
+    <event name="command">
+      <description summary="a published command was activated">
+        The command is one of the enabled identifiers from the most recently
+        committed model.
+      </description>
+      <arg name="command" type="uint" summary="activated command identifier"/>
+    </event>
+  </interface>
+</protocol>

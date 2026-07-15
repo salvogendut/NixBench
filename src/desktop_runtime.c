@@ -36,7 +36,7 @@ enum {
 
 #define NIXBENCH_MENU_SOURCE_DESKTOP UINT64_C(1)
 #define NIXBENCH_MENU_SOURCE_ABOUT UINT64_MAX
-#define NIXBENCH_MENU_SOURCE_WAYLAND (UINT64_MAX - UINT64_C(1))
+#define NIXBENCH_MENU_SOURCE_WAYLAND UINT64_C(0x4000000000000000)
 
 enum {
     NIXBENCH_DESKTOP_COMMAND_ABOUT = 1,
@@ -430,6 +430,19 @@ static bool apply_shell_action(struct nb_desktop_runtime *runtime,
         }
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "Ignored Wayland application menu command %u",
+                    (unsigned int)action.menu_command);
+        return true;
+    }
+    if (runtime->wayland != NULL &&
+        nb_wayland_server_owns_window(runtime->wayland, action.window)) {
+        if (nb_wayland_server_dispatch_menu_command(runtime->wayland,
+                                                    action.window,
+                                                    action.menu_source,
+                                                    action.menu_command)) {
+            return true;
+        }
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Ignored invalid Wayland application menu command %u",
                     (unsigned int)action.menu_command);
         return true;
     }

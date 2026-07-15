@@ -149,12 +149,25 @@ Exit criteria:
 - Malformed messages and terminated applications cannot destabilize the shell.
 - Public integration surfaces have protocol tests and versioning rules.
 
-Current checkpoint: an independent `wl_shm`/`xdg-shell` demo maps into the
-hosted desktop, joins its logical `wl_output`, and receives pointer and XKB
-keyboard input through `wl_seat`. It remains an integration probe rather than a
-completed native application: desktop-managed launching and installation,
-popup/subsurface/data protocols, toolkit trials, and global-menu integration
-are still outstanding.
+Current checkpoint: NixClock is the first real out-of-process native
+application. Under the hosted desktop it maps a release-aware `wl_shm`
+analog-clock surface through stable `xdg-shell` and publishes its focused
+global menu through the private, versioned
+`nixbench-application-menu-v1` extension. The application-named **NixClock**
+menu contains **Quit**; **Settings** contains the checkable **Show seconds**
+command, which toggles a differently colored seconds hand. Transactional menu
+publication, checked and enabled state, command delivery, surface lifetime,
+clock geometry, redraw timing, and command-line behavior have dedicated tests.
+The earlier `nixbench-wayland-demo` remains an input/protocol probe.
+
+NixClock is deliberately hosted-only at this checkpoint. The root
+`wsdisplay` research harness does not publish a Wayland socket or launch
+external applications: the compositor and desktop still run in the privileged
+worker. Standalone clients remain gated on implementing and validating the
+audited root device-helper/watchdog and ordinary-user core split. After that
+boundary, desktop-managed launching and installation, popup/subsurface/data
+protocols, toolkit trials, and broader application-menu bridges are still
+outstanding.
 
 ## Milestone 6: Package and validate the hosted prototype
 
@@ -413,11 +426,13 @@ postflight verification restored screen 0 in emulation mode with automatic VT
 handling, video on, and VT 1 active. The remaining active-map menu-navigation
 bindings retain device-free coverage but still await a focused physical trial.
 
-Near-term priority now moves to the audited root-helper/ordinary-user-core
-boundary documented in
-[`docs/privilege-boundary.md`](docs/privilege-boundary.md), followed by the
-first real external NixBench application. Direct KMS remains a Milestone 7
-deliverable but is not on that immediate critical path.
+The first real external application, NixClock, now exercises the hosted
+application and global-menu path. Near-term standalone priority remains the
+audited root-helper/ordinary-user-core boundary documented in
+[`docs/privilege-boundary.md`](docs/privilege-boundary.md); only after that
+split may the `wsdisplay` runtime publish its Wayland service and launch
+external clients. Direct KMS remains a Milestone 7 deliverable but is not on
+that immediate critical path.
 
 ## Milestone 8: Add standalone X11 compatibility
 

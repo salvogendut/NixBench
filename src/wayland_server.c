@@ -14,6 +14,7 @@
 #include <wayland-server-protocol.h>
 #include <xkbcommon/xkbcommon.h>
 
+#include "nixbench-application-menu-v1-server-protocol.h"
 #include "xdg-shell-server-protocol.h"
 
 enum {
@@ -31,7 +32,8 @@ enum {
     NB_WAYLAND_DEFAULT_REFRESH_MILLIHERTZ = 60000,
     NB_WAYLAND_KEY_CAPACITY = 256,
     NB_WAYLAND_KEYBOARD_REPEAT_RATE = 25,
-    NB_WAYLAND_KEYBOARD_REPEAT_DELAY = 600
+    NB_WAYLAND_KEYBOARD_REPEAT_DELAY = 600,
+    NB_WAYLAND_APPLICATION_MENU_VERSION = 1
 };
 
 enum nb_wayland_surface_role {
@@ -41,6 +43,17 @@ enum nb_wayland_surface_role {
 };
 
 struct nb_wayland_server;
+struct nb_wayland_application_menu;
+
+struct nb_wayland_menu_snapshot {
+    struct nb_menu_model model;
+    struct nb_menu_spec menus[NB_MENU_MAX_MENUS];
+    struct nb_menu_item_spec items[NB_MENU_MAX_MENUS][NB_MENU_MAX_ITEMS];
+    char menu_labels[NB_MENU_MAX_MENUS][NB_MENU_TEXT_CAPACITY];
+    char item_labels[NB_MENU_MAX_MENUS]
+                    [NB_MENU_MAX_ITEMS]
+                    [NB_MENU_TEXT_CAPACITY];
+};
 
 struct nb_wayland_pointer_resource {
     struct nb_wayland_server *server;
@@ -88,6 +101,19 @@ struct nb_wayland_surface {
     nb_window_id window;
     char title[NB_WINDOW_TITLE_CAPACITY];
     char app_id[NB_WINDOW_TITLE_CAPACITY];
+    struct nb_wayland_application_menu *application_menu;
+    struct nb_wayland_menu_snapshot application_menu_snapshots[2];
+    unsigned int active_application_menu_snapshot;
+    bool application_menu_committed;
+    nb_menu_source_id application_menu_source;
+};
+
+struct nb_wayland_application_menu {
+    struct nb_wayland_server *server;
+    struct nb_wayland_surface *surface;
+    struct wl_resource *resource;
+    struct nb_wayland_menu_snapshot pending;
+    bool building;
 };
 
 struct nb_wayland_server {
@@ -100,6 +126,7 @@ struct nb_wayland_server {
     struct wl_global *output_global;
     struct wl_global *seat_global;
     struct wl_global *xdg_wm_base_global;
+    struct wl_global *application_menu_global;
     struct wl_list output_resources;
     struct wl_list pointer_resources;
     struct wl_list keyboard_resources;
@@ -139,6 +166,10 @@ static const struct wl_pointer_interface pointer_implementation;
 static const struct wl_keyboard_interface keyboard_implementation;
 static const struct xdg_surface_interface xdg_surface_implementation;
 static const struct xdg_toplevel_interface toplevel_implementation;
+static const struct nixbench_application_menu_manager_v1_interface
+    application_menu_manager_implementation;
+static const struct nixbench_application_menu_v1_interface
+    application_menu_implementation;
 
 static void copy_text(char *destination,
                       size_t capacity,
@@ -156,6 +187,114 @@ static void copy_text(char *destination,
         }
     }
     destination[index] = '\0';
+}
+
+static bool menu_label_is_valid(const char *label)
+{
+    size_t length = 0;
+
+    if (label == NULL || label[0] == '\0') {
+        return false;
+    }
+    while (length < NB_MENU_TEXT_CAPACITY && label[length] != '\0') {
+        ++length;
+    }
+    return length < NB_MENU_TEXT_CAPACITY;
+}
+
+static void menu_snapshot_reset(struct nb_wayland_menu_snapshot *snapshot)
+{
+    memset(snapshot, 0, sizeof(*snapshot));
+    snapshot->model.menus = snapshot->menus;
+}
+
+static bool menu_snapshot_contains_command(
+    const struct nb_wayland_menu_snapshot *snapshot,
+    nb_menu_command command)
+{
+    size_t menu_index;
+
+    for (menu_index = 0; menu_index < snapshot->model.menu_count;
+         ++menu_index) {
+        const struct nb_menu_spec *menu = &snapshot->menus[menu_index];
+        size_t item_index;
+
+        for (item_index = 0; item_index < menu->item_count; ++item_index) {
+            const struct nb_menu_item_spec *item =
+                &snapshot->items[menu_index][item_index];
+
+            if (item->kind == NB_MENU_ITEM_COMMAND &&
+                item->command == command) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool menu_snapshot_command_is_actionable(
+    const struct nb_wayland_menu_snapshot *snapshot,
+    nb_menu_command command)
+{
+    size_t menu_index;
+
+    for (menu_index = 0; menu_index < snapshot->model.menu_count;
+         ++menu_index) {
+        const struct nb_menu_spec *menu = &snapshot->menus[menu_index];
+        size_t item_index;
+
+        for (item_index = 0; item_index < menu->item_count; ++item_index) {
+            const struct nb_menu_item_spec *item =
+                &snapshot->items[menu_index][item_index];
+
+            if (item->command == command &&
+                nb_menu_item_is_actionable(item)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static void menu_snapshot_copy(struct nb_wayland_menu_snapshot *destination,
+                               const struct nb_wayland_menu_snapshot *source)
+{
+    size_t menu_index;
+
+    menu_snapshot_reset(destination);
+    destination->model.menu_count = source->model.menu_count;
+    for (menu_index = 0; menu_index < source->model.menu_count;
+         ++menu_index) {
+        const struct nb_menu_spec *source_menu = &source->menus[menu_index];
+        struct nb_menu_spec *destination_menu =
+            &destination->menus[menu_index];
+        size_t item_index;
+
+        memcpy(destination->menu_labels[menu_index],
+               source->menu_labels[menu_index],
+               NB_MENU_TEXT_CAPACITY);
+        destination_menu->label = destination->menu_labels[menu_index];
+        destination_menu->items = destination->items[menu_index];
+        destination_menu->item_count = source_menu->item_count;
+        for (item_index = 0; item_index < source_menu->item_count;
+             ++item_index) {
+            const struct nb_menu_item_spec *source_item =
+                &source->items[menu_index][item_index];
+            struct nb_menu_item_spec *destination_item =
+                &destination->items[menu_index][item_index];
+
+            *destination_item = *source_item;
+            if (source_item->kind == NB_MENU_ITEM_COMMAND) {
+                memcpy(destination->item_labels[menu_index][item_index],
+                       source->item_labels[menu_index][item_index],
+                       NB_MENU_TEXT_CAPACITY);
+                destination_item->label =
+                    destination->item_labels[menu_index][item_index];
+            } else {
+                destination_item->label = NULL;
+            }
+        }
+    }
 }
 
 static int protocol_version(uint32_t requested, int maximum)
@@ -216,6 +355,31 @@ static const struct nb_wayland_surface *find_surface_by_window_const(
         }
     }
     return NULL;
+}
+
+static nb_menu_source_id application_menu_source_for_surface(
+    const struct nb_wayland_surface *surface)
+{
+    const ptrdiff_t index = surface - surface->server->surfaces;
+
+    if (index < 0 || index >= NB_WAYLAND_MAX_SURFACES) {
+        return NB_MENU_SOURCE_NONE;
+    }
+    return surface->server->menu_source + (nb_menu_source_id)index +
+           UINT64_C(1);
+}
+
+static bool bind_surface_menu(struct nb_wayland_surface *surface,
+                              nb_menu_source_id source,
+                              const struct nb_menu_model *model)
+{
+    if (surface->window == NB_WINDOW_ID_NONE) {
+        return true;
+    }
+    return nb_shell_update_window_menu(surface->server->shell,
+                                       surface->window,
+                                       source,
+                                       model);
 }
 
 static bool output_resource_belongs_to_client(
@@ -1060,11 +1224,17 @@ static void map_surface(struct nb_wayland_surface *surface)
                        ? surface->app_id
                        : "Wayland Application");
 
-    surface->window = nb_shell_open_window(surface->server->shell,
-                                            title,
-                                            frame,
-                                            surface->server->menu_source,
-                                            surface->server->menu_model);
+    surface->window = nb_shell_open_window(
+        surface->server->shell,
+        title,
+        frame,
+        surface->application_menu_committed
+            ? surface->application_menu_source
+            : surface->server->menu_source,
+        surface->application_menu_committed
+            ? &surface->application_menu_snapshots[
+                  surface->active_application_menu_snapshot].model
+            : surface->server->menu_model);
     if (surface->window != NB_WINDOW_ID_NONE) {
         ++surface->server->next_window_position;
         surface_send_output_membership(surface, true);
@@ -1094,6 +1264,20 @@ static void send_initial_configure(struct nb_wayland_surface *surface)
     xdg_surface_send_configure(surface->xdg_surface_resource, serial);
 }
 
+static void detach_surface_application_menu(
+    struct nb_wayland_surface *surface)
+{
+    if (surface->application_menu != NULL &&
+        surface->application_menu->surface == surface) {
+        surface->application_menu->surface = NULL;
+    }
+    surface->application_menu = NULL;
+    surface->application_menu_committed = false;
+    surface->active_application_menu_snapshot = 0;
+    menu_snapshot_reset(&surface->application_menu_snapshots[0]);
+    menu_snapshot_reset(&surface->application_menu_snapshots[1]);
+}
+
 static void surface_resource_destroyed(struct wl_resource *resource)
 {
     struct nb_wayland_surface *surface =
@@ -1108,6 +1292,7 @@ static void surface_resource_destroyed(struct wl_resource *resource)
     destroy_frame_resources(surface);
     free(surface->pixels);
     surface->pixels = NULL;
+    detach_surface_application_menu(surface);
     surface->surface_resource = NULL;
     maybe_release_surface_slot(surface);
 }
@@ -1388,6 +1573,10 @@ static void compositor_create_surface(struct wl_client *client,
     surface->occupied = true;
     surface->server = server;
     surface->window = NB_WINDOW_ID_NONE;
+    surface->application_menu_source =
+        application_menu_source_for_surface(surface);
+    menu_snapshot_reset(&surface->application_menu_snapshots[0]);
+    menu_snapshot_reset(&surface->application_menu_snapshots[1]);
     wl_list_init(&surface->pending_buffer_destroy.link);
     surface->surface_resource =
         wl_resource_create(client, &wl_surface_interface, version, id);
@@ -1887,6 +2076,7 @@ static void xdg_toplevel_resource_destroyed(struct wl_resource *resource)
     surface->configured = false;
     surface->configure_serial = 0;
     surface->toplevel_resource = NULL;
+    detach_surface_application_menu(surface);
     maybe_release_surface_slot(surface);
 }
 
@@ -2296,6 +2486,416 @@ static void bind_xdg_wm_base(struct wl_client *client,
                                    NULL);
 }
 
+static void application_menu_resource_destroyed(struct wl_resource *resource)
+{
+    struct nb_wayland_application_menu *menu =
+        wl_resource_get_user_data(resource);
+
+    if (menu == NULL) {
+        return;
+    }
+    if (menu->surface != NULL &&
+        menu->surface->application_menu == menu) {
+        struct nb_wayland_surface *surface = menu->surface;
+        bool fallback_bound = surface->server->destroying;
+
+        if (!fallback_bound) {
+            fallback_bound = bind_surface_menu(surface,
+                                               surface->server->menu_source,
+                                               surface->server->menu_model);
+        }
+        surface->application_menu = NULL;
+        if (fallback_bound) {
+            surface->application_menu_committed = false;
+            surface->active_application_menu_snapshot = 0;
+            menu_snapshot_reset(&surface->application_menu_snapshots[0]);
+            menu_snapshot_reset(&surface->application_menu_snapshots[1]);
+        } else {
+            surface->application_menu_committed = false;
+            wl_client_post_implementation_error(
+                wl_resource_get_client(resource),
+                "could not restore the fallback application menu");
+        }
+    }
+    menu->surface = NULL;
+    menu->resource = NULL;
+    free(menu);
+}
+
+static bool application_menu_can_build(
+    struct nb_wayland_application_menu *menu)
+{
+    if (menu->surface == NULL || !menu->surface->occupied) {
+        wl_resource_post_error(
+            menu->resource,
+            NIXBENCH_APPLICATION_MENU_V1_ERROR_DEFUNCT_SURFACE,
+            "the application-menu surface is defunct");
+        return false;
+    }
+    if (!menu->building) {
+        wl_resource_post_error(
+            menu->resource,
+            NIXBENCH_APPLICATION_MENU_V1_ERROR_INVALID_STATE,
+            "reset is required before editing a committed menu");
+        return false;
+    }
+    return true;
+}
+
+static void application_menu_destroy(struct wl_client *client,
+                                     struct wl_resource *resource)
+{
+    (void)client;
+    wl_resource_destroy(resource);
+}
+
+static void application_menu_reset(struct wl_client *client,
+                                   struct wl_resource *resource)
+{
+    struct nb_wayland_application_menu *menu =
+        wl_resource_get_user_data(resource);
+
+    (void)client;
+    if (menu->surface == NULL || !menu->surface->occupied) {
+        wl_resource_post_error(
+            resource,
+            NIXBENCH_APPLICATION_MENU_V1_ERROR_DEFUNCT_SURFACE,
+            "the application-menu surface is defunct");
+        return;
+    }
+    menu_snapshot_reset(&menu->pending);
+    menu->building = true;
+}
+
+static void application_menu_append_menu(struct wl_client *client,
+                                         struct wl_resource *resource,
+                                         const char *label)
+{
+    struct nb_wayland_application_menu *menu =
+        wl_resource_get_user_data(resource);
+    struct nb_wayland_menu_snapshot *pending = &menu->pending;
+    size_t index;
+
+    (void)client;
+    if (!application_menu_can_build(menu)) {
+        return;
+    }
+    if (!menu_label_is_valid(label)) {
+        wl_resource_post_error(
+            resource,
+            NIXBENCH_APPLICATION_MENU_V1_ERROR_INVALID_LABEL,
+            "application-menu label is empty or too long");
+        return;
+    }
+    if (pending->model.menu_count >= NB_MENU_MAX_MENUS) {
+        wl_resource_post_error(
+            resource,
+            NIXBENCH_APPLICATION_MENU_V1_ERROR_LIMIT_EXCEEDED,
+            "too many top-level application menus");
+        return;
+    }
+
+    index = pending->model.menu_count++;
+    copy_text(pending->menu_labels[index],
+              sizeof(pending->menu_labels[index]),
+              label);
+    pending->menus[index].label = pending->menu_labels[index];
+    pending->menus[index].items = pending->items[index];
+    pending->menus[index].item_count = 0;
+}
+
+static void application_menu_append_item(struct wl_client *client,
+                                         struct wl_resource *resource,
+                                         const char *label,
+                                         uint32_t command,
+                                         uint32_t flags)
+{
+    struct nb_wayland_application_menu *menu =
+        wl_resource_get_user_data(resource);
+    struct nb_wayland_menu_snapshot *pending = &menu->pending;
+    const uint32_t known_flags =
+        NIXBENCH_APPLICATION_MENU_V1_ITEM_FLAGS_ENABLED |
+        NIXBENCH_APPLICATION_MENU_V1_ITEM_FLAGS_CHECKED;
+    struct nb_menu_spec *current;
+    struct nb_menu_item_spec *item;
+    size_t menu_index;
+    size_t item_index;
+
+    (void)client;
+    if (!application_menu_can_build(menu)) {
+        return;
+    }
+    if (pending->model.menu_count == 0) {
+        wl_resource_post_error(
+            resource,
+            NIXBENCH_APPLICATION_MENU_V1_ERROR_INVALID_STATE,
+            "an item requires a preceding top-level menu");
+        return;
+    }
+    if (!menu_label_is_valid(label)) {
+        wl_resource_post_error(
+            resource,
+            NIXBENCH_APPLICATION_MENU_V1_ERROR_INVALID_LABEL,
+            "application-menu item label is empty or too long");
+        return;
+    }
+    if ((flags & ~known_flags) != 0) {
+        wl_resource_post_error(
+            resource,
+            NIXBENCH_APPLICATION_MENU_V1_ERROR_INVALID_FLAGS,
+            "unknown application-menu item flags 0x%x",
+            flags);
+        return;
+    }
+    if (command == NB_MENU_COMMAND_NONE ||
+        menu_snapshot_contains_command(pending, command)) {
+        wl_resource_post_error(
+            resource,
+            NIXBENCH_APPLICATION_MENU_V1_ERROR_INVALID_COMMAND,
+            "application-menu command %u is zero or duplicated",
+            command);
+        return;
+    }
+
+    menu_index = pending->model.menu_count - 1;
+    current = &pending->menus[menu_index];
+    if (current->item_count >= NB_MENU_MAX_ITEMS) {
+        wl_resource_post_error(
+            resource,
+            NIXBENCH_APPLICATION_MENU_V1_ERROR_LIMIT_EXCEEDED,
+            "too many items in an application menu");
+        return;
+    }
+    item_index = current->item_count++;
+    copy_text(pending->item_labels[menu_index][item_index],
+              sizeof(pending->item_labels[menu_index][item_index]),
+              label);
+    item = &pending->items[menu_index][item_index];
+    item->label = pending->item_labels[menu_index][item_index];
+    item->command = command;
+    item->kind = NB_MENU_ITEM_COMMAND;
+    item->enabled =
+        (flags & NIXBENCH_APPLICATION_MENU_V1_ITEM_FLAGS_ENABLED) != 0;
+    item->checked =
+        (flags & NIXBENCH_APPLICATION_MENU_V1_ITEM_FLAGS_CHECKED) != 0;
+}
+
+static void application_menu_append_separator(struct wl_client *client,
+                                              struct wl_resource *resource)
+{
+    struct nb_wayland_application_menu *menu =
+        wl_resource_get_user_data(resource);
+    struct nb_wayland_menu_snapshot *pending = &menu->pending;
+    struct nb_menu_spec *current;
+    struct nb_menu_item_spec *item;
+    size_t menu_index;
+
+    (void)client;
+    if (!application_menu_can_build(menu)) {
+        return;
+    }
+    if (pending->model.menu_count == 0) {
+        wl_resource_post_error(
+            resource,
+            NIXBENCH_APPLICATION_MENU_V1_ERROR_INVALID_STATE,
+            "a separator requires a preceding top-level menu");
+        return;
+    }
+    menu_index = pending->model.menu_count - 1;
+    current = &pending->menus[menu_index];
+    if (current->item_count >= NB_MENU_MAX_ITEMS) {
+        wl_resource_post_error(
+            resource,
+            NIXBENCH_APPLICATION_MENU_V1_ERROR_LIMIT_EXCEEDED,
+            "too many items in an application menu");
+        return;
+    }
+    item = &pending->items[menu_index][current->item_count++];
+    item->label = NULL;
+    item->command = NB_MENU_COMMAND_NONE;
+    item->kind = NB_MENU_ITEM_SEPARATOR;
+    item->enabled = false;
+    item->checked = false;
+}
+
+static void application_menu_commit(struct wl_client *client,
+                                    struct wl_resource *resource)
+{
+    struct nb_wayland_application_menu *menu =
+        wl_resource_get_user_data(resource);
+    struct nb_wayland_surface *surface;
+    struct nb_wayland_menu_snapshot *candidate;
+    unsigned int candidate_index;
+
+    (void)client;
+    if (!application_menu_can_build(menu)) {
+        return;
+    }
+    if (menu->pending.model.menu_count == 0) {
+        wl_resource_post_error(
+            resource,
+            NIXBENCH_APPLICATION_MENU_V1_ERROR_INVALID_STATE,
+            "cannot commit an empty application menu");
+        return;
+    }
+
+    surface = menu->surface;
+    candidate_index = surface->active_application_menu_snapshot ^ 1U;
+    candidate = &surface->application_menu_snapshots[candidate_index];
+    menu_snapshot_copy(candidate, &menu->pending);
+    if (!bind_surface_menu(surface,
+                           surface->application_menu_source,
+                           &candidate->model)) {
+        menu_snapshot_reset(candidate);
+        wl_client_post_implementation_error(
+            wl_resource_get_client(resource),
+            "could not publish the application menu in the shell");
+        return;
+    }
+    surface->active_application_menu_snapshot = candidate_index;
+    surface->application_menu_committed = true;
+    menu->building = false;
+}
+
+static const struct nixbench_application_menu_v1_interface
+application_menu_implementation = {
+    .destroy = application_menu_destroy,
+    .reset = application_menu_reset,
+    .append_menu = application_menu_append_menu,
+    .append_item = application_menu_append_item,
+    .append_separator = application_menu_append_separator,
+    .commit = application_menu_commit
+};
+
+static void application_menu_manager_destroy(struct wl_client *client,
+                                             struct wl_resource *resource)
+{
+    (void)client;
+    wl_resource_destroy(resource);
+}
+
+static void application_menu_manager_get_menu(
+    struct wl_client *client,
+    struct wl_resource *resource,
+    uint32_t id,
+    struct wl_resource *surface_resource)
+{
+    struct nb_wayland_server *server = wl_resource_get_user_data(resource);
+    struct nb_wayland_surface *surface;
+    struct nb_wayland_application_menu *menu;
+
+    if (!wl_resource_instance_of(surface_resource,
+                                 &wl_surface_interface,
+                                 &surface_implementation) ||
+        wl_resource_get_client(surface_resource) != client) {
+        wl_resource_post_error(
+            resource,
+            NIXBENCH_APPLICATION_MENU_MANAGER_V1_ERROR_FOREIGN_SURFACE,
+            "application menu requires a wl_surface owned by this client");
+        return;
+    }
+    surface = wl_resource_get_user_data(surface_resource);
+    if (surface == NULL || surface->server != server) {
+        wl_resource_post_error(
+            resource,
+            NIXBENCH_APPLICATION_MENU_MANAGER_V1_ERROR_FOREIGN_SURFACE,
+            "application menu requires a surface from this compositor");
+        return;
+    }
+    if (surface->role != NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL ||
+        surface->toplevel_resource == NULL) {
+        wl_resource_post_error(
+            resource,
+            NIXBENCH_APPLICATION_MENU_MANAGER_V1_ERROR_INVALID_ROLE,
+            "application menu requires a live xdg_toplevel role");
+        return;
+    }
+    if (surface->application_menu != NULL) {
+        wl_resource_post_error(
+            resource,
+            NIXBENCH_APPLICATION_MENU_MANAGER_V1_ERROR_ALREADY_EXISTS,
+            "the surface already has an application menu");
+        return;
+    }
+
+    menu = calloc(1, sizeof(*menu));
+    if (menu == NULL) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    menu->resource = wl_resource_create(
+        client,
+        &nixbench_application_menu_v1_interface,
+        wl_resource_get_version(resource),
+        id);
+    if (menu->resource == NULL) {
+        free(menu);
+        wl_client_post_no_memory(client);
+        return;
+    }
+    menu->server = server;
+    menu->surface = surface;
+    menu->building = true;
+    menu_snapshot_reset(&menu->pending);
+    surface->application_menu = menu;
+    wl_resource_set_implementation(menu->resource,
+                                   &application_menu_implementation,
+                                   menu,
+                                   application_menu_resource_destroyed);
+}
+
+static const struct nixbench_application_menu_manager_v1_interface
+application_menu_manager_implementation = {
+    .destroy = application_menu_manager_destroy,
+    .get_menu = application_menu_manager_get_menu
+};
+
+static void bind_application_menu_manager(struct wl_client *client,
+                                          void *data,
+                                          uint32_t version,
+                                          uint32_t id)
+{
+    struct wl_resource *resource = wl_resource_create(
+        client,
+        &nixbench_application_menu_manager_v1_interface,
+        protocol_version(version, NB_WAYLAND_APPLICATION_MENU_VERSION),
+        id);
+
+    if (resource == NULL) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(resource,
+                                   &application_menu_manager_implementation,
+                                   data,
+                                   NULL);
+}
+
+static bool menu_source_range_is_available(
+    const struct nb_shell *shell,
+    nb_menu_source_id first)
+{
+    const nb_menu_source_id last =
+        first + (nb_menu_source_id)NB_WAYLAND_MAX_SURFACES;
+    size_t index;
+
+    if (shell->desktop_menu_source >= first &&
+        shell->desktop_menu_source <= last) {
+        return false;
+    }
+    for (index = 0; index < NB_DESKTOP_MAX_WINDOWS; ++index) {
+        const struct nb_shell_menu_binding *binding =
+            &shell->menu_bindings[index];
+
+        if (binding->window != NB_WINDOW_ID_NONE &&
+            binding->menu_source >= first &&
+            binding->menu_source <= last) {
+            return false;
+        }
+    }
+    return true;
+}
+
 struct nb_wayland_server *nb_wayland_server_create(
     struct nb_shell *shell,
     nb_menu_source_id menu_source,
@@ -2306,7 +2906,9 @@ struct nb_wayland_server *nb_wayland_server_create(
     struct nb_wayland_server *server;
 
     if (shell == NULL || menu_source == NB_MENU_SOURCE_NONE ||
-        menu_model == NULL || output_width <= 0 || output_height <= 0) {
+        menu_source > UINT64_MAX - NB_WAYLAND_MAX_SURFACES ||
+        menu_model == NULL || output_width <= 0 || output_height <= 0 ||
+        !menu_source_range_is_available(shell, menu_source)) {
         return NULL;
     }
 
@@ -2365,10 +2967,17 @@ struct nb_wayland_server *nb_wayland_server_create(
         NB_WAYLAND_XDG_SHELL_VERSION,
         server,
         bind_xdg_wm_base);
+    server->application_menu_global = wl_global_create(
+        server->display,
+        &nixbench_application_menu_manager_v1_interface,
+        NB_WAYLAND_APPLICATION_MENU_VERSION,
+        server,
+        bind_application_menu_manager);
     if (server->compositor_global == NULL ||
         server->output_global == NULL ||
         server->seat_global == NULL ||
-        server->xdg_wm_base_global == NULL) {
+        server->xdg_wm_base_global == NULL ||
+        server->application_menu_global == NULL) {
         wl_display_destroy(server->display);
         destroy_keyboard_state(server);
         free(server);
@@ -2552,6 +3161,36 @@ bool nb_wayland_server_surface_snapshot(
     snapshot->height = surface->height;
     snapshot->stride = surface->width * (int)sizeof(uint32_t);
     snapshot->revision = surface->revision;
+    return true;
+}
+
+bool nb_wayland_server_dispatch_menu_command(
+    struct nb_wayland_server *server,
+    nb_window_id window,
+    nb_menu_source_id menu_source,
+    nb_menu_command command)
+{
+    struct nb_wayland_surface *surface;
+
+    if (server == NULL || server->destroying ||
+        menu_source == NB_MENU_SOURCE_NONE ||
+        command == NB_MENU_COMMAND_NONE) {
+        return false;
+    }
+    surface = find_surface_by_window(server, window);
+    if (surface == NULL || !surface->application_menu_committed ||
+        surface->application_menu_source != menu_source ||
+        surface->application_menu == NULL ||
+        surface->application_menu->resource == NULL ||
+        !menu_snapshot_command_is_actionable(
+            &surface->application_menu_snapshots[
+                surface->active_application_menu_snapshot],
+            command)) {
+        return false;
+    }
+    nixbench_application_menu_v1_send_command(
+        surface->application_menu->resource,
+        command);
     return true;
 }
 

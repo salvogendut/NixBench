@@ -45,7 +45,8 @@ static size_t find_free_binding(const struct nb_shell *shell)
 static bool source_model_is_consistent(
     const struct nb_shell *shell,
     nb_menu_source_id source,
-    const struct nb_menu_model *model)
+    const struct nb_menu_model *model,
+    nb_window_id ignored_window)
 {
     size_t index;
 
@@ -57,6 +58,7 @@ static bool source_model_is_consistent(
             &shell->menu_bindings[index];
 
         if (binding->window != NB_WINDOW_ID_NONE &&
+            binding->window != ignored_window &&
             binding->menu_source == source &&
             binding->menu_model != model) {
             return false;
@@ -123,7 +125,10 @@ nb_window_id nb_shell_open_window(struct nb_shell *shell,
 
     if (binding_index == NB_DESKTOP_MAX_WINDOWS ||
         menu_source == NB_MENU_SOURCE_NONE || menu_model == NULL ||
-        !source_model_is_consistent(shell, menu_source, menu_model)) {
+        !source_model_is_consistent(shell,
+                                    menu_source,
+                                    menu_model,
+                                    NB_WINDOW_ID_NONE)) {
         return NB_WINDOW_ID_NONE;
     }
 
@@ -204,6 +209,39 @@ bool nb_shell_update_menu_source(struct nb_shell *shell,
         }
     }
     return found;
+}
+
+bool nb_shell_update_window_menu(struct nb_shell *shell,
+                                 nb_window_id window,
+                                 nb_menu_source_id menu_source,
+                                 const struct nb_menu_model *menu_model)
+{
+    const size_t binding_index = find_binding(shell, window);
+    struct nb_shell_menu_binding *binding;
+
+    if (binding_index == NB_DESKTOP_MAX_WINDOWS ||
+        menu_source == NB_MENU_SOURCE_NONE || menu_model == NULL ||
+        !source_model_is_consistent(shell,
+                                    menu_source,
+                                    menu_model,
+                                    window)) {
+        return false;
+    }
+
+    binding = &shell->menu_bindings[binding_index];
+    binding->menu_source = menu_source;
+    binding->menu_model = menu_model;
+    if (nb_desktop_active_window_id(&shell->desktop) == window) {
+        nb_menu_set_model(&shell->menu, menu_model);
+        shell->active_menu_source = menu_source;
+        shell->active_menu_window = window;
+        if (shell->pointer_owner == NB_SHELL_POINTER_MENU) {
+            shell->pointer_owner = NB_SHELL_POINTER_NONE;
+        }
+    } else {
+        sync_active_menu(shell);
+    }
+    return true;
 }
 
 struct nb_shell_pointer_target nb_shell_pointer_target_at(

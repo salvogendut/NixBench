@@ -74,6 +74,11 @@ bool nb_shell_activate_window(struct nb_shell *shell, nb_window_id id);
 bool nb_shell_update_menu_source(struct nb_shell *shell,
                                  nb_menu_source_id menu_source,
                                  const struct nb_menu_model *menu_model);
+/* Replace one window's source/model binding without affecting its siblings. */
+bool nb_shell_update_window_menu(struct nb_shell *shell,
+                                 nb_window_id window,
+                                 nb_menu_source_id menu_source,
+                                 const struct nb_menu_model *menu_model);
 
 /*
  * Return the frontmost shell window beneath a point without changing focus,

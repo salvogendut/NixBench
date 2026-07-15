@@ -41,7 +41,12 @@ struct nb_wayland_surface_snapshot {
     uint64_t revision;
 };
 
-/* The shell and menu model are borrowed and must outlive the server. */
+/*
+ * The shell and fallback menu model are borrowed and must outlive the server.
+ * menu_source identifies the fallback model. The caller keeps that ID and the
+ * following NB_WAYLAND_MAX_SURFACES IDs unused by other sources and servers
+ * for this server's lifetime; creation rejects collisions that already exist.
+ */
 struct nb_wayland_server *nb_wayland_server_create(
     struct nb_shell *shell,
     nb_menu_source_id menu_source,
@@ -138,5 +143,12 @@ void nb_wayland_server_keyboard_cancel(struct nb_wayland_server *server,
 /* Ask the owning xdg_toplevel to close; the client remains authoritative. */
 bool nb_wayland_server_request_close(struct nb_wayland_server *server,
                                      nb_window_id window);
+
+/* Deliver an enabled command from a surface's committed application menu. */
+bool nb_wayland_server_dispatch_menu_command(
+    struct nb_wayland_server *server,
+    nb_window_id window,
+    nb_menu_source_id menu_source,
+    nb_menu_command command);
 
 #endif

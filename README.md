@@ -74,12 +74,19 @@ portable physical scancodes through that keymap rather than exposing
 host-specific raw codes. The compositor copies committed buffers before
 releasing them, so clients and the shell do not share mutable rendering state.
 
-A standalone `nixbench-wayland-demo` client renders through `wl_shm`, loads
-the published XKB keymap, and exercises pointer and keyboard interaction
-with a beveled toggle control. The socket-pair protocol test covers
-configure/acknowledge, mapping, pixels, frame completion, output state and
-membership, XKB keymap delivery, pointer and keyboard events, grabs, focus
-cleanup, close, and unmap without requiring a running display server.
+NixClock is the first real out-of-process NixBench application. It uses
+`wl_shm` and stable `xdg-shell` for its resizable analog-clock surface, plus a
+small versioned NixBench extension to publish the global menus associated with
+its toplevel. The focused application contributes **NixClock**, containing
+**Quit**, and **Settings**, containing the checkable **Show seconds** command.
+The seconds hand is hidden by default and appears in a distinct color when the
+setting is enabled. The earlier separate `nixbench-wayland-demo` remains a
+focused input and protocol probe.
+
+Socket-pair protocol tests cover configure/acknowledge, mapping, pixels, frame
+completion, output state and membership, application-menu transactions and
+command delivery, XKB keymap delivery, pointer and keyboard events, grabs,
+focus cleanup, close, and unmap without requiring a running display server.
 
 X.org is a transitional development platform, not the final runtime
 architecture. It lets the project validate the shell, interaction model, and
@@ -136,6 +143,13 @@ staged safety and implementation boundaries.
 The root-helper versus ordinary-user-core decision is detailed in the
 [standalone privilege-boundary assessment](docs/privilege-boundary.md).
 
+Consequently, the standalone `wsdisplay` research harness neither publishes a
+Wayland socket nor launches NixClock or any other external application. Its
+desktop runtime still executes as root. External clients will be enabled there
+only after the device helper/watchdog has been separated from the ordinary-user
+shell, compositor, and Wayland service; hosted NixBench is the NixClock
+development path in the meantime.
+
 [sdl-kmsbsd]: https://wiki.libsdl.org/SDL3/README-kmsbsd
 
 The Wayland integration boundary and eventual X11 compatibility mechanism are
@@ -161,10 +175,17 @@ retain the exact focused-window context, and Quit NixInfo closes only NixInfo.
 Application-specific drawing uses a clipped content-rendering seam that can
 now be supplied by the experimental Wayland shared-memory surface path.
 
-The separate `nixbench-wayland-demo` executable is the first out-of-process
-protocol consumer. It creates an `xdg_toplevel`, manages release-aware
-shared-memory buffers and frame callbacks, and reacts to compositor-delivered
-pointer and keyboard events.
+NixClock is the first real out-of-process application. It creates an
+`xdg_toplevel`, manages release-aware shared-memory buffers and frame callbacks,
+and draws a scalable analog clock with continuous hour and minute hands. Its
+redraw schedule follows local wall-clock boundaries instead of accumulating
+timer drift. The focused window publishes an application-named **NixClock**
+menu with **Quit** and a **Settings** menu whose checkable **Show seconds** item
+toggles a differently colored third hand. The
+`nixbench-application-menu-v1` extension sends activated commands back to the
+owning process and switches the global bar to that surface's committed menu.
+The separate `nixbench-wayland-demo` remains the smaller pointer and keyboard
+protocol probe.
 
 The desktop runtime now talks to a backend-neutral host contract rather than
 driving its SDL window directly. The shell renders through an SDL software
@@ -179,9 +200,11 @@ stable public API yet. The Wayland slice currently has one scale-1 logical
 output and no touch capability, pointer-axis scrolling, client cursor
 rendering, buffer scale/transform or input-region handling, popups,
 subsurfaces, clipboard, accelerated buffers, resize negotiation, process
-supervision, or application-supplied global menus. General GTK/SDL
-applications are therefore not expected to be usable yet. NixBench also does
-not yet offer a supported direct-console runtime.
+supervision, desktop-managed application launching, or general toolkit bridge
+for application menus. NixClock exercises the first private application-menu
+protocol, but general GTK/SDL applications are therefore not expected to be
+usable yet. NixBench also does not yet offer a supported direct-console
+runtime.
 
 The initial chrome uses an original palette and geometry while exploring a
 classic beveled Workbench/AROS-inspired vocabulary. AROS was studied as a design
@@ -294,8 +317,8 @@ Required development dependencies:
 - A video backend supported by SDL3; Xorg is the initial NetBSD host
 
 The compositor path additionally uses the Wayland server library and scanner,
-libxkbcommon, and the stable `xdg-shell.xml` from `wayland-protocols`. The
-standalone demo also requires the Wayland client development library.
+libxkbcommon, and the stable `xdg-shell.xml` from `wayland-protocols`. NixClock
+and the separate demo also require the Wayland client development library.
 Configuration defaults to `-DNIXBENCH_WAYLAND=AUTO`: it enables the feature
 when all server components are found and otherwise builds the SDL-only desktop.
 Use `-DNIXBENCH_WAYLAND=ON` to require it, or `OFF` to omit it explicitly.
@@ -303,6 +326,9 @@ Use `-DNIXBENCH_WAYLAND=ON` to require it, or `OFF` to omit it explicitly.
 `-DNIXBENCH_BUILD_EXAMPLES=OFF` to omit experimental clients. NetBSD's pkgsrc
 `wayland`, `libxkbcommon`, and `wayland-protocols` packages provide these
 components; no `pkg-config` executable is required by this build.
+`NIXBENCH_BUILD_APPLICATIONS` also defaults to `ON`; set it to `OFF` to omit
+NixClock. Application targets are built only when the Wayland client and
+compositor dependencies are available.
 
 Detailed NetBSD DRM/KMS inventory is an optional libdrm feature controlled by
 `-DNIXBENCH_LIBDRM=AUTO`, the default. `AUTO` enables it when `xf86drm.h`,
@@ -610,7 +636,22 @@ layout to clients. NixBench does not yet import the active host Xorg layout
 automatically; a desktop keyboard setting is planned.
 
 In another terminal, use the display name logged by NixBench (normally
-`wayland-0`) to start the standalone client:
+`wayland-0`) to start NixClock:
+
+```sh
+XDG_RUNTIME_DIR="$HOME/.nixbench-runtime" \
+WAYLAND_DISPLAY=wayland-0 \
+./build/nixclock
+```
+
+Focus the clock to place its **NixClock** and **Settings** menus in the global
+bar. Choose **Settings > Show seconds** to toggle the colored seconds hand; the
+item's check mark follows the setting. Choose **NixClock > Quit** to terminate
+only the clock application. Pass `--show-seconds` to enable that hand at
+startup. NixClock currently connects only to NixBench because its required
+global-menu extension is deliberately still private and experimental.
+
+The earlier separate protocol probe can be started in the same way:
 
 ```sh
 XDG_RUNTIME_DIR="$HOME/.nixbench-runtime" \

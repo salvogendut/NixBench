@@ -15,6 +15,7 @@
 #include <wayland-client.h>
 #include <xkbcommon/xkbcommon.h>
 
+#include "nixbench-application-menu-v1-client-protocol.h"
 #include "wayland_server.h"
 #include "xdg-shell-client-protocol.h"
 
@@ -56,6 +57,12 @@ enum {
     KEYBOARD_KEY_CAPACITY = 256
 };
 
+enum {
+    APPLICATION_COMMAND_QUIT = 1,
+    APPLICATION_COMMAND_SHOW_SECONDS = 2,
+    APPLICATION_COMMAND_DISABLED = 3
+};
+
 static const struct nb_menu_model empty_menu_model = {NULL, 0};
 
 struct barrier_state {
@@ -92,6 +99,8 @@ struct client_state {
     struct output_state output;
     struct output_state late_output;
     struct xdg_wm_base *wm_base;
+    struct nixbench_application_menu_manager_v1 *application_menu_manager;
+    struct nixbench_application_menu_v1 *application_menu;
     struct xdg_surface *xdg_surface;
     struct xdg_toplevel *toplevel;
     struct wl_callback *frame_callback;
@@ -170,6 +179,8 @@ struct client_state {
     unsigned int keyboard_modifiers_count;
     unsigned int keyboard_press_counts[KEYBOARD_KEY_CAPACITY];
     unsigned int keyboard_release_counts[KEYBOARD_KEY_CAPACITY];
+    uint32_t application_menu_command;
+    unsigned int application_menu_command_count;
 };
 
 static void barrier_done(void *data,
@@ -734,6 +745,54 @@ static const struct wl_seat_listener seat_listener = {
     .name = seat_name
 };
 
+static void application_menu_command(
+    void *data,
+    struct nixbench_application_menu_v1 *menu,
+    uint32_t command)
+{
+    struct client_state *state = data;
+
+    (void)menu;
+    state->application_menu_command = command;
+    ++state->application_menu_command_count;
+}
+
+static const struct nixbench_application_menu_v1_listener
+application_menu_listener = {
+    .command = application_menu_command
+};
+
+static void publish_application_menu(
+    struct nixbench_application_menu_v1 *menu,
+    bool show_seconds)
+{
+    uint32_t show_seconds_flags =
+        NIXBENCH_APPLICATION_MENU_V1_ITEM_FLAGS_ENABLED;
+
+    if (show_seconds) {
+        show_seconds_flags |=
+            NIXBENCH_APPLICATION_MENU_V1_ITEM_FLAGS_CHECKED;
+    }
+    nixbench_application_menu_v1_append_menu(menu, "NixClock");
+    nixbench_application_menu_v1_append_item(
+        menu,
+        "Quit",
+        APPLICATION_COMMAND_QUIT,
+        NIXBENCH_APPLICATION_MENU_V1_ITEM_FLAGS_ENABLED);
+    nixbench_application_menu_v1_append_menu(menu, "Settings");
+    nixbench_application_menu_v1_append_item(
+        menu,
+        "Show seconds",
+        APPLICATION_COMMAND_SHOW_SECONDS,
+        show_seconds_flags);
+    nixbench_application_menu_v1_append_item(
+        menu,
+        "Unavailable",
+        APPLICATION_COMMAND_DISABLED,
+        0);
+    nixbench_application_menu_v1_commit(menu);
+}
+
 static void registry_global(void *data,
                             struct wl_registry *registry,
                             uint32_t name,
@@ -774,6 +833,15 @@ static void registry_global(void *data,
     } else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
         state->wm_base = wl_registry_bind(
             registry, name, &xdg_wm_base_interface, 1);
+    } else if (strcmp(
+                   interface,
+                   nixbench_application_menu_manager_v1_interface.name) ==
+               0) {
+        state->application_menu_manager = wl_registry_bind(
+            registry,
+            name,
+            &nixbench_application_menu_manager_v1_interface,
+            1);
     }
 }
 
@@ -935,6 +1003,49 @@ static void fill_pixels(uint32_t *pixels, size_t pixel_count)
     }
 }
 
+static void test_menu_source_reservation(void)
+{
+    struct nb_shell shell;
+    struct nb_wayland_server *server;
+    const nb_menu_source_id last_valid_base =
+        UINT64_MAX - NB_WAYLAND_MAX_SURFACES;
+
+    nb_shell_init(&shell, DESKTOP_MENU_SOURCE, &empty_menu_model);
+    CHECK(nb_wayland_server_create(&shell,
+                                   NB_MENU_SOURCE_NONE,
+                                   &empty_menu_model,
+                                   OUTPUT_WIDTH,
+                                   OUTPUT_HEIGHT) == NULL);
+    CHECK(nb_wayland_server_create(&shell,
+                                   DESKTOP_MENU_SOURCE,
+                                   &empty_menu_model,
+                                   OUTPUT_WIDTH,
+                                   OUTPUT_HEIGHT) == NULL);
+    CHECK(nb_wayland_server_create(&shell,
+                                   last_valid_base + UINT64_C(1),
+                                   &empty_menu_model,
+                                   OUTPUT_WIDTH,
+                                   OUTPUT_HEIGHT) == NULL);
+    server = nb_wayland_server_create(&shell,
+                                      last_valid_base,
+                                      &empty_menu_model,
+                                      OUTPUT_WIDTH,
+                                      OUTPUT_HEIGHT);
+    CHECK(server != NULL);
+    nb_wayland_server_destroy(server);
+
+    CHECK(nb_shell_open_window(&shell,
+                               "Reserved source",
+                               (struct nb_rect){20, 40, 200, 120},
+                               WAYLAND_MENU_SOURCE + 2,
+                               &empty_menu_model) != NB_WINDOW_ID_NONE);
+    CHECK(nb_wayland_server_create(&shell,
+                                   WAYLAND_MENU_SOURCE,
+                                   &empty_menu_model,
+                                   OUTPUT_WIDTH,
+                                   OUTPUT_HEIGHT) == NULL);
+}
+
 static void test_wayland_surface_lifecycle(void)
 {
     struct nb_shell shell;
@@ -986,6 +1097,7 @@ static void test_wayland_surface_lifecycle(void)
     REQUIRE(client.output.proxy != NULL);
     REQUIRE(client.seat != NULL);
     REQUIRE(client.wm_base != NULL);
+    REQUIRE(client.application_menu_manager != NULL);
     CHECK(client.output_global_version == 2);
     CHECK(wl_output_get_version(client.output.proxy) == 2);
     CHECK(client.seat_version >= 5);
@@ -1057,6 +1169,16 @@ static void test_wayland_surface_lifecycle(void)
                                       &client) == 0);
     xdg_toplevel_set_title(client.toplevel, "Wayland Test Window");
     xdg_toplevel_set_app_id(client.toplevel, "org.nixbench.Test");
+    client.application_menu =
+        nixbench_application_menu_manager_v1_get_menu(
+            client.application_menu_manager,
+            surface);
+    REQUIRE(client.application_menu != NULL);
+    REQUIRE(nixbench_application_menu_v1_add_listener(
+                client.application_menu,
+                &application_menu_listener,
+                &client) == 0);
+    publish_application_menu(client.application_menu, true);
 
     /* A bufferless initial commit requests the compositor configure. */
     wl_surface_commit(surface);
@@ -1123,6 +1245,89 @@ static void test_wayland_surface_lifecycle(void)
     window = nb_wayland_server_window_at(server, 0);
     REQUIRE(window != NB_WINDOW_ID_NONE);
     CHECK(nb_wayland_server_owns_window(server, window));
+    CHECK(shell.active_menu_source == WAYLAND_MENU_SOURCE + 1);
+    REQUIRE(shell.menu.model != NULL);
+    CHECK(shell.menu.model->menu_count == 2);
+    CHECK(strcmp(shell.menu.model->menus[0].label, "NixClock") == 0);
+    CHECK(strcmp(shell.menu.model->menus[0].items[0].label, "Quit") == 0);
+    CHECK(strcmp(shell.menu.model->menus[1].label, "Settings") == 0);
+    CHECK(strcmp(shell.menu.model->menus[1].items[0].label,
+                 "Show seconds") == 0);
+    CHECK(shell.menu.model->menus[1].items[0].checked);
+    CHECK(!shell.menu.model->menus[1].items[1].enabled);
+    CHECK(!nb_wayland_server_dispatch_menu_command(
+        NULL,
+        window,
+        shell.active_menu_source,
+        APPLICATION_COMMAND_QUIT));
+    CHECK(!nb_wayland_server_dispatch_menu_command(
+        server,
+        NB_WINDOW_ID_NONE,
+        shell.active_menu_source,
+        APPLICATION_COMMAND_QUIT));
+    CHECK(!nb_wayland_server_dispatch_menu_command(
+        server,
+        window,
+        NB_MENU_SOURCE_NONE,
+        APPLICATION_COMMAND_QUIT));
+    CHECK(!nb_wayland_server_dispatch_menu_command(
+        server,
+        window,
+        shell.active_menu_source,
+        NB_MENU_COMMAND_NONE));
+    CHECK(!nb_wayland_server_dispatch_menu_command(
+        server,
+        window,
+        shell.active_menu_source,
+        UINT32_C(999)));
+    CHECK(!nb_wayland_server_dispatch_menu_command(
+        server,
+        window,
+        shell.active_menu_source,
+        APPLICATION_COMMAND_DISABLED));
+    CHECK(nb_wayland_server_dispatch_menu_command(
+        server,
+        window,
+        shell.active_menu_source,
+        APPLICATION_COMMAND_SHOW_SECONDS));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.application_menu_command_count == 1);
+    CHECK(client.application_menu_command ==
+          APPLICATION_COMMAND_SHOW_SECONDS);
+
+    nixbench_application_menu_v1_reset(client.application_menu);
+    nixbench_application_menu_v1_append_menu(client.application_menu,
+                                              "Pending");
+    nixbench_application_menu_v1_append_item(
+        client.application_menu,
+        "Not committed",
+        UINT32_C(99),
+        NIXBENCH_APPLICATION_MENU_V1_ITEM_FLAGS_ENABLED);
+    REQUIRE(pump_barrier(server, display));
+    REQUIRE(shell.menu.model != NULL);
+    CHECK(shell.menu.model->menu_count == 2);
+    CHECK(strcmp(shell.menu.model->menus[0].label, "NixClock") == 0);
+    CHECK(shell.menu.model->menus[1].items[0].checked);
+
+    nixbench_application_menu_v1_reset(client.application_menu);
+    publish_application_menu(client.application_menu, false);
+    REQUIRE(pump_barrier(server, display));
+    REQUIRE(shell.menu.model != NULL);
+    CHECK(shell.menu.model->menu_count == 2);
+    CHECK(!shell.menu.model->menus[1].items[0].checked);
+    CHECK(!nb_wayland_server_dispatch_menu_command(
+        server,
+        window,
+        WAYLAND_MENU_SOURCE,
+        APPLICATION_COMMAND_QUIT));
+    CHECK(nb_wayland_server_dispatch_menu_command(
+        server,
+        window,
+        shell.active_menu_source,
+        APPLICATION_COMMAND_QUIT));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.application_menu_command_count == 2);
+    CHECK(client.application_menu_command == APPLICATION_COMMAND_QUIT);
     REQUIRE(nb_wayland_server_surface_snapshot(server,
                                                window,
                                                &snapshot));
@@ -1504,6 +1709,36 @@ static void test_wayland_surface_lifecycle(void)
     REQUIRE(pump_barrier(server, display));
     CHECK(client.pointer_enter_count == 3);
 
+    nixbench_application_menu_v1_destroy(client.application_menu);
+    client.application_menu = NULL;
+    REQUIRE(pump_barrier(server, display));
+    CHECK(shell.active_menu_source == WAYLAND_MENU_SOURCE);
+    CHECK(shell.menu.model == &empty_menu_model);
+    CHECK(!nb_wayland_server_dispatch_menu_command(
+        server,
+        window,
+        WAYLAND_MENU_SOURCE + 1,
+        APPLICATION_COMMAND_QUIT));
+
+    /* A manager may die before the menu object it created. */
+    client.application_menu =
+        nixbench_application_menu_manager_v1_get_menu(
+            client.application_menu_manager,
+            surface);
+    REQUIRE(client.application_menu != NULL);
+    REQUIRE(nixbench_application_menu_v1_add_listener(
+                client.application_menu,
+                &application_menu_listener,
+                &client) == 0);
+    publish_application_menu(client.application_menu, true);
+    nixbench_application_menu_manager_v1_destroy(
+        client.application_menu_manager);
+    client.application_menu_manager = NULL;
+    REQUIRE(pump_barrier(server, display));
+    CHECK(shell.active_menu_source == WAYLAND_MENU_SOURCE + 1);
+    REQUIRE(shell.menu.model != NULL);
+    CHECK(strcmp(shell.menu.model->menus[0].label, "NixClock") == 0);
+
     /* A committed NULL attachment explicitly unmaps the host window. */
     wl_surface_attach(surface, NULL, 0, 0);
     wl_surface_commit(surface);
@@ -1525,12 +1760,38 @@ static void test_wayland_surface_lifecycle(void)
                                               window,
                                               &snapshot));
 
+    /* Remap, then destroy the role while its committed menu remains alive. */
+    wl_surface_commit(surface);
+    REQUIRE(pump_barrier(server, display));
+    REQUIRE(pump_barrier(server, display));
+    wl_surface_attach(surface, buffer, 0, 0);
+    wl_surface_damage(surface, 0, 0, INITIAL_WIDTH, INITIAL_HEIGHT);
+    wl_surface_commit(surface);
+    REQUIRE(pump_barrier(server, display));
+    CHECK(nb_wayland_server_window_count(server) == 1);
+    window = nb_wayland_server_window_at(server, 0);
+    REQUIRE(window != NB_WINDOW_ID_NONE);
+    CHECK(shell.active_menu_source == WAYLAND_MENU_SOURCE + 1);
+
+    xdg_toplevel_destroy(client.toplevel);
+    client.toplevel = NULL;
+    REQUIRE(pump_barrier(server, display));
+    CHECK(nb_wayland_server_window_count(server) == 0);
+    CHECK(shell.active_menu_source == DESKTOP_MENU_SOURCE);
+    CHECK(!nb_wayland_server_dispatch_menu_command(
+        server,
+        window,
+        WAYLAND_MENU_SOURCE + 1,
+        APPLICATION_COMMAND_QUIT));
+
+    nixbench_application_menu_v1_destroy(client.application_menu);
+    client.application_menu = NULL;
+    REQUIRE(pump_barrier(server, display));
+
     wl_buffer_destroy(buffer);
     buffer = NULL;
     wl_shm_pool_destroy(pool);
     pool = NULL;
-    xdg_toplevel_destroy(client.toplevel);
-    client.toplevel = NULL;
     xdg_surface_destroy(client.xdg_surface);
     client.xdg_surface = NULL;
     wl_surface_destroy(surface);
@@ -1577,6 +1838,7 @@ cleanup:
 
 int main(void)
 {
+    test_menu_source_reservation();
     test_wayland_surface_lifecycle();
 
     if (failures != 0) {
