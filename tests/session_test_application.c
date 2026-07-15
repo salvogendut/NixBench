@@ -69,6 +69,7 @@ int main(void)
     struct stat status;
     sigset_t blocked;
     sigset_t previous;
+    sigset_t suspend_mask;
     char socket_path[PATH_MAX];
     int length;
     bool socket_alive;
@@ -91,6 +92,10 @@ int main(void)
         sigprocmask(SIG_BLOCK, &blocked, &previous) != 0) {
         return 2;
     }
+    suspend_mask = previous;
+    if (sigdelset(&suspend_mask, SIGTERM) != 0) {
+        return 2;
+    }
     memset(&action, 0, sizeof(action));
     action.sa_handler = handle_sigterm;
     if (sigemptyset(&action.sa_mask) != 0 ||
@@ -101,7 +106,7 @@ int main(void)
         return 2;
     }
     while (!termination_requested) {
-        (void)sigsuspend(&previous);
+        (void)sigsuspend(&suspend_mask);
     }
     if (sigprocmask(SIG_SETMASK, &previous, NULL) != 0) {
         return 2;
