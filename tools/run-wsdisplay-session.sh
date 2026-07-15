@@ -36,6 +36,8 @@ if [ "$expect_supervisor_term" -eq 1 ] &&
     fail "supervisor SIGTERM and core-failure gates are mutually exclusive"
 fi
 application=${NIXBENCH_APPLICATION:-}
+trace_wayland=${NIXBENCH_TRACE_WAYLAND:-}
+trace_wayland_log=${NIXBENCH_TRACE_WAYLAND_LOG:-}
 if [ -n "$application" ]; then
     case "$application" in
         /|/*/) fail "NIXBENCH_APPLICATION must name an absolute executable path" ;;
@@ -54,6 +56,7 @@ if [ -n "$application" ]; then
         fail "NIXBENCH_APPLICATION must be an executable regular file"
     fi
 fi
+unset NIXBENCH_TRACE_WAYLAND NIXBENCH_TRACE_WAYLAND_LOG
 
 script_path=$0
 case "$script_path" in
@@ -286,21 +289,37 @@ fi
 run_privileged_session()
 {
     if [ -n "$application" ]; then
-        if [ -n "${NIXBENCH_TRACE_WAYLAND:-}" ]; then
-            sudo -n env \
-                NIXBENCH_TRACE_WAYLAND="$NIXBENCH_TRACE_WAYLAND" \
-                "$staged_session" --acknowledge-console-takeover \
-                --core "$core" --application "$application" "$@"
+        if [ -n "$trace_wayland" ]; then
+            if [ -n "$trace_wayland_log" ]; then
+                sudo -n env \
+                    NIXBENCH_TRACE_WAYLAND="$trace_wayland" \
+                    NIXBENCH_TRACE_WAYLAND_LOG="$trace_wayland_log" \
+                    "$staged_session" --acknowledge-console-takeover \
+                    --core "$core" --application "$application" "$@"
+            else
+                sudo -n env \
+                    NIXBENCH_TRACE_WAYLAND="$trace_wayland" \
+                    "$staged_session" --acknowledge-console-takeover \
+                    --core "$core" --application "$application" "$@"
+            fi
         else
             sudo -n "$staged_session" --acknowledge-console-takeover \
                 --core "$core" --application "$application" "$@"
         fi
     else
-        if [ -n "${NIXBENCH_TRACE_WAYLAND:-}" ]; then
-            sudo -n env \
-                NIXBENCH_TRACE_WAYLAND="$NIXBENCH_TRACE_WAYLAND" \
-                "$staged_session" --acknowledge-console-takeover \
-                --core "$core" "$@"
+        if [ -n "$trace_wayland" ]; then
+            if [ -n "$trace_wayland_log" ]; then
+                sudo -n env \
+                    NIXBENCH_TRACE_WAYLAND="$trace_wayland" \
+                    NIXBENCH_TRACE_WAYLAND_LOG="$trace_wayland_log" \
+                    "$staged_session" --acknowledge-console-takeover \
+                    --core "$core" "$@"
+            else
+                sudo -n env \
+                    NIXBENCH_TRACE_WAYLAND="$trace_wayland" \
+                    "$staged_session" --acknowledge-console-takeover \
+                    --core "$core" "$@"
+            fi
         else
             sudo -n "$staged_session" --acknowledge-console-takeover \
                 --core "$core" "$@"

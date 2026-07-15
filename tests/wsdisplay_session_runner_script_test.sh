@@ -86,7 +86,9 @@ run_session()
     application=${8-}
 
     printf '%s\n' START-NIXBENCH |
-        env PATH="$temporary/bin:/usr/bin:/bin" \
+        env -u NIXBENCH_TRACE_WAYLAND \
+            -u NIXBENCH_TRACE_WAYLAND_LOG \
+            PATH="$temporary/bin:/usr/bin:/bin" \
             SSH_CONNECTION='test test test test' \
             NIXBENCH_BUILD_DIR="$temporary/build" \
             NIXBENCH_EXPECT_SUPERVISOR_TERM="$supervisor_mode" \
