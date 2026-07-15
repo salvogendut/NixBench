@@ -470,6 +470,7 @@ static void test_capture_validation_and_race_rejections(void)
     struct nb_wsdisplay_console_state state;
     struct fake_console fake;
     char long_prefix[NB_WSDISPLAY_CONSOLE_PATH_CAPACITY];
+    char long_status[NB_WSDISPLAY_CONSOLE_PATH_CAPACITY + 1U];
 
     initialize_fake(&fake);
     fake.active_screen = -1;
@@ -506,6 +507,17 @@ static void test_capture_validation_and_race_rejections(void)
     CHECK(!nb_wsdisplay_console_capture_with_operations(
         &options, &state, &fake_operations, &fake, NULL));
     CHECK(fake.action_calls[FAKE_OPEN_SCREEN_READ] == 0U);
+    check_closed(&fake);
+
+    memset(long_status, 'a', sizeof(long_status));
+    long_status[0] = '/';
+    long_status[sizeof(long_status) - 1U] = '\0';
+    options = capture_options();
+    options.status_device_path = long_status;
+    initialize_fake(&fake);
+    CHECK(!nb_wsdisplay_console_capture_with_operations(
+        &options, &state, &fake_operations, &fake, NULL));
+    CHECK(fake.log[0] == '\0');
     check_closed(&fake);
 }
 
@@ -738,7 +750,7 @@ static void test_restore_character_and_state_validation(void)
     initialize_fake(&fake);
     fake.screen_character = false;
     CHECK(!restore(&fake, &state));
-    CHECK(fake.action_calls[FAKE_SET_DISPLAY_MODE] == 1U);
+    CHECK(fake.action_calls[FAKE_SET_DISPLAY_MODE] == 0U);
     check_closed(&fake);
 
     initialize_fake(&fake);

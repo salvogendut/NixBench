@@ -471,7 +471,8 @@ bool nb_wsdisplay_console_restore_with_operations(
                            screen,
                            state->screen_device,
                            error_stream)) {
-        success = false;
+        (void)operations->close_device(opaque, screen);
+        return false;
     }
 
     result = retry_set_display_mode(
