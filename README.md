@@ -443,6 +443,25 @@ compatibility probe. Arguments are not supported yet:
 NIXBENCH_APPLICATION=/usr/pkg/bin/midori ./tools/run-wsdisplay-session.sh
 ```
 
+If Midori maps its Speed Dial window and later crashes, capture the
+physical-session-only fault without enabling core dumps:
+
+```sh
+NIXBENCH_APPLICATION="$PWD/tools/run-midori-gdb.sh" \
+  ./tools/run-wsdisplay-session.sh
+```
+
+That NetBSD/pkgsrc-specific diagnostic is itself the selected ordinary-user
+application. It sets WebKitGTK 2.36's
+`WEBKIT_DISABLE_COMPOSITING_MODE=1` compatibility switch, then finally
+`exec`s `/usr/bin/gdb`. GDB starts `/usr/pkg/bin/midori` and, if a fault
+remains, prints the crashing thread, bounded stacks for the other threads, and
+loaded shared libraries to the retained SSH session. This single run therefore
+tests the software-compositing workaround and captures its failure case. It
+does not change the privilege boundary, process group, core-dump limit, or
+console recovery path. The A/B switch follows the same workaround recorded for
+this legacy renderer in [WebKit bug 238513](https://bugs.webkit.org/show_bug.cgi?id=238513).
+
 The guided script checks that path as the ordinary user before invoking
 `sudo`. Privileged code only validates and forwards bounded path text; the
 credential-dropped core performs the actual `exec` without a shell. This is
@@ -583,12 +602,17 @@ the first window. A device-free replay kept the installed `gtk3-demo` alive,
 then GDB located Midori's crash below WebKitGTK in NetBSD libEGL's default X11
 DRI2 initialization path. With no X server, that path reached
 `xcb_connection_has_error()` without a valid connection. Explicitly selecting
-`EGL_PLATFORM=wayland` avoids the crash. A client protocol trace then showed
-Midori configuring an `xdg_toplevel`, attaching shared-memory buffers, gaining
-keyboard focus, and submitting subsequent frames. The standalone core now
-sets that fixed platform for every client after the credential drop. The next
-physical probe must confirm the visible browser window and establish how much
-web content works with NetBSD's non-Wayland EGL build and software fallback.
+`EGL_PLATFORM=wayland` avoids that initial crash. A client protocol trace then
+showed Midori configuring an `xdg_toplevel`, attaching shared-memory buffers,
+gaining keyboard focus, and submitting subsequent frames. The standalone core
+now sets that fixed platform for every client after the credential drop.
+
+The next physical run confirmed that the real Speed Dial window is visible,
+but the Midori UI process later encountered a second `SIGSEGV`. An equivalent
+device-free run remained alive for 20 seconds despite the same EGL, Cairo,
+accessibility, and D-Bus warnings, so those diagnostics alone are not the
+cause. The ordinary-user GDB launcher above is the next gate; it preserves the
+supervised cleanup path while collecting the physical-only backtrace.
 
 The opt-in `wsdisplay` presentation harness must run as root. Start with its
 query-only preflight:

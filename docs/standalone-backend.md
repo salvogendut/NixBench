@@ -471,6 +471,23 @@ path; application arguments are not supported yet:
 NIXBENCH_APPLICATION=/usr/pkg/bin/midori ./tools/run-wsdisplay-session.sh
 ```
 
+For a post-map Midori crash that occurs only on the physical standalone host,
+the same selector can launch a fixed, ordinary-user debugger wrapper:
+
+```sh
+NIXBENCH_APPLICATION="$PWD/tools/run-midori-gdb.sh" \
+  ./tools/run-wsdisplay-session.sh
+```
+
+The wrapper is specific to the installed NetBSD/pkgsrc paths. It sets the
+WebKitGTK 2.36 `WEBKIT_DISABLE_COMPOSITING_MODE=1` A/B switch, executes GDB
+only after the normal credential drop, follows the direct Midori UI process,
+and prints its crash stacks and loaded libraries to the SSH session if the
+software path still fails. It does not enable core dumps, create a new process
+group, or change privileged supervision and console restoration. The switch
+is the upstream workaround recorded for this renderer in
+[WebKit bug 238513](https://bugs.webkit.org/show_bug.cgi?id=238513).
+
 The guided script validates the selected file before `sudo`, while still
 running as the ordinary user. The privileged launcher performs only bounded
 lexical validation and forwards the path; it does not resolve, open, or execute
@@ -574,8 +591,12 @@ connection. Selecting `EGL_PLATFORM=wayland` prevents that X11 fallback.
 Midori then remained alive and a Wayland client trace recorded a configured
 `xdg_toplevel`, repeated shared-memory buffer commits, keyboard focus, and
 frame callbacks. WebKit reports that EGL initialization itself is unavailable
-with the base-system library and takes a software path; the next physical
-probe must establish the visible and usable result.
+with the base-system library and takes a software path. The next physical run
+did display the Speed Dial window, but the tracked Midori UI process later
+terminated with a second `SIGSEGV`. A matching device-free run survived for 20
+seconds while emitting the same non-fatal warnings, leaving a physical output,
+timing, or input-dependent fault. The fixed ordinary-user GDB wrapper is the
+next diagnostic gate.
 
 The older all-root smoke harness remains useful only for bounded research and
 does not become an application launcher.

@@ -191,7 +191,11 @@ fault to WebKitGTK calling NetBSD libEGL's default X11 DRI2 initialization in
 the X-free session. Selecting `EGL_PLATFORM=wayland` prevents that invalid X11
 path; Midori then configures a toplevel and submits repeated shared-memory
 frames. The core now establishes this fixed application environment after the
-credential drop. A physical visibility/usability confirmation is next.
+credential drop. The next physical run displayed Midori's real Speed Dial
+window, then exposed a second UI-process `SIGSEGV`. An equivalent 20-second
+offscreen run did not reproduce it despite matching the application warnings.
+A fixed ordinary-user GDB launcher now captures that physical-only backtrace
+without enabling core dumps or changing process-group containment.
 Malformed protocol, harder supervisor/worker failures, and repeated-session
 validation remain. Installation and launching managed by the desktop,
 popup/subsurface/data transfer, broader toolkit trials, and application-menu

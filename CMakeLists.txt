@@ -1329,6 +1329,10 @@ if(BUILD_TESTING)
   endif()
   if(UNIX)
     add_test(
+      NAME nixbench.midori-gdb-runner.syntax
+      COMMAND sh -n "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-midori-gdb.sh"
+    )
+    add_test(
       NAME nixbench.wsdisplay.session-runner-script-syntax
       COMMAND
         sh -n "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-wsdisplay-session.sh"
