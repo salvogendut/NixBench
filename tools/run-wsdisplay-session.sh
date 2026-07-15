@@ -286,11 +286,25 @@ fi
 run_privileged_session()
 {
     if [ -n "$application" ]; then
-        sudo -n "$staged_session" --acknowledge-console-takeover \
-            --core "$core" --application "$application" "$@"
+        if [ -n "${NIXBENCH_TRACE_WAYLAND:-}" ]; then
+            sudo -n env \
+                NIXBENCH_TRACE_WAYLAND="$NIXBENCH_TRACE_WAYLAND" \
+                "$staged_session" --acknowledge-console-takeover \
+                --core "$core" --application "$application" "$@"
+        else
+            sudo -n "$staged_session" --acknowledge-console-takeover \
+                --core "$core" --application "$application" "$@"
+        fi
     else
-        sudo -n "$staged_session" --acknowledge-console-takeover \
-            --core "$core" "$@"
+        if [ -n "${NIXBENCH_TRACE_WAYLAND:-}" ]; then
+            sudo -n env \
+                NIXBENCH_TRACE_WAYLAND="$NIXBENCH_TRACE_WAYLAND" \
+                "$staged_session" --acknowledge-console-takeover \
+                --core "$core" "$@"
+        else
+            sudo -n "$staged_session" --acknowledge-console-takeover \
+                --core "$core" "$@"
+        fi
     fi
 }
 

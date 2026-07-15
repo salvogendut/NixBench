@@ -530,8 +530,8 @@ transfer beyond the discovery skeleton, accelerated buffer sharing, and a
 generic GTK global-menu bridge are the expected first compatibility
 boundaries.
 
-Set `NIXBENCH_TRACE_WAYLAND=1` on the Midori probe wrapper when you need a
-client-side protocol trace for a failing interaction.
+Set `NIXBENCH_TRACE_WAYLAND=1` when invoking `./tools/run-wsdisplay-session.sh`
+if you need a client-side protocol trace for a failing interaction.
 
 It configures and builds the opt-in targets, runs device-free tests, stages the
 privileged launcher as the root-owned, non-writable
