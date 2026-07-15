@@ -2675,9 +2675,6 @@ cleanup:
     if (surface != NULL) {
         wl_surface_destroy(surface);
     }
-    if (display != NULL) {
-        wl_display_disconnect(display);
-    }
     if (server != NULL) {
         nb_wayland_server_destroy(server);
     }
