@@ -1647,10 +1647,6 @@ static bool copy_shm_buffer(struct nb_wayland_surface *surface,
 
 static void map_surface(struct nb_wayland_surface *surface)
 {
-    const int cascade =
-        (int)(surface->server->next_window_position %
-              (unsigned int)NB_WAYLAND_CASCADE_COUNT) *
-        NB_WAYLAND_CASCADE;
     struct nb_rect frame;
     const char *title;
 
@@ -1659,8 +1655,8 @@ static void map_surface(struct nb_wayland_surface *surface)
         return;
     }
 
-    frame.x = NB_WAYLAND_INITIAL_X + cascade;
-    frame.y = NB_WAYLAND_INITIAL_Y + cascade;
+    frame.x = 0;
+    frame.y = NB_MENU_BAR_HEIGHT;
     frame.width = surface->width + (2 * NB_WINDOW_BORDER_WIDTH);
     frame.height = surface->height + (2 * NB_WINDOW_BORDER_WIDTH) +
                    NB_WINDOW_TITLE_HEIGHT + NB_WINDOW_FOOTER_HEIGHT;
@@ -1701,7 +1697,7 @@ static void send_initial_configure(struct nb_wayland_surface *surface)
     if (surface->toplevel_resource != NULL) {
         width = surface->server->output_width -
                 (2 * NB_WINDOW_BORDER_WIDTH);
-        height = surface->server->output_height -
+        height = surface->server->output_height - NB_MENU_BAR_HEIGHT -
                  (2 * NB_WINDOW_BORDER_WIDTH) -
                  NB_WINDOW_TITLE_HEIGHT - NB_WINDOW_FOOTER_HEIGHT;
         if (width < NB_WINDOW_MIN_WIDTH) {
