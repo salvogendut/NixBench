@@ -227,6 +227,53 @@ static void test_external_only_wakes_without_host_event(void)
     close_pipe(external);
 }
 
+static void test_three_external_descriptors(void)
+{
+    int primary[2] = {-1, -1};
+    int external[3][2] = {{-1, -1}, {-1, -1}, {-1, -1}};
+    int external_fds[3];
+    struct callback_context context;
+    struct nb_host_event event;
+    struct nb_host_fd_wait_result result;
+    size_t index;
+
+    if (!make_pipe(primary)) {
+        return;
+    }
+    for (index = 0; index < 3U; ++index) {
+        if (!make_pipe(external[index])) {
+            while (index != 0U) {
+                --index;
+                close_pipe(external[index]);
+            }
+            close_pipe(primary);
+            return;
+        }
+        external_fds[index] = external[index][0];
+    }
+    CHECK(write_wake(external[2][1]));
+    context = empty_context(primary[0]);
+
+    CHECK(nb_host_fd_wait_event(primary[0],
+                                external_fds,
+                                3,
+                                100,
+                                callback,
+                                &context,
+                                &event,
+                                &result) == NB_HOST_EVENT_STATUS_EMPTY);
+    CHECK(!result.primary_ready);
+    CHECK(!result.external_ready[0]);
+    CHECK(!result.external_ready[1]);
+    CHECK(result.external_ready[2]);
+    CHECK(!result.timed_out);
+
+    for (index = 0; index < 3U; ++index) {
+        close_pipe(external[index]);
+    }
+    close_pipe(primary);
+}
+
 static void test_zero_timeout_checks_descriptors_once(void)
 {
     int primary[2] = {-1, -1};
@@ -535,7 +582,7 @@ static void test_invalid_arguments(void)
 {
     int primary[2] = {-1, -1};
     int other[2] = {-1, -1};
-    int external_fds[3];
+    int external_fds[4];
     struct nb_host_event event;
     struct nb_host_fd_wait_result result;
 
@@ -547,10 +594,11 @@ static void test_invalid_arguments(void)
     external_fds[0] = other[0];
     external_fds[1] = other[1];
     external_fds[2] = primary[1];
+    external_fds[3] = other[1];
 
     check_invalid_call(-1, NULL, 0, callback, &event, &result);
     check_invalid_call(primary[0], NULL, 1, callback, &event, &result);
-    check_invalid_call(primary[0], external_fds, 3, callback, &event, &result);
+    check_invalid_call(primary[0], external_fds, 4, callback, &event, &result);
     external_fds[0] = -1;
     check_invalid_call(primary[0], external_fds, 1, callback, &event, &result);
     external_fds[0] = primary[0];
@@ -569,6 +617,7 @@ int main(void)
 {
     test_queued_host_event_precedes_external();
     test_external_only_wakes_without_host_event();
+    test_three_external_descriptors();
     test_zero_timeout_checks_descriptors_once();
     test_primary_wake_becomes_host_event();
     test_lifecycle_event_has_simultaneous_priority();
