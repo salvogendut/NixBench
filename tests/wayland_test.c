@@ -96,6 +96,9 @@ struct client_state {
     struct wl_seat *seat;
     struct wl_pointer *pointer;
     struct wl_keyboard *keyboard;
+    struct wl_data_device_manager *data_device_manager;
+    struct wl_data_device *data_device;
+    struct wl_data_source *data_source;
     struct output_state output;
     struct output_state late_output;
     struct xdg_wm_base *wm_base;
@@ -117,6 +120,7 @@ struct client_state {
     uint32_t seat_capabilities;
     uint32_t seat_version;
     uint32_t seat_global_name;
+    uint32_t data_device_manager_version;
     uint32_t output_global_name;
     uint32_t output_global_version;
     char seat_name[SEAT_NAME_CAPACITY];
@@ -143,6 +147,11 @@ struct client_state {
     unsigned int seat_event_sequence;
     unsigned int seat_capability_sequence;
     unsigned int seat_name_sequence;
+    unsigned int data_source_cancelled_count;
+    bool seat_waited_for_data_device_manager;
+    unsigned int input_event_sequence;
+    unsigned int data_device_selection_count;
+    unsigned int data_device_selection_sequence;
     unsigned int pointer_enter_count;
     unsigned int pointer_leave_count;
     unsigned int pointer_motion_count;
@@ -173,6 +182,7 @@ struct client_state {
     size_t keyboard_enter_key_count;
     unsigned int keyboard_keymap_count;
     unsigned int keyboard_repeat_count;
+    unsigned int keyboard_enter_sequence;
     unsigned int keyboard_enter_count;
     unsigned int keyboard_leave_count;
     unsigned int keyboard_key_count;
@@ -612,6 +622,7 @@ static void keyboard_enter(void *data,
                key_count * sizeof(uint32_t));
     }
     ++state->keyboard_enter_count;
+    state->keyboard_enter_sequence = ++state->input_event_sequence;
 }
 
 static void keyboard_leave(void *data,
@@ -762,6 +773,143 @@ application_menu_listener = {
     .command = application_menu_command
 };
 
+static void data_source_target(void *data,
+                               struct wl_data_source *source,
+                               const char *mime_type)
+{
+    (void)data;
+    (void)source;
+    (void)mime_type;
+}
+
+static void data_source_send(void *data,
+                             struct wl_data_source *source,
+                             const char *mime_type,
+                             int32_t fd)
+{
+    (void)data;
+    (void)source;
+    (void)mime_type;
+    if (fd >= 0) {
+        (void)close(fd);
+    }
+}
+
+static void data_source_cancelled(void *data,
+                                  struct wl_data_source *source)
+{
+    struct client_state *state = data;
+
+    (void)source;
+    ++state->data_source_cancelled_count;
+}
+
+static void data_source_dnd_drop_performed(void *data,
+                                           struct wl_data_source *source)
+{
+    (void)data;
+    (void)source;
+}
+
+static void data_source_dnd_finished(void *data,
+                                     struct wl_data_source *source)
+{
+    (void)data;
+    (void)source;
+}
+
+static void data_source_action(void *data,
+                               struct wl_data_source *source,
+                               uint32_t dnd_action)
+{
+    (void)data;
+    (void)source;
+    (void)dnd_action;
+}
+
+static const struct wl_data_source_listener data_source_listener = {
+    .target = data_source_target,
+    .send = data_source_send,
+    .cancelled = data_source_cancelled,
+    .dnd_drop_performed = data_source_dnd_drop_performed,
+    .dnd_finished = data_source_dnd_finished,
+    .action = data_source_action
+};
+
+static void data_device_data_offer(void *data,
+                                   struct wl_data_device *device,
+                                   struct wl_data_offer *offer)
+{
+    (void)data;
+    (void)device;
+    (void)offer;
+}
+
+static void data_device_enter(void *data,
+                              struct wl_data_device *device,
+                              uint32_t serial,
+                              struct wl_surface *surface,
+                              wl_fixed_t x,
+                              wl_fixed_t y,
+                              struct wl_data_offer *offer)
+{
+    (void)data;
+    (void)device;
+    (void)serial;
+    (void)surface;
+    (void)x;
+    (void)y;
+    (void)offer;
+}
+
+static void data_device_leave(void *data,
+                              struct wl_data_device *device)
+{
+    (void)data;
+    (void)device;
+}
+
+static void data_device_motion(void *data,
+                               struct wl_data_device *device,
+                               uint32_t time,
+                               wl_fixed_t x,
+                               wl_fixed_t y)
+{
+    (void)data;
+    (void)device;
+    (void)time;
+    (void)x;
+    (void)y;
+}
+
+static void data_device_drop(void *data,
+                             struct wl_data_device *device)
+{
+    (void)data;
+    (void)device;
+}
+
+static void data_device_selection(void *data,
+                                  struct wl_data_device *device,
+                                  struct wl_data_offer *offer)
+{
+    struct client_state *state = data;
+
+    (void)device;
+    CHECK(offer == NULL);
+    ++state->data_device_selection_count;
+    state->data_device_selection_sequence = ++state->input_event_sequence;
+}
+
+static const struct wl_data_device_listener data_device_listener = {
+    .data_offer = data_device_data_offer,
+    .enter = data_device_enter,
+    .leave = data_device_leave,
+    .motion = data_device_motion,
+    .drop = data_device_drop,
+    .selection = data_device_selection
+};
+
 static void publish_application_menu(
     struct nixbench_application_menu_v1 *menu,
     bool show_seconds)
@@ -793,6 +941,28 @@ static void publish_application_menu(
     nixbench_application_menu_v1_commit(menu);
 }
 
+static void bind_seat_after_gtk_globals(struct client_state *state,
+                                        struct wl_registry *registry)
+{
+    uint32_t bind_version;
+
+    if (state->seat != NULL || state->seat_global_name == 0) {
+        return;
+    }
+    if (state->compositor == NULL ||
+        state->data_device_manager == NULL) {
+        if (state->data_device_manager == NULL) {
+            state->seat_waited_for_data_device_manager = true;
+        }
+        return;
+    }
+    bind_version = state->seat_version < 5 ? state->seat_version : 5;
+    state->seat = wl_registry_bind(registry,
+                                   state->seat_global_name,
+                                   &wl_seat_interface,
+                                   bind_version);
+}
+
 static void registry_global(void *data,
                             struct wl_registry *registry,
                             uint32_t name,
@@ -806,6 +976,7 @@ static void registry_global(void *data,
 
         state->compositor = wl_registry_bind(
             registry, name, &wl_compositor_interface, bind_version);
+        bind_seat_after_gtk_globals(state, registry);
     } else if (strcmp(interface, wl_shm_interface.name) == 0) {
         state->shm = wl_registry_bind(
             registry, name, &wl_shm_interface, 1);
@@ -824,12 +995,20 @@ static void registry_global(void *data,
             state->output.proxy = NULL;
         }
     } else if (strcmp(interface, wl_seat_interface.name) == 0) {
-        const uint32_t bind_version = version < 5 ? version : 5;
-
         state->seat_version = version;
         state->seat_global_name = name;
-        state->seat = wl_registry_bind(
-            registry, name, &wl_seat_interface, bind_version);
+        bind_seat_after_gtk_globals(state, registry);
+    } else if (strcmp(interface,
+                      wl_data_device_manager_interface.name) == 0) {
+        const uint32_t bind_version = version < 1 ? version : 1;
+
+        state->data_device_manager_version = version;
+        state->data_device_manager = wl_registry_bind(
+            registry,
+            name,
+            &wl_data_device_manager_interface,
+            bind_version);
+        bind_seat_after_gtk_globals(state, registry);
     } else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
         state->wm_base = wl_registry_bind(
             registry, name, &xdg_wm_base_interface, 1);
@@ -1055,6 +1234,7 @@ static void test_wayland_surface_lifecycle(void)
     struct wl_surface *surface = NULL;
     struct wl_shm_pool *pool = NULL;
     struct wl_buffer *buffer = NULL;
+    struct wl_data_source *drag_source = NULL;
     struct client_state client = {0};
     struct client_state legacy_input = {0};
     struct nb_wayland_surface_snapshot snapshot;
@@ -1097,12 +1277,17 @@ static void test_wayland_surface_lifecycle(void)
     REQUIRE(client.shm != NULL);
     REQUIRE(client.output.proxy != NULL);
     REQUIRE(client.seat != NULL);
+    REQUIRE(client.data_device_manager != NULL);
     REQUIRE(client.wm_base != NULL);
     REQUIRE(client.application_menu_manager != NULL);
     CHECK(client.output_global_version == 2);
     CHECK(wl_output_get_version(client.output.proxy) == 2);
     CHECK(client.seat_version >= 5);
     CHECK(wl_seat_get_version(client.seat) == 5);
+    CHECK(client.data_device_manager_version == 1);
+    CHECK(wl_data_device_manager_get_version(
+              client.data_device_manager) == 1);
+    CHECK(client.seat_waited_for_data_device_manager);
     REQUIRE(wl_shm_add_listener(client.shm, &shm_listener, &client) == 0);
     REQUIRE(wl_seat_add_listener(client.seat,
                                  &seat_listener,
@@ -1110,6 +1295,26 @@ static void test_wayland_surface_lifecycle(void)
     REQUIRE(xdg_wm_base_add_listener(client.wm_base,
                                      &wm_base_listener,
                                      &client) == 0);
+    client.data_device = wl_data_device_manager_get_data_device(
+        client.data_device_manager,
+        client.seat);
+    REQUIRE(client.data_device != NULL);
+    REQUIRE(wl_data_device_get_version(client.data_device) == 1);
+    REQUIRE(wl_data_device_add_listener(client.data_device,
+                                        &data_device_listener,
+                                        &client) == 0);
+    client.data_source = wl_data_device_manager_create_data_source(
+        client.data_device_manager);
+    REQUIRE(client.data_source != NULL);
+    REQUIRE(wl_data_source_get_version(client.data_source) == 1);
+    REQUIRE(wl_data_source_add_listener(client.data_source,
+                                        &data_source_listener,
+                                        &client) == 0);
+    wl_data_source_offer(client.data_source,
+                         "text/plain;charset=utf-8");
+    wl_data_device_set_selection(client.data_device,
+                                 client.data_source,
+                                 UINT32_C(0));
     REQUIRE(pump_barrier(server, display));
     CHECK(client.saw_argb8888);
     CHECK(client.output.geometry_count == 1);
@@ -1136,8 +1341,12 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(client.seat_name_count == 1);
     CHECK(strcmp(client.seat_name, "nixbench-seat0") == 0);
     CHECK(client.seat_name_sequence < client.seat_capability_sequence);
+    CHECK(client.data_source_cancelled_count == 1);
     REQUIRE(client.pointer != NULL);
     REQUIRE(client.keyboard != NULL);
+    wl_data_device_set_selection(client.data_device, NULL, UINT32_C(0));
+    wl_data_source_destroy(client.data_source);
+    client.data_source = NULL;
     /* Process the input resources queued by the capability callback. */
     REQUIRE(pump_barrier(server, display));
     CHECK(client.keyboard_keymap_count == 1);
@@ -1157,6 +1366,22 @@ static void test_wayland_surface_lifecycle(void)
     REQUIRE(wl_surface_add_listener(surface,
                                     &surface_listener,
                                     &client) == 0);
+    drag_source = wl_data_device_manager_create_data_source(
+        client.data_device_manager);
+    REQUIRE(drag_source != NULL);
+    REQUIRE(wl_data_source_add_listener(drag_source,
+                                        &data_source_listener,
+                                        &client) == 0);
+    wl_data_source_offer(drag_source, "text/uri-list");
+    wl_data_device_start_drag(client.data_device,
+                              drag_source,
+                              surface,
+                              NULL,
+                              UINT32_C(0));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.data_source_cancelled_count == 2);
+    wl_data_source_destroy(drag_source);
+    drag_source = NULL;
     client.xdg_surface = xdg_wm_base_get_xdg_surface(client.wm_base,
                                                      surface);
     REQUIRE(client.xdg_surface != NULL);
@@ -1552,6 +1777,10 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(nb_wayland_server_keyboard_focus(server, window));
     REQUIRE(pump_barrier(server, display));
     CHECK(client.keyboard_enter_count == 1);
+    CHECK(client.data_device_selection_count == 1);
+    CHECK(client.data_device_selection_sequence != 0);
+    CHECK(client.data_device_selection_sequence <
+          client.keyboard_enter_sequence);
     CHECK(client.keyboard_enter_surface == surface);
     CHECK(client.keyboard_serial != 0);
     CHECK(client.keyboard_enter_key_count == 0);
@@ -1802,6 +2031,10 @@ static void test_wayland_surface_lifecycle(void)
     client.xdg_surface = NULL;
     wl_surface_destroy(surface);
     surface = NULL;
+    wl_data_device_destroy(client.data_device);
+    client.data_device = NULL;
+    wl_data_device_manager_destroy(client.data_device_manager);
+    client.data_device_manager = NULL;
     wl_pointer_release(legacy_input.pointer);
     legacy_input.pointer = NULL;
     wl_keyboard_release(legacy_input.keyboard);

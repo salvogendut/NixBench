@@ -21,6 +21,7 @@ enum {
     NB_WAYLAND_COMPOSITOR_VERSION = 4,
     NB_WAYLAND_OUTPUT_VERSION = 2,
     NB_WAYLAND_SEAT_VERSION = 5,
+    NB_WAYLAND_DATA_DEVICE_MANAGER_VERSION = 1,
     NB_WAYLAND_XDG_SHELL_VERSION = 1,
     NB_WAYLAND_MAX_FRAME_CALLBACKS = 16,
     NB_WAYLAND_INITIAL_CONTENT_WIDTH = 560,
@@ -62,6 +63,12 @@ struct nb_wayland_pointer_resource {
 };
 
 struct nb_wayland_keyboard_resource {
+    struct nb_wayland_server *server;
+    struct wl_resource *resource;
+    struct wl_list link;
+};
+
+struct nb_wayland_data_device_resource {
     struct nb_wayland_server *server;
     struct wl_resource *resource;
     struct wl_list link;
@@ -125,11 +132,13 @@ struct nb_wayland_server {
     struct wl_global *compositor_global;
     struct wl_global *output_global;
     struct wl_global *seat_global;
+    struct wl_global *data_device_manager_global;
     struct wl_global *xdg_wm_base_global;
     struct wl_global *application_menu_global;
     struct wl_list output_resources;
     struct wl_list pointer_resources;
     struct wl_list keyboard_resources;
+    struct wl_list data_device_resources;
     struct xkb_context *xkb_context;
     struct xkb_keymap *xkb_keymap;
     struct xkb_state *xkb_state;
@@ -527,6 +536,20 @@ static bool keyboard_resource_belongs_to_client(
            wl_resource_get_client(keyboard->resource) == client;
 }
 
+static void data_device_send_empty_selection_to_client(
+    struct nb_wayland_server *server,
+    struct wl_client *client)
+{
+    struct nb_wayland_data_device_resource *device;
+
+    wl_list_for_each(device, &server->data_device_resources, link) {
+        if (device->resource != NULL &&
+            wl_resource_get_client(device->resource) == client) {
+            wl_data_device_send_selection(device->resource, NULL);
+        }
+    }
+}
+
 static void keyboard_read_modifiers(struct nb_wayland_server *server,
                                     uint32_t *depressed,
                                     uint32_t *latched,
@@ -646,6 +669,9 @@ static bool keyboard_change_focus(struct nb_wayland_server *server,
 
     server->keyboard_focus = new_focus;
     if (new_focus != NULL) {
+        if (old_client != new_client) {
+            data_device_send_empty_selection_to_client(server, new_client);
+        }
         wl_list_for_each(keyboard, &server->keyboard_resources, link) {
             if (keyboard_resource_belongs_to_client(keyboard, new_client)) {
                 wl_keyboard_send_enter(keyboard->resource,
@@ -1968,6 +1994,185 @@ static void bind_seat(struct wl_client *client,
                                   WL_SEAT_CAPABILITY_KEYBOARD);
 }
 
+static void data_source_offer(struct wl_client *client,
+                              struct wl_resource *resource,
+                              const char *mime_type)
+{
+    (void)client;
+    (void)resource;
+    (void)mime_type;
+}
+
+static void data_source_destroy(struct wl_client *client,
+                                struct wl_resource *resource)
+{
+    (void)client;
+    wl_resource_destroy(resource);
+}
+
+static void data_source_set_actions(struct wl_client *client,
+                                    struct wl_resource *resource,
+                                    uint32_t dnd_actions)
+{
+    (void)client;
+    (void)resource;
+    (void)dnd_actions;
+}
+
+static const struct wl_data_source_interface data_source_implementation = {
+    .offer = data_source_offer,
+    .destroy = data_source_destroy,
+    .set_actions = data_source_set_actions
+};
+
+static void cancel_inert_data_source(struct wl_resource *source)
+{
+    if (source != NULL) {
+        wl_data_source_send_cancelled(source);
+    }
+}
+
+static void data_device_start_drag(struct wl_client *client,
+                                   struct wl_resource *resource,
+                                   struct wl_resource *source,
+                                   struct wl_resource *origin,
+                                   struct wl_resource *icon,
+                                   uint32_t serial)
+{
+    (void)client;
+    (void)resource;
+    (void)origin;
+    (void)icon;
+    (void)serial;
+    cancel_inert_data_source(source);
+}
+
+static void data_device_set_selection(struct wl_client *client,
+                                      struct wl_resource *resource,
+                                      struct wl_resource *source,
+                                      uint32_t serial)
+{
+    (void)client;
+    (void)resource;
+    (void)serial;
+    cancel_inert_data_source(source);
+}
+
+static void data_device_release(struct wl_client *client,
+                                struct wl_resource *resource)
+{
+    (void)client;
+    wl_resource_destroy(resource);
+}
+
+static void data_device_resource_destroyed(struct wl_resource *resource)
+{
+    struct nb_wayland_data_device_resource *device =
+        wl_resource_get_user_data(resource);
+
+    if (device == NULL) {
+        return;
+    }
+    device->resource = NULL;
+    wl_list_remove(&device->link);
+    wl_list_init(&device->link);
+    free(device);
+}
+
+static const struct wl_data_device_interface data_device_implementation = {
+    .start_drag = data_device_start_drag,
+    .set_selection = data_device_set_selection,
+    .release = data_device_release
+};
+
+static void data_device_manager_create_data_source(
+    struct wl_client *client,
+    struct wl_resource *resource,
+    uint32_t id)
+{
+    struct wl_resource *source = wl_resource_create(
+        client,
+        &wl_data_source_interface,
+        wl_resource_get_version(resource),
+        id);
+
+    if (source == NULL) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(source,
+                                   &data_source_implementation,
+                                   wl_resource_get_user_data(resource),
+                                   NULL);
+}
+
+static void data_device_manager_get_data_device(
+    struct wl_client *client,
+    struct wl_resource *resource,
+    uint32_t id,
+    struct wl_resource *seat)
+{
+    struct nb_wayland_server *server =
+        wl_resource_get_user_data(resource);
+    struct nb_wayland_data_device_resource *device;
+
+    if (!wl_resource_instance_of(seat,
+                                 &wl_seat_interface,
+                                 &seat_implementation) ||
+        wl_resource_get_user_data(seat) != server) {
+        wl_client_post_implementation_error(
+            client, "wl_data_device requested for a foreign seat");
+        return;
+    }
+    device = calloc(1, sizeof(*device));
+    if (device == NULL) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    device->server = server;
+    device->resource = wl_resource_create(client,
+                                          &wl_data_device_interface,
+                                          wl_resource_get_version(resource),
+                                          id);
+    if (device->resource == NULL) {
+        free(device);
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_list_insert(&server->data_device_resources, &device->link);
+    wl_resource_set_implementation(device->resource,
+                                   &data_device_implementation,
+                                   device,
+                                   data_device_resource_destroyed);
+}
+
+static const struct wl_data_device_manager_interface
+    data_device_manager_implementation = {
+        .create_data_source = data_device_manager_create_data_source,
+        .get_data_device = data_device_manager_get_data_device
+    };
+
+static void bind_data_device_manager(struct wl_client *client,
+                                     void *data,
+                                     uint32_t version,
+                                     uint32_t id)
+{
+    struct wl_resource *resource = wl_resource_create(
+        client,
+        &wl_data_device_manager_interface,
+        protocol_version(version, NB_WAYLAND_DATA_DEVICE_MANAGER_VERSION),
+        id);
+
+    if (resource == NULL) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(resource,
+                                   &data_device_manager_implementation,
+                                   data,
+                                   NULL);
+}
+
 static void positioner_destroy(struct wl_client *client,
                                struct wl_resource *resource)
 {
@@ -2936,6 +3141,7 @@ struct nb_wayland_server *nb_wayland_server_create(
     wl_list_init(&server->output_resources);
     wl_list_init(&server->pointer_resources);
     wl_list_init(&server->keyboard_resources);
+    wl_list_init(&server->data_device_resources);
     if (!initialize_keyboard_state(server)) {
         destroy_keyboard_state(server);
         free(server);
@@ -2971,6 +3177,12 @@ struct nb_wayland_server *nb_wayland_server_create(
                                            NB_WAYLAND_SEAT_VERSION,
                                            server,
                                            bind_seat);
+    server->data_device_manager_global = wl_global_create(
+        server->display,
+        &wl_data_device_manager_interface,
+        NB_WAYLAND_DATA_DEVICE_MANAGER_VERSION,
+        server,
+        bind_data_device_manager);
     server->xdg_wm_base_global = wl_global_create(
         server->display,
         &xdg_wm_base_interface,
@@ -2986,6 +3198,7 @@ struct nb_wayland_server *nb_wayland_server_create(
     if (server->compositor_global == NULL ||
         server->output_global == NULL ||
         server->seat_global == NULL ||
+        server->data_device_manager_global == NULL ||
         server->xdg_wm_base_global == NULL ||
         server->application_menu_global == NULL) {
         wl_display_destroy(server->display);
