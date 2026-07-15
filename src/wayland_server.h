@@ -75,6 +75,12 @@ bool nb_wayland_server_add_client_fd(struct nb_wayland_server *server,
 
 /* Dispatch queued client requests without blocking and flush all clients. */
 bool nb_wayland_server_dispatch(struct nb_wayland_server *server);
+/*
+ * Consume the compositor's visible-damage latch. A true result means that a
+ * client request changed content owned by the desktop and the caller should
+ * render and present one new frame. Idle dispatch never sets this latch.
+ */
+bool nb_wayland_server_take_redraw(struct nb_wayland_server *server);
 /* Update the single logical output; unchanged sizes are accepted silently. */
 bool nb_wayland_server_set_output_size(struct nb_wayland_server *server,
                                        int width,

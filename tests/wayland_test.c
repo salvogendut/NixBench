@@ -1077,6 +1077,7 @@ static void test_wayland_surface_lifecycle(void)
                                       OUTPUT_WIDTH,
                                       OUTPUT_HEIGHT);
     REQUIRE(server != NULL);
+    CHECK(!nb_wayland_server_take_redraw(server));
     REQUIRE(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
     REQUIRE(add_server_client(server, sockets[0]));
     sockets[0] = -1;
@@ -1189,6 +1190,7 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(client.configured_width == INITIAL_WIDTH);
     CHECK(client.configured_height == INITIAL_HEIGHT);
     CHECK(nb_wayland_server_window_count(server) == 0);
+    CHECK(!nb_wayland_server_take_redraw(server));
 
     /* The configure handler queued ack_configure; process it before attach. */
     REQUIRE(pump_barrier(server, display));
@@ -1238,6 +1240,8 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(client.buffer_released);
     CHECK(!client.frame_done);
     CHECK(nb_wayland_server_window_count(server) == 1);
+    CHECK(nb_wayland_server_take_redraw(server));
+    CHECK(!nb_wayland_server_take_redraw(server));
     CHECK(client.surface_enter_count == 1);
     CHECK(client.initial_output_enter_count == 1);
     CHECK(client.surface_enter_output == client.output.proxy);
@@ -1744,6 +1748,8 @@ static void test_wayland_surface_lifecycle(void)
     wl_surface_commit(surface);
     REQUIRE(pump_barrier(server, display));
     CHECK(nb_wayland_server_window_count(server) == 0);
+    CHECK(nb_wayland_server_take_redraw(server));
+    CHECK(!nb_wayland_server_take_redraw(server));
     CHECK(client.pointer_leave_count == 3);
     CHECK(client.pointer_leave_surface == surface);
     CHECK(client.keyboard_leave_count == 3);

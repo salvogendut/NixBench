@@ -155,6 +155,7 @@ struct nb_wayland_server {
     int output_height;
     int output_refresh_millihertz;
     bool destroying;
+    bool redraw_pending;
     struct nb_wayland_surface surfaces[NB_WAYLAND_MAX_SURFACES];
     unsigned int next_window_position;
     char display_name[NB_WAYLAND_DISPLAY_NAME_CAPACITY];
@@ -991,6 +992,7 @@ static void unmap_surface(struct nb_wayland_surface *surface,
         (void)nb_shell_destroy_window(surface->server->shell,
                                       surface->window);
         surface->window = NB_WINDOW_ID_NONE;
+        surface->server->redraw_pending = true;
     }
 }
 
@@ -1238,6 +1240,7 @@ static void map_surface(struct nb_wayland_surface *surface)
     if (surface->window != NB_WINDOW_ID_NONE) {
         ++surface->server->next_window_position;
         surface_send_output_membership(surface, true);
+        surface->server->redraw_pending = true;
     }
 }
 
@@ -1471,6 +1474,7 @@ static void surface_commit(struct wl_client *client,
                 surface->revision = 1;
             }
             map_surface(surface);
+            surface->server->redraw_pending = true;
         }
     } else if (surface->pixels != NULL) {
         map_surface(surface);
@@ -2510,6 +2514,9 @@ static void application_menu_resource_destroyed(struct wl_resource *resource)
             surface->active_application_menu_snapshot = 0;
             menu_snapshot_reset(&surface->application_menu_snapshots[0]);
             menu_snapshot_reset(&surface->application_menu_snapshots[1]);
+            if (surface->window != NB_WINDOW_ID_NONE) {
+                surface->server->redraw_pending = true;
+            }
         } else {
             surface->application_menu_committed = false;
             wl_client_post_implementation_error(
@@ -2755,6 +2762,9 @@ static void application_menu_commit(struct wl_client *client,
     surface->active_application_menu_snapshot = candidate_index;
     surface->application_menu_committed = true;
     menu->building = false;
+    if (surface->window != NB_WINDOW_ID_NONE) {
+        surface->server->redraw_pending = true;
+    }
 }
 
 static const struct nixbench_application_menu_v1_interface
@@ -3059,6 +3069,18 @@ bool nb_wayland_server_dispatch(struct nb_wayland_server *server)
     return true;
 }
 
+bool nb_wayland_server_take_redraw(struct nb_wayland_server *server)
+{
+    bool redraw;
+
+    if (server == NULL) {
+        return false;
+    }
+    redraw = server->redraw_pending;
+    server->redraw_pending = false;
+    return redraw;
+}
+
 bool nb_wayland_server_set_output_size(struct nb_wayland_server *server,
                                        int width,
                                        int height)
@@ -3073,6 +3095,7 @@ bool nb_wayland_server_set_output_size(struct nb_wayland_server *server,
     }
     server->output_width = width;
     server->output_height = height;
+    server->redraw_pending = true;
     wl_list_for_each(output, &server->output_resources, link) {
         wl_output_send_mode(output->resource,
                             WL_OUTPUT_MODE_CURRENT |

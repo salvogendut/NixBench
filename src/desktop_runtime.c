@@ -1181,6 +1181,8 @@ bool nb_desktop_runtime_dispatch(
                          "Could not dispatch the nested Wayland display");
             return false;
         }
+        update->redraw =
+            nb_wayland_server_take_redraw(runtime->wayland);
     }
 #endif
     update->quit_requested = runtime->quit_requested;
