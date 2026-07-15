@@ -28,9 +28,9 @@ controller loss also triggers its unprivileged cleanup fallback. Device-free
 tests exercise the split, heartbeat timeout, sentinel cleanup, and exact
 crash/hang gate policy.
 Physical takeover, normal exit, VT 1 -> 2 -> 1, and supervised-SIGTERM recovery
-have completed. The physical crash/hang trials and remaining failure-injection
-and repeated-session matrix are still pending, so this is not a production
-login session.
+have completed, and the physical core-crash gate now passes. The core-hang
+trial and remaining failure-injection and repeated-session matrix are still
+pending, so this is not a production login session.
 
 The implemented boundary is:
 
@@ -259,9 +259,15 @@ alive until the tracked application exits. The runtime is now created and
 removed by a separately credential-dropped sentinel, so the root worker only
 coordinates a fixed READY/CLEAN/CLEANED exchange and never performs filesystem
 operations on the user-owned path. Deterministic crash and hang gates are
-implemented but still await their NetBSD physical trials. Remaining later
-hardware cases are malformed protocol, worker or supervisor hard failure, and
-repeated sessions.
+implemented, and the NetBSD core-crash trial now passes. The armed supervisor
+trigger caused the worker to deliver `SIGKILL` to the validated core; the
+required failure, process-group containment, sentinel cleanup, restoration,
+and recovery-record removal all completed. Independent checks found the
+reported runtime directory and recovery record absent, no surviving NixBench
+process, and active one-based VT 1 with the saved console state. NixClock's
+Wayland read failure is expected when the compositor is deliberately killed.
+The core-hang trial is next. Remaining later hardware cases are malformed
+protocol, worker or supervisor hard failure, and repeated sessions.
 
 Every case must return to the saved screen in emulation mode with video on and
 automatic VT handling, leave no worker or recovery record, and require no

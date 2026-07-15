@@ -168,12 +168,12 @@ implements the audited root supervisor/device-helper and ordinary-user core
 split, publishes a private Wayland display, and launches NixClock after the
 credential drop. Its device-free integration path now includes a bounded core
 heartbeat, deterministic crash/hang injection policy, and an ordinary-user
-runtime-directory cleanup sentinel. The first physical console-takeover/normal-
-exit, VT 1 -> 2 -> 1, and supervised SIGTERM recovery trials are complete. The
-new core-crash/core-hang gates still require physical acceptance; malformed
-protocol, harder supervisor/worker failures, and repeated-session validation
-follow them. Desktop-managed installation, popup/subsurface/data protocols,
-toolkit trials, and broader application-menu bridges also remain outstanding.
+runtime-directory cleanup sentinel. Physical console takeover/normal exit,
+VT 1 -> 2 -> 1, supervised SIGTERM recovery, and deterministic core-crash
+recovery are complete. The core-hang gate is next; malformed protocol, harder
+supervisor/worker failures, and repeated-session validation follow it. Desktop-
+managed installation, popup/subsurface/data protocols, toolkit trials, and
+broader application-menu bridges also remain outstanding.
 
 ## Milestone 6: Package and validate the hosted prototype
 
@@ -350,9 +350,9 @@ This root-only harness remains a supervised hardware-validation mode rather
 than a desktop session. Broader hardware validation and complete wscons
 keymap/seat/hotplug support are still required. Privilege separation and a
 separate recovery supervisor now exist in the distinct opt-in session path
-described below, but that path still needs its core crash/hang, malformed-
-protocol, worker/supervisor hard-failure, and repeated-session acceptance
-trials.
+described below. Its core-crash gate now passes, but it still needs core-hang,
+malformed-protocol, worker/supervisor hard-failure, and repeated-session
+acceptance trials.
 The active-map controls are shell navigation only; general text, modifiers,
 client keymap reconciliation, and multi-device seat handling remain in that
 broader input gate.
@@ -477,9 +477,15 @@ one-based VT 1 active, and the harness reported success. The trial's non-fatal
 NixClock Wayland EOF diagnostic prompted a cleanup-order fix that keeps the
 private display alive until the tracked application exits. Bounded heartbeat
 and ordinary-user runtime-sentinel policy now support deterministic
-core-crash/core-hang guided gates; those two physical trials are next.
-Malformed protocol, worker or supervisor hard failure, and repeated-session
-validation on the X220 follow them.
+core-crash/core-hang guided gates. The physical crash gate passed: the worker
+injected `SIGKILL` only after the validated core was armed, observed that exact
+failure, contained the application group, verified sentinel cleanup, restored
+the console, and removed the recovery record. Independent checks found the
+reported runtime path and recovery record absent, no surviving NixBench
+process, and screen 0 back in emulation mode with automatic VT handling, video
+on, and VT 1 active. The physical core-hang gate is next. Malformed protocol,
+worker or supervisor hard failure, and repeated-session validation on the X220
+follow it.
 Direct KMS remains a Milestone 7 deliverable but is not on that immediate
 critical path.
 

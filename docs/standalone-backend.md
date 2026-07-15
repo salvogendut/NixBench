@@ -12,11 +12,10 @@ are replaceable platform adapters, not part of application or shell policy.
 > an ordinary-user desktop, private Wayland server, and NixClock client. Its
 > device-free integration tests, physical takeover/normal-exit trial, and
 > VT 1 -> 2 -> 1 cycle and supervised SIGTERM recovery gate pass, but it has
-> only device-free coverage for the new core-crash/core-hang gates and runtime
-> cleanup sentinel. Their physical trials and the remaining failure-injection
-> matrix are pending, as are complete seat/input support, acceleration, and
-> broad hardware coverage. It is not a production login session or a default
-> crash-safe console owner.
+> now also passed the physical core-crash gate. The core-hang trial and the
+> remaining failure-injection matrix are pending, as are complete seat/input
+> support, acceleration, and broad hardware coverage. It is not a production
+> login session or a default crash-safe console owner.
 
 ## Process and backend boundaries
 
@@ -510,10 +509,16 @@ recovery record was cleared. Independent postflight again verified screen 0 in
 emulation mode with automatic VT handling, video on, and one-based VT 1 active,
 and the guided harness reported success. The trial's non-fatal NixClock Wayland
 EOF diagnostic prompted a cleanup-order fix that keeps the private display
-alive until the tracked application exits. Deterministic core-crash and
-core-hang recovery gates are now implemented but await their physical NetBSD
-trials. Malformed protocol, worker or supervisor hard failure, and repeated-
-session recovery remain later hardware gates.
+alive until the tracked application exits. The deterministic physical
+core-crash gate now passes: its armed supervisor trigger injected `SIGKILL`
+only into the validated core, observed the required death, contained the
+application group, verified ordinary-user sentinel cleanup, restored the saved
+console state, and removed the recovery record. Independent checks found no
+reported runtime directory, recovery record, or surviving NixBench process and
+found one-based VT 1 active. NixClock's Wayland read failure is expected for
+this deliberate compositor crash. The core-hang trial is next. Malformed
+protocol, worker or supervisor hard failure, and repeated-session recovery
+remain later hardware gates.
 The older all-root smoke harness remains useful only for bounded research and
 does not become an application launcher.
 

@@ -153,10 +153,10 @@ NixClock. The core receives only a bounded anonymous protocol endpoint;
 NixClock does not receive that endpoint, and neither ordinary-user process
 receives a framebuffer, wscons, recovery, or VT descriptor. The heartbeat,
 runtime cleanup, and deterministic core-crash/core-hang gates have device-free
-coverage, but the new fault gates still require physical acceptance. Console
-takeover, normal exit, VT 1 -> 2 -> 1, and supervised SIGTERM recovery have
-passed on hardware. This remains an explicitly acknowledged development
-milestone rather than a supported login session.
+coverage. Console takeover, normal exit, VT 1 -> 2 -> 1, supervised SIGTERM
+recovery, and the core-crash gate have passed on hardware; the core-hang gate
+is next. This remains an explicitly acknowledged development milestone rather
+than a supported login session.
 
 The older `nixbench-wsdisplay-smoke` research harness deliberately remains
 available for framebuffer and input experiments. It neither publishes Wayland
@@ -524,12 +524,20 @@ record was removed. Independent postflight again found screen 0 in emulation
 mode with automatic VT handling, video on, and one-based VT 1 active, and the
 guided harness reported success. That successful trial exposed a non-fatal
 NixClock Wayland EOF diagnostic; a follow-up cleanup-order fix now keeps the
-private display alive until the tracked application has exited. Deterministic
-core-crash and core-hang recovery gates are now available but still await their
-physical trials. Malformed protocol, worker or supervisor hard failure, and
-repeated sessions remain later hardware gates. The guided command therefore
-remains an opt-in development test rather than a login-session installation
-procedure.
+private display alive until the tracked application has exited.
+
+The physical core-crash gate subsequently passed. After the validated core was
+ready, the exact armed supervisor `SIGUSR1` command caused the worker to inject
+`SIGKILL`; the required crash was observed, the core/application group and
+runtime sentinel were cleaned up, and the reported runtime directory was
+independently confirmed absent. Restoration and postflight found screen 0 in
+emulation mode, automatic VT handling, video on, and one-based VT 1; the
+recovery record was absent and no NixBench process survived. NixClock's Wayland
+read error is expected when its compositor is deliberately killed. The
+core-hang trial is the next physical gate. Malformed protocol, worker or
+supervisor hard failure, and repeated sessions remain later gates. The guided
+command therefore remains an opt-in development test rather than a login-
+session installation procedure.
 
 The opt-in `wsdisplay` presentation harness must run as root. Start with its
 query-only preflight:
