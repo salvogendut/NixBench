@@ -570,13 +570,16 @@ static bool create_signal_application(char *path)
     if (descriptor < 0) {
         return false;
     }
-    if (!write_all(descriptor, contents, sizeof(contents) - 1) ||
-        fchmod(descriptor, S_IRUSR | S_IWUSR | S_IXUSR) != 0) {
+    if (!write_all(descriptor, contents, sizeof(contents) - 1)) {
         (void)close(descriptor);
         (void)unlink(path);
         return false;
     }
     if (close(descriptor) != 0) {
+        (void)unlink(path);
+        return false;
+    }
+    if (chmod(path, S_IRUSR | S_IWUSR | S_IXUSR) != 0) {
         (void)unlink(path);
         return false;
     }
