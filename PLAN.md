@@ -167,10 +167,10 @@ privileged worker. A separate opt-in `nixbench-wsdisplay-session` milestone now
 implements the audited root supervisor/device-helper and ordinary-user core
 split, publishes a private Wayland display, and launches NixClock after the
 credential drop. Its device-free integration path and first physical
-console-takeover/normal-exit and VT 1 -> 2 -> 1 trials are complete. Failure
-injection and repeated-session validation remain pending. Desktop-managed
-installation, popup/subsurface/data protocols, toolkit trials, and broader
-application-menu bridges also remain outstanding.
+console-takeover/normal-exit, VT 1 -> 2 -> 1, and supervised SIGTERM recovery
+trials are complete. Further failure injection and repeated-session validation
+remain pending. Desktop-managed installation, popup/subsurface/data protocols,
+toolkit trials, and broader application-menu bridges also remain outstanding.
 
 ## Milestone 6: Package and validate the hosted prototype
 
@@ -347,8 +347,9 @@ This root-only harness remains a supervised hardware-validation mode rather
 than a desktop session. Broader hardware validation and complete wscons
 keymap/seat/hotplug support are still required. Privilege separation and a
 separate recovery supervisor now exist in the distinct opt-in session path
-described below, but that path still needs its hardware crash, hang, VT, and
-repeated-session acceptance trials.
+described below, but that path still needs its core crash/hang, malformed-
+protocol, worker/supervisor hard-failure, and repeated-session acceptance
+trials.
 The active-map controls are shell navigation only; general text, modifiers,
 client keymap reconciliation, and multi-device seat handling remain in that
 broader input gate.
@@ -458,9 +459,17 @@ VT handling, video on, and one-based VT 1. A subsequent privilege-separated
 trial completed VT 1 -> 2 -> 1 with release/acquire completions balanced at
 1/1; the ordinary-user desktop and NixClock returned after acquisition, normal
 exit cleared the recovery record, and independent postflight verified the same
-saved console state with VT 1 active. Its next gates are forced supervisor
-termination, core crash or hang, malformed protocol, worker or supervisor
-failure, and repeated-session validation on the X220.
+saved console state with VT 1 active. The supervised SIGTERM gate subsequently
+passed on the same hardware: after receiving the operator signal, the root
+supervisor delivered SIGTERM to the ordinary-user core. The core completed its
+in-band orderly shutdown, worker/core cleanup passed, console restoration was
+verified, and the recovery record was cleared. Independent postflight again
+found screen 0 in emulation mode with automatic VT handling, video on, and
+one-based VT 1 active, and the harness reported success. The trial's non-fatal
+NixClock Wayland EOF diagnostic prompted a cleanup-order fix that keeps the
+private display alive until the tracked application exits. Its next gates are
+core crash or hang, malformed protocol, worker or supervisor hard failure, and
+repeated-session validation on the X220.
 Direct KMS remains a Milestone 7 deliverable but is not on that immediate
 critical path.
 

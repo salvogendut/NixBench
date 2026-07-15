@@ -11,10 +11,10 @@ are replaceable platform adapters, not part of application or shell policy.
 > `nixbench-wsdisplay-session` milestone now splits root console ownership from
 > an ordinary-user desktop, private Wayland server, and NixClock client. Its
 > device-free integration tests, physical takeover/normal-exit trial, and
-> VT 1 -> 2 -> 1 cycle pass, but it has neither completed its failure-injection
-> matrix nor gained complete seat/input support, acceleration, or broad hardware
-> coverage. It is not a production login session or a default crash-safe console
-> owner.
+> VT 1 -> 2 -> 1 cycle and supervised SIGTERM recovery gate pass, but it has
+> neither completed its remaining failure-injection matrix nor gained complete
+> seat/input support, acceleration, or broad hardware coverage. It is not a
+> production login session or a default crash-safe console owner.
 
 ## Process and backend boundaries
 
@@ -485,9 +485,17 @@ VT 1. A subsequent privilege-separated trial completed VT 1 -> 2 -> 1 with
 release/acquire completions balanced at 1/1. The ordinary-user desktop and
 NixClock returned after acquisition, normal exit cleared the recovery record,
 and independent postflight verified screen 0 in emulation mode with automatic
-VT handling, video on, and VT 1 active. Forced supervisor termination, core
-crash or hang, malformed protocol, worker or supervisor failure, and
-repeated-session recovery remain NetBSD hardware gates.
+VT handling, video on, and VT 1 active. The physical supervised-SIGTERM gate
+also passed. After receiving the operator signal, the root supervisor delivered
+SIGTERM to the ordinary-user core. The core completed its in-band orderly
+shutdown, worker/core cleanup passed, restoration was verified, and the
+recovery record was cleared. Independent postflight again verified screen 0 in
+emulation mode with automatic VT handling, video on, and one-based VT 1 active,
+and the guided harness reported success. The trial's non-fatal NixClock Wayland
+EOF diagnostic prompted a cleanup-order fix that keeps the private display
+alive until the tracked application exits. Core crash or hang, malformed
+protocol, worker or supervisor hard failure, and repeated-session recovery
+remain NetBSD hardware gates.
 The older all-root smoke harness remains useful only for bounded research and
 does not become an application launcher.
 

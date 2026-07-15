@@ -152,8 +152,9 @@ receives only a bounded anonymous protocol endpoint; NixClock does not receive
 that endpoint, and neither process receives a framebuffer, wscons, recovery,
 or VT descriptor. This new path has device-free coverage but has not yet
 completed the broader failure-injection matrix. Its physical console takeover,
-normal exit, and VT 1 -> 2 -> 1 cycle have passed, but it remains an explicitly
-acknowledged development milestone rather than a supported login session.
+normal exit, VT 1 -> 2 -> 1 cycle, and supervised SIGTERM recovery gate have
+passed, but it remains an explicitly acknowledged development milestone rather
+than a supported login session.
 
 The older `nixbench-wsdisplay-smoke` research harness deliberately remains
 available for framebuffer and input experiments. It neither publishes Wayland
@@ -491,8 +492,16 @@ privilege-separated trial switched from VT 1 to VT 2 and back. Release/acquire
 completions balanced at 1/1, the ordinary-user desktop and NixClock returned
 after acquisition, and normal exit again cleared the recovery record.
 Independent postflight verified screen 0, emulation mode, automatic VT
-handling, video on, and active VT 1. Forced supervisor termination, core crash
-or hang, malformed protocol, worker or supervisor failure, and repeated
+handling, video on, and active VT 1. The supervised SIGTERM gate also passed:
+after receiving the operator signal, the root supervisor delivered SIGTERM to
+the ordinary-user core. The core completed its in-band orderly shutdown,
+worker/core cleanup succeeded, restoration was verified, and the recovery
+record was removed. Independent postflight again found screen 0 in emulation
+mode with automatic VT handling, video on, and one-based VT 1 active, and the
+guided harness reported success. That successful trial exposed a non-fatal
+NixClock Wayland EOF diagnostic; a follow-up cleanup-order fix now keeps the
+private display alive until the tracked application has exited. Core crash or
+hang, malformed protocol, worker or supervisor hard failure, and repeated
 sessions remain hardware gates. The guided command therefore remains an opt-in
 development test rather than a login-session installation procedure.
 

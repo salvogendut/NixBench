@@ -22,8 +22,9 @@ and performs final restoration independently. The device worker owns the fixed
 heartbeat. `nixbench-session-core` runs as the invoking ordinary user, publishes
 a private Wayland display, and launches NixClock. Device-free tests exercise the
 split, and physical takeover, normal exit, and VT 1 -> 2 -> 1 trials have
-completed. The failure-injection and repeated-session matrix is still pending,
-so this is not a production login session.
+completed. The physical supervised-SIGTERM recovery gate has also passed. The
+remaining failure-injection and repeated-session matrix is still pending, so
+this is not a production login session.
 
 The implemented boundary is:
 
@@ -228,9 +229,17 @@ one-based VT 1 active. A subsequent privilege-separated trial switched from VT
 ordinary-user desktop and NixClock returned after acquisition, clean normal
 exit cleared the recovery record, and independent restoration verification
 again found screen 0 in emulation mode, automatic VT handling, video on, and
-active VT 1. Remaining NetBSD hardware cases are forced supervisor termination,
-a crashed or hung core, malformed protocol, worker or supervisor failure, and
-repeated sessions.
+active VT 1. A subsequent physical supervisor-SIGTERM trial completed its
+required orderly path: after receiving the operator signal, the root supervisor
+delivered SIGTERM to the ordinary-user core. The core completed its in-band
+orderly shutdown, worker/core cleanup passed, restoration was verified, and the
+recovery record was cleared. Independent postflight again found screen 0 in
+emulation mode with automatic VT handling, video on, and active one-based VT 1,
+and the guided harness reported success. The trial's non-fatal NixClock Wayland
+EOF diagnostic prompted a cleanup-order fix that keeps the private display
+alive until the tracked application exits. Remaining NetBSD hardware cases are
+a crashed or hung core, malformed protocol, worker or supervisor hard failure,
+and repeated sessions.
 
 Every case must return to the saved screen in emulation mode with video on and
 automatic VT handling, leave no worker or recovery record, and require no
