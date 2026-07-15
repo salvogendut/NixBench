@@ -623,7 +623,8 @@ static bool wait_for_application_ready(const char *path)
     unsigned int attempt;
 
     for (attempt = 0; attempt < 200; ++attempt) {
-        if (application_result_matches(path, "ready\n")) {
+        if (application_result_matches(path,
+                                       "ready egl-platform=wayland\n")) {
             return true;
         }
         (void)poll(NULL, 0, 10);
@@ -721,6 +722,10 @@ static void test_session_core_with_fake_helper(
                    application_result,
                    1) != 0) {
             _exit(123);
+        }
+        if (verify_application_cleanup &&
+            setenv("EGL_PLATFORM", "x11", 1) != 0) {
+            _exit(119);
         }
         if (trigger == SESSION_CORE_SHUTDOWN_BY_SIGTERM) {
             memset(&prior_action, 0, sizeof(prior_action));

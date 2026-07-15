@@ -63,6 +63,7 @@ int main(void)
 {
     const char *runtime = getenv("XDG_RUNTIME_DIR");
     const char *display = getenv("WAYLAND_DISPLAY");
+    const char *egl_platform = getenv("EGL_PLATFORM");
     const char *result_path =
         getenv("NIXBENCH_TEST_APPLICATION_RESULT");
     struct sigaction action;
@@ -76,6 +77,7 @@ int main(void)
 
     if (runtime == NULL || runtime[0] == '\0' ||
         display == NULL || display[0] == '\0' ||
+        egl_platform == NULL || strcmp(egl_platform, "wayland") != 0 ||
         result_path == NULL || result_path[0] == '\0') {
         return 2;
     }
@@ -102,7 +104,7 @@ int main(void)
         sigaction(SIGTERM, &action, NULL) != 0) {
         return 2;
     }
-    if (!write_result(result_path, "ready\n")) {
+    if (!write_result(result_path, "ready egl-platform=wayland\n")) {
         return 2;
     }
     while (!termination_requested) {

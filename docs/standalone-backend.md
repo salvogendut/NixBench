@@ -476,9 +476,13 @@ running as the ordinary user. The privileged launcher performs only bounded
 lexical validation and forwards the path; it does not resolve, open, or execute
 the selected file. The core executes it without a shell only after its verified
 credential drop. The application receives `XDG_RUNTIME_DIR` and
-`WAYLAND_DISPLAY`, but no console, recovery, or helper descriptor. This is
-privilege separation, not application sandboxing: the client retains the
-invoking user's home-directory and group access.
+`WAYLAND_DISPLAY`; the core also sets `EGL_PLATFORM=wayland` explicitly so
+NetBSD libEGL cannot choose its X11 default in this X-free session. These
+values are established after the sanitized credential drop rather than
+inherited from the privileged launcher. The application receives no console,
+recovery, or helper descriptor. This is privilege separation, not application
+sandboxing: the client retains the invoking user's home-directory and group
+access.
 
 The initial Midori run is diagnostic and should use only blank or trusted
 content. A toplevel may appear before the browser is fully usable. Missing
@@ -555,13 +559,23 @@ The first physical existing-toolkit probe selected Midori 9.0. Its
 ordinary-user process reached the private Wayland display, but GTK emitted
 null-`GdkSeat` diagnostics and no toplevel mapped before the client closed its
 connection. GTK 3.24 defers creating a seat until the registry contains both
-`wl_seat` and `wl_data_device_manager`; NixBench exposed only the former. The
-compositor did not post a protocol error, the shell remained alive, and normal
-exit restored the console and cleared the recovery record. A minimal version-1
-data-device discovery skeleton is now implemented: it provides inert source
-and device resources and sends an empty selection before keyboard focus. It
-does not claim clipboard or drag-and-drop transfer behavior. The repeat Midori
-probe will identify the next protocol or rendering boundary.
+`wl_seat` and `wl_data_device_manager`; NixBench exposed only the former. A
+minimal version-1 data-device discovery skeleton now provides inert source and
+device resources and sends an empty selection before keyboard focus. It does
+not claim clipboard or drag-and-drop transfer behavior.
+
+The repeat physical probe passed that seat gate but Midori then terminated
+with `SIGSEGV` before mapping a window. The same crash reproduced against the
+hosted compositor with SDL's device-free offscreen backend, while the installed
+`gtk3-demo` remained alive with the same sanitized application environment.
+GDB placed the fault below WebKitGTK in NetBSD libEGL's default X11 DRI2 path:
+`eglInitialize()` reached `xcb_connection_has_error()` without an X
+connection. Selecting `EGL_PLATFORM=wayland` prevents that X11 fallback.
+Midori then remained alive and a Wayland client trace recorded a configured
+`xdg_toplevel`, repeated shared-memory buffer commits, keyboard focus, and
+frame callbacks. WebKit reports that EGL initialization itself is unavailable
+with the base-system library and takes a software path; the next physical
+probe must establish the visible and usable result.
 
 The older all-root smoke harness remains useful only for bounded research and
 does not become an application launcher.

@@ -504,8 +504,10 @@ separate private anonymous socket endpoints after irreversible
 creates and retains descriptor-based ownership of the private runtime
 directory. The core publishes its Wayland socket there and launches NixClock
 by default, or the selected initial application, with the matching
-`XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY`. Once the core and application process
-group are gone, the worker asks the ordinary-user sentinel to remove direct
+`XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY`. It explicitly fixes
+`EGL_PLATFORM=wayland` so NetBSD libEGL does not select its X11 default in the
+standalone session. Once the core and application process group are gone, the
+worker asks the ordinary-user sentinel to remove direct
 runtime entries and the directory. Privileged code never performs a filesystem
 operation on the reported user-owned path. NixClock participates in the normal
 global-menu path. No selected application receives the helper protocol
@@ -570,16 +572,23 @@ procedure.
 
 The first physical GTK3 compatibility probe selected the installed Midori 9.0
 binary. The ordinary-user process connected to the private Wayland display,
-but no window mapped. GTK reported a null `GdkSeat` and the client closed its
-connection. GTK 3.24 intentionally waits for both `wl_seat` and
-`wl_data_device_manager` before constructing a seat; NixBench advertised the
-former but not the latter. The shell remained available, and normal exit again
-restored the console, cleared the recovery record, and returned to one-based
-VT 1. NixBench now advertises a minimal version-1 data-device discovery
-skeleton covered by a GTK-shaped registry test. It sends the required empty
-selection event before keyboard focus. Clipboard and drag-and-drop data
-transfer remain unimplemented; the repeat physical probe will identify the
-next compatibility boundary.
+but no window mapped. GTK reported a null `GdkSeat` because GTK 3.24 waits for
+both `wl_seat` and `wl_data_device_manager` before constructing a seat.
+NixBench now advertises a minimal version-1 data-device discovery skeleton and
+sends the required empty selection event before keyboard focus; clipboard and
+drag-and-drop transfer remain unimplemented.
+
+The repeat probe cleared that GTK failure but exposed a client `SIGSEGV` before
+the first window. A device-free replay kept the installed `gtk3-demo` alive,
+then GDB located Midori's crash below WebKitGTK in NetBSD libEGL's default X11
+DRI2 initialization path. With no X server, that path reached
+`xcb_connection_has_error()` without a valid connection. Explicitly selecting
+`EGL_PLATFORM=wayland` avoids the crash. A client protocol trace then showed
+Midori configuring an `xdg_toplevel`, attaching shared-memory buffers, gaining
+keyboard focus, and submitting subsequent frames. The standalone core now
+sets that fixed platform for every client after the credential drop. The next
+physical probe must confirm the visible browser window and establish how much
+web content works with NetBSD's non-Wayland EGL build and software fallback.
 
 The opt-in `wsdisplay` presentation harness must run as root. Start with its
 query-only preflight:

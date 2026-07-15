@@ -183,11 +183,19 @@ session then exited normally, and the supervisor restored the console and
 removed the recovery record. NixBench now advertises a minimal version-1
 data-device manager, creates the inert source/device resources GTK requires,
 and sends the empty selection before keyboard focus. It does not yet claim
-clipboard or drag-and-drop transfer support. The repeat Midori probe will
-identify the next concrete compatibility boundary. Malformed protocol, harder
-supervisor/worker failures, and repeated-session validation remain. Installation
-and launching managed by the desktop, popup/subsurface/data transfer, broader
-toolkit trials, and application-menu bridges also remain outstanding.
+clipboard or drag-and-drop transfer support.
+
+The repeat probe passed GTK's seat gate but exposed a Midori `SIGSEGV`. A
+device-free replay proved that plain GTK3 remains alive and GDB isolated the
+fault to WebKitGTK calling NetBSD libEGL's default X11 DRI2 initialization in
+the X-free session. Selecting `EGL_PLATFORM=wayland` prevents that invalid X11
+path; Midori then configures a toplevel and submits repeated shared-memory
+frames. The core now establishes this fixed application environment after the
+credential drop. A physical visibility/usability confirmation is next.
+Malformed protocol, harder supervisor/worker failures, and repeated-session
+validation remain. Installation and launching managed by the desktop,
+popup/subsurface/data transfer, broader toolkit trials, and application-menu
+bridges also remain outstanding.
 
 ## Milestone 6: Package and validate the hosted prototype
 

@@ -222,7 +222,8 @@ static bool launch_application(struct nb_session_core *core,
     if (path == NULL || path[0] != '/' ||
         setenv("WAYLAND_DISPLAY",
                core->runtime_directory.display_name,
-               1) != 0) {
+               1) != 0 ||
+        setenv("EGL_PLATFORM", "wayland", 1) != 0) {
         fputs("Could not prepare the initial application environment\n",
               stderr);
         return false;
