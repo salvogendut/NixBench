@@ -13,7 +13,7 @@ static void print_usage(const char *program_name)
            program_name,
            program_name,
            program_name);
-    puts("A supervised, duration-bounded NetBSD wsdisplay presentation test.\n");
+    puts("A supervised NetBSD wsdisplay presentation test.\n");
     puts("Actions:");
     puts("  --preflight-only                   inspect state without takeover");
     puts("  --recover                          restore the root-owned saved state");
@@ -23,15 +23,16 @@ static void print_usage(const char *program_name)
     puts("  --acknowledge-no-crash-watchdog   parent failure needs --recover");
     puts("\nRun options:");
     puts("  --desktop-preview                  render NixBench shell content");
-    puts("  --interactive-preview              add bounded wscons pointer and shell keys");
+    puts("  --interactive-preview              add wscons pointer and shell keys");
     puts("  --runtime-preview                  run the shared desktop runtime");
     puts("  --duration-ms N                    250..30000 (default 3000)");
+    puts("  --until-exit                       run interactive content until Escape or termination");
     puts("  --wscons-pointer-profile PROFILE   flat or adaptive (default flat)");
     puts("  --wscons-pointer-sensitivity-percent N");
     puts("                                      25..400 (flat profile only; default 100)");
     puts("  --wscons-input-stats               report input, wait, and frame diagnostics");
     puts("  --require-vt-cycle                 require balanced VT/input, clean timing, and a post-cycle frame");
-    puts("  wscons and VT-cycle options require --interactive-preview or --runtime-preview.");
+    puts("  Until-exit, wscons, and VT-cycle options require --interactive-preview or --runtime-preview.");
     puts("  The default content is the framebuffer diagnostic pattern.");
     puts("\nPath options:");
     puts("  --status-device PATH               default /dev/ttyEstat");

@@ -3,19 +3,6 @@
 set -eu
 
 state_path=/var/run/nixbench-wsdisplay-smoke.state
-require_vt_cycle=0
-if [ "${1:-}" = "--vt-cycle" ]; then
-    require_vt_cycle=1
-    shift
-fi
-default_duration_ms=3000
-if [ "$require_vt_cycle" -eq 1 ]; then
-    default_duration_ms=30000
-fi
-duration_ms=${1:-$default_duration_ms}
-jobs=${NIXBENCH_JOBS:-4}
-build_type=${NIXBENCH_BUILD_TYPE:-RelWithDebInfo}
-timeout_margin_seconds=10
 
 fail()
 {
@@ -23,21 +10,39 @@ fail()
     exit 1
 }
 
+require_vt_cycle=0
+if [ "${1:-}" = "--vt-cycle" ]; then
+    require_vt_cycle=1
+    shift
+fi
 if [ "$#" -gt 1 ]; then
     fail "usage: $0 [--vt-cycle] [duration-ms]"
 fi
-
-case "$duration_ms" in
-    ''|0*|*[!0-9]*)
-        fail "duration must be an integer from 250 through 30000 ms"
-        ;;
-esac
-if [ "${#duration_ms}" -gt 5 ] ||
-   [ "$duration_ms" -lt 250 ] || [ "$duration_ms" -gt 30000 ]; then
-    fail "duration must be from 250 through 30000 ms"
+until_exit=0
+if [ "$require_vt_cycle" -eq 1 ] && [ "$#" -eq 0 ]; then
+    until_exit=1
 fi
-duration_seconds=$(( (duration_ms + 999) / 1000 ))
-outer_timeout_seconds=$((duration_seconds + timeout_margin_seconds))
+duration_ms=
+if [ "$until_exit" -eq 0 ]; then
+    duration_ms=${1:-3000}
+fi
+jobs=${NIXBENCH_JOBS:-4}
+build_type=${NIXBENCH_BUILD_TYPE:-RelWithDebInfo}
+timeout_margin_seconds=10
+
+if [ "$until_exit" -eq 0 ]; then
+    case "$duration_ms" in
+        ''|0*|*[!0-9]*)
+            fail "duration must be an integer from 250 through 30000 ms"
+            ;;
+    esac
+    if [ "${#duration_ms}" -gt 5 ] ||
+       [ "$duration_ms" -lt 250 ] || [ "$duration_ms" -gt 30000 ]; then
+        fail "duration must be from 250 through 30000 ms"
+    fi
+    duration_seconds=$(( (duration_ms + 999) / 1000 ))
+    outer_timeout_seconds=$((duration_seconds + timeout_margin_seconds))
+fi
 
 script_path=$0
 case "$script_path" in
@@ -67,7 +72,9 @@ smoke=$build_dir/nixbench-wsdisplay-smoke
     fail "run this script over SSH while watching the physical console"
 command -v cmake >/dev/null 2>&1 || fail "cmake is not installed"
 command -v ctest >/dev/null 2>&1 || fail "ctest is not installed"
-[ -x /usr/bin/timeout ] || fail "/usr/bin/timeout is unavailable"
+if [ "$until_exit" -eq 0 ]; then
+    [ -x /usr/bin/timeout ] || fail "/usr/bin/timeout is unavailable"
+fi
 
 echo "==> Checking passwordless recovery access"
 sudo -n /usr/bin/true ||
@@ -133,10 +140,16 @@ if [ "$require_vt_cycle" -eq 1 ]; then
     fi
 fi
 
+if [ "$until_exit" -eq 1 ]; then
+    lifetime_description="until you press Escape with no menu open"
+else
+    lifetime_description="for at most $duration_ms ms"
+fi
+
 cat <<EOF
 
 Ready to show the shared NixBench desktop runtime on the active wsdisplay
-console for at most $duration_ms ms.
+console $lifetime_description.
 
 The supervised worker will temporarily open /dev/wskbd and /dev/wsmouse.
 Move the software cursor, drag the NixInfo window by its title bar, or use its
@@ -155,9 +168,14 @@ also reports VT release/acquire and input suspend/resume counts and timing, then
 splits userspace-read-to-framebuffer-copy-complete time into render, present,
 and event-delivery stages for comparison with later trials.
 
-Keep a second SSH session open. If this script does not restore the console,
-wait for its timeout, verify no nixbench-wsdisplay-smoke process remains, then
-run in that second session:
+Keep a second SSH session open. Press Ctrl-C in the launching SSH session to
+request supervised cancellation if physical input is unavailable. An
+until-exit harness also prints its supervisor PID and an exact second-SSH
+SIGTERM command after launch. A cancelled validation returns failure status but
+still attempts full restoration.
+
+If this script does not restore the console, first verify that no
+nixbench-wsdisplay-smoke process remains, then run in the second session:
 
   sudo $smoke --recover
 
@@ -185,9 +203,21 @@ frame.
 EOF
 fi
 
-printf "Type TAKEOVER to continue: "
+confirmation=TAKEOVER
+if [ "$until_exit" -eq 1 ]; then
+    confirmation=TAKEOVER-UNTIL-EXIT
+    cat <<EOF
+
+This run has no automatic presentation deadline. It remains supervised and
+retains the recovery record until you exit with Escape or cancel the
+supervisor. While switched away, return to VT $original_vt from the second SSH
+session before attempting a physical-keyboard exit.
+EOF
+fi
+
+printf "Type %s to continue: " "$confirmation"
 answer=
-if ! IFS= read -r answer || [ "$answer" != TAKEOVER ]; then
+if ! IFS= read -r answer || [ "$answer" != "$confirmation" ]; then
     fail "cancelled without changing display state"
 fi
 if [ "$require_vt_cycle" -eq 1 ]; then
@@ -199,20 +229,28 @@ if [ "$require_vt_cycle" -eq 1 ]; then
 fi
 
 echo "==> Presenting the shared NixBench desktop runtime"
-required_vt_cycle_option=
-if [ "$require_vt_cycle" -eq 1 ]; then
-    required_vt_cycle_option=--require-vt-cycle
-fi
-set +e
-sudo -n /usr/bin/timeout -s SIGTERM -k 15s "${outer_timeout_seconds}s" \
+set -- \
     "$smoke" \
     --acknowledge-console-takeover \
     --acknowledge-no-crash-watchdog \
     --runtime-preview \
     --wscons-pointer-profile adaptive \
-    --wscons-input-stats \
-    $required_vt_cycle_option \
-    --duration-ms "$duration_ms"
+    --wscons-input-stats
+if [ "$require_vt_cycle" -eq 1 ]; then
+    set -- "$@" --require-vt-cycle
+fi
+if [ "$until_exit" -eq 1 ]; then
+    set -- "$@" --until-exit
+else
+    set -- "$@" --duration-ms "$duration_ms"
+fi
+set +e
+if [ "$until_exit" -eq 1 ]; then
+    sudo -n "$@"
+else
+    sudo -n /usr/bin/timeout -s SIGTERM -k 15s \
+        "${outer_timeout_seconds}s" "$@"
+fi
 run_status=$?
 set -e
 

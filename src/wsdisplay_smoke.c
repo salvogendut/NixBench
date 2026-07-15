@@ -246,6 +246,12 @@ bool nb_wsdisplay_smoke_parse_options(
                 return false;
             }
             duration_selected = true;
+        } else if (strcmp(argv[index], "--until-exit") == 0) {
+            if (options->until_exit) {
+                set_error(error, "Duplicate --until-exit option");
+                return false;
+            }
+            options->until_exit = true;
         } else if (strcmp(argv[index],
                           "--wscons-pointer-profile") == 0) {
             const char *value;
@@ -343,23 +349,30 @@ bool nb_wsdisplay_smoke_parse_options(
                   "--wscons-pointer-sensitivity-percent");
         return false;
     }
+    if (duration_selected && options->until_exit) {
+        set_error(error,
+                  "--duration-ms cannot be combined with --until-exit");
+        return false;
+    }
     if (options->action != NB_WSDISPLAY_SMOKE_ACTION_RUN &&
         (options->acknowledge_console_takeover ||
          options->acknowledge_no_crash_watchdog || duration_selected ||
          content_selected || pointer_profile_selected ||
          pointer_sensitivity_selected ||
-         options->wscons_input_stats || options->require_vt_cycle)) {
+         options->until_exit || options->wscons_input_stats ||
+         options->require_vt_cycle)) {
         set_error(error,
-                  "Run acknowledgements, content, duration, and wscons options apply only to takeover");
+                  "Run acknowledgements, content, lifetime, and wscons options apply only to takeover");
         return false;
     }
     if (options->action == NB_WSDISPLAY_SMOKE_ACTION_RUN &&
         (pointer_profile_selected || pointer_sensitivity_selected ||
-         options->wscons_input_stats || options->require_vt_cycle) &&
+         options->until_exit || options->wscons_input_stats ||
+         options->require_vt_cycle) &&
         options->content != NB_WSDISPLAY_SMOKE_CONTENT_INTERACTIVE_PREVIEW &&
         options->content != NB_WSDISPLAY_SMOKE_CONTENT_RUNTIME_PREVIEW) {
         set_error(error,
-                  "wscons and VT-cycle options require "
+                  "Until-exit, wscons, and VT-cycle options require "
                   "--interactive-preview or --runtime-preview");
         return false;
     }

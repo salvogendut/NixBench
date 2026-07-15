@@ -280,7 +280,7 @@ composes a small wscons research provider with the same output adapter. It owns
 the fixed `/dev/wskbd` and `/dev/wsmouse` mux aliases only for the bounded
 worker lifetime, draws a software cursor, routes the left button to menus and
 window dragging, and discovers Escape, F10, arrows, Return, and keypad Enter
-from the active wscons map. Those bounded controls drive the existing global
+from the active wscons map. Those limited controls drive the existing global
 menu keyboard path and let Escape request an early clean exit. Repeated downs
 are flagged and `ALL_KEYS_UP` queues deterministic releases for every held
 binding. Both preview modes use SDL only for an in-memory software surface;
@@ -327,7 +327,7 @@ changed row's first-through-last changed-pixel span. It invalidates on every
 map/unmap and falls back to full conversion if the optional shadow cannot be
 allocated. Physical X220 validation of this damage-suppressed path averaged
 5 ms from userspace input read through framebuffer-copy completion.
-This is still a bounded hardware-validation mode rather than a desktop session:
+This is still a supervised hardware-validation mode rather than a desktop session:
 broader hardware validation, complete wscons keymap/seat/hotplug support,
 failure-injection tests, privilege separation, and a separate privileged
 watchdog that can recover after a compositor crash are the next safety gates.
@@ -341,24 +341,29 @@ The harness is excluded by default behind
 `NIXBENCH_BUILD_WSDISPLAY_SMOKE=ON`. Its query-only `--preflight-only` action
 does not alter display state. A run requires both
 `--acknowledge-console-takeover` and
-`--acknowledge-no-crash-watchdog`, is limited to 250..30000 ms, and writes a
-root-only recovery record at `/var/run/nixbench-wsdisplay-smoke.state` before
+`--acknowledge-no-crash-watchdog`, uses a 250..30000 ms bounded lifetime by
+default, and writes a root-only recovery record at
+`/var/run/nixbench-wsdisplay-smoke.state` before
 forking. The diagnostic pattern remains the default; `--desktop-preview`
 selects the bounded output-only shell scene, while `--interactive-preview`
 adds the fixed wscons muxes explicitly. `--runtime-preview` uses those muxes
 with the shared desktop runtime, and the guided hardware script now selects
-that mode. Its opt-in `--vt-cycle` form supplies `--require-vt-cycle`, defaults
-to the 30000 ms hard maximum, and fails unless a balanced release/acquire plus
-input suspend/resume completes with clean lifecycle timing and a post-acquire
-frame. The runner captures the originating one-based VT, chooses a distinct
+that mode. Its opt-in `--vt-cycle` form supplies `--require-vt-cycle`; without a
+numeric duration it uses the explicit interactive `--until-exit` mode and fails
+unless a balanced release/acquire plus input suspend/resume completes with
+clean lifecycle timing and a post-acquire frame. The runner captures the
+originating one-based VT, chooses a distinct
 away VT (overridable with `NIXBENCH_VT_AWAY`), and prints the exact second-SSH
 switch-away and return commands.
-The script retains its typed confirmation and outer timeout and never extends
-the harness beyond the hard maximum. Input descriptors are
-closed and held state is cancelled before every acknowledged VT release and
-cleanup. The framebuffer worker maps and presents; an unmapped parent
-enforces the deadline, reaps the worker, and independently restores and
-verifies the saved console state. `--recover` provides a separate-session
+Bounded runs retain their typed confirmation and derived outer timeout.
+Run-until-exit requires `TAKEOVER-UNTIL-EXIT`, keeps the supervisor and recovery
+record active, and exits successfully only through the interactive Escape
+path. Input descriptors are closed and held state is cancelled before every
+acknowledged VT release and
+cleanup. The framebuffer worker maps and presents; an unmapped parent enforces
+bounded deadlines or waits for explicit exit, uses bounded termination/reap
+grace, and independently restores and verifies the saved console state.
+`--recover` provides a separate-session
 restoration path if the record remains. Automated tests cover support code,
 input reduction, shell interaction, and refusal gates using device-free data;
 CTest never opens wscons or performs a takeover. The first 2000 ms X220

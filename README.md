@@ -110,8 +110,9 @@ hardware must therefore be detected rather than assumed. A software
 bring-up path. It validates the reported RGB layout, maps only the required
 framebuffer range, converts the canonical CPU frame, participates in
 process-controlled virtual-terminal release/acquire, and restores the saved
-console state on normal teardown. An opt-in, duration-bounded supervisor
-harness has completed the first two-second framebuffer presentation and
+console state on normal teardown. An opt-in supervisor harness, bounded by
+default with an explicit interactive run-until-exit mode, has completed the
+first two-second framebuffer presentation and
 verified restoration on a ThinkPad X220. An explicit desktop-preview frame
 source now renders the real menu bar, clock, and managed-window chrome into the
 same canonical CPU frame without initializing SDL video. A separate,
@@ -357,19 +358,21 @@ sudo ./build/nixbench-wsdisplay-smoke --preflight-only
 ```
 
 On a NetBSD test machine, the convenience runner performs configuration,
-building, tests, preflight, the bounded presentation, and postflight checks in
-one guided command. Run it over SSH while watching the physical console:
+building, tests, preflight, the supervised presentation, and postflight checks
+in one guided command. Run it over SSH while watching the physical console:
 
 ```sh
 ./tools/run-wsdisplay-smoke.sh [--vt-cycle] [duration-ms]
 ```
 
-Normal trials default to 3000 ms. `--vt-cycle` defaults to 30000 ms so there is
-time to switch away and back; either form accepts an explicit duration through
-the same 30000 ms hard maximum. The script derives its outer timeout from that
-duration and still requires typing `TAKEOVER` before it supplies the harness
-acknowledgements. It explicitly selects `--runtime-preview`: the shared desktop
-runtime, real NixInfo application, application-owned global menu bar, clock,
+Normal trials default to 3000 ms. `--vt-cycle` with no duration now runs until
+Escape so the operator can reach the physical console without racing a
+deadline; supplying an explicit duration keeps the 250..30000 ms bounded mode.
+Bounded runs retain the derived outer timeout. The no-deadline form requires
+typing `TAKEOVER-UNTIL-EXIT`, omits the outer timeout, and leaves the parent
+supervisor and recovery record active throughout. It explicitly selects
+`--runtime-preview`: the shared desktop runtime, real NixInfo application,
+application-owned global menu bar, clock,
 managed-window chrome, and software cursor are rendered into an SDL software
 surface without initializing SDL video or opening X11 or Wayland. The worker
 temporarily opens only the fixed `/dev/wskbd` and `/dev/wsmouse` mux aliases.
@@ -377,7 +380,7 @@ Relative pointer motion and the left button exercise menus and window dragging.
 The active-map F10, arrow, Return, keypad-Enter, and Escape bindings exercise
 the keyboard menu path; Escape requests an orderly early exit when no menu is
 open. Absolute-only pointer devices are not translated by this first research
-provider, and these bounded controls are not general text or modifier input.
+provider, and these limited controls are not general text or modifier input.
 
 The guided hardware run configures `RelWithDebInfo` by default so its pointer
 measurements are not dominated by unoptimized per-pixel diagnostic code. Set
@@ -422,7 +425,9 @@ latency measurements.
 The interactive worker no longer wakes on a fixed 10 ms input slice. It blocks
 in `poll(2)` on the wsdisplay lifecycle self-pipe and active keyboard/mouse
 descriptors until lifecycle activity, input readiness, or the remaining trial
-deadline. Lifecycle events are checked before blocking and after every wake,
+deadline. Run-until-exit mode uses the same readiness-driven wait without
+treating wait expiry as a presentation deadline. Lifecycle events are checked
+before blocking and after every wake,
 timeout, or interruption, and take priority when lifecycle and input become
 ready together. Each loop phase drains at most 128 host events and 64 input
 events, with host events rechecked around input handling and presentation so an
@@ -466,16 +471,18 @@ this damage-suppressed path averaged 5 ms from userspace input read through
 framebuffer-copy completion.
 
 Preflight reads `/dev/ttyEstat` to select the active zero-based screen node;
-it does not change display state. A presentation run changes that console to
-framebuffer mode briefly and accepts only durations from 250 through 30000
-milliseconds (default 3000). Direct harness runs draw the diagnostic pattern
+it does not change display state. A bounded presentation changes that console
+to framebuffer mode and accepts only durations from 250 through 30000
+milliseconds (default 3000). `--until-exit` is mutually exclusive with an
+explicit duration and is accepted only for interactive/runtime content with an
+Escape path. Direct harness runs draw the diagnostic pattern
 by default. `--desktop-preview` selects the same shell scene while remaining
-output-only, and `--interactive-preview` explicitly adds the bounded wscons
-input experiment. `--runtime-preview` instead connects that wscons provider and
+output-only, and `--interactive-preview` explicitly adds the experimental
+wscons input path. `--runtime-preview` instead connects that wscons provider and
 the software framebuffer host to the shared desktop runtime used by the hosted
 frontend. It refuses to run unless both risk acknowledgements are present. Keep
-a second SSH session available and retain an outer timeout during hardware
-bring-up:
+a second SSH session available. Bounded direct runs should retain an outer
+timeout during hardware bring-up:
 
 ```sh
 sudo -n /usr/bin/timeout -s SIGTERM -k 15s 10s \
@@ -494,6 +501,13 @@ input suspend/resume pair, clean lifecycle timing, and a post-acquire frame:
 ```sh
 ./tools/run-wsdisplay-smoke.sh --vt-cycle
 ```
+
+With no numeric argument this guided form supplies `--until-exit` and has no
+automatic presentation deadline. Press Escape with no menu open after testing
+to exit successfully. An explicit numeric argument opts back into bounded
+mode. The harness prints its supervisor PID and an exact second-SSH SIGTERM
+command for cancellation; cancellation restores the console but intentionally
+returns failure status.
 
 Before takeover, the runner captures the originating one-based VT. It chooses
 VT 2 as the idle away console unless VT 2 is the origin, in which case it
@@ -514,16 +528,18 @@ descriptors are closed and held button/keyboard state is discarded before an
 acknowledged VT release and again during every cleanup path. The display
 adapter itself remains output-only. While `/dev/wskbd` is owned by the worker,
 normal console text translation and the usual keyboard VT-switch shortcuts are
-unavailable. NixBench's bounded active-map shell controls remain available,
+unavailable. NixBench's limited active-map shell controls remain available,
 but general text/modifier translation does not; this is another reason to keep
 SSH recovery open.
 
 Before forking the framebuffer worker, the parent records the console state in
 the root-only `/var/run/nixbench-wsdisplay-smoke.state`. The parent stays
-unmapped, enforces the deadline, reaps the worker, and independently restores
+unmapped, enforces the deadline for bounded runs or waits for explicit exit,
+reaps the worker, and independently restores
 and verifies display mode, video state, VT mode, and active screen. It removes
-the recovery record only after successful verification. If restoration is not
-verified, or the supervisor itself dies, recover from another session with:
+the recovery record only after successful verification and confirmed worker
+reap. If restoration is not verified, the worker cannot be reaped, or the
+supervisor itself dies, recover from another session with:
 
 ```sh
 sudo ./build/nixbench-wsdisplay-smoke --recover

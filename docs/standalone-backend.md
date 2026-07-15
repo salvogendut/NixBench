@@ -149,7 +149,7 @@ NetBSD [`wsdisplay(4)` manual][wsdisplay] is the authoritative ioctl contract;
 [Hands-on graphics without X11][graphics-article] is a useful worked example,
 not an API specification.
 
-### 2. Bounded `wsdisplay` smoke harness
+### 2. Supervised `wsdisplay` smoke harness
 
 `nixbench-wsdisplay-smoke` is a privileged hardware-validation tool, not a
 desktop session. Its executable is excluded from normal builds; configure with
@@ -162,7 +162,10 @@ translates and checks that boundary explicitly.
 
 A presentation run requires both `--acknowledge-console-takeover` and
 `--acknowledge-no-crash-watchdog`. `--duration-ms` accepts only 250..30000 ms
-and defaults to 3000 ms. Before forking, the root parent persists the original
+and defaults to 3000 ms. The mutually exclusive `--until-exit` mode is accepted
+only for interactive/runtime content, retains Escape as an orderly exit, and
+removes the presentation deadline without removing supervision. Before
+forking, the root parent persists the original
 display mode, video state, VT mode, and active screen in the root-only
 `/var/run/nixbench-wsdisplay-smoke.state`. The child alone creates the
 `wsdisplay` host, maps the framebuffer, and presents the selected image. The
@@ -257,11 +260,13 @@ they are not exact kernel-switch or display-scanout latency.
 The interactive worker no longer wakes on a fixed 10 ms input slice. It blocks
 in `poll(2)` on the wsdisplay lifecycle self-pipe and active keyboard/mouse
 descriptors until lifecycle activity, input readiness, or the remaining trial
-deadline. Lifecycle events are checked before blocking and after every wake,
-timeout, or interruption, and take priority when lifecycle and input become
-ready together. Each loop phase drains at most 128 host events and 64 input
-events, with host events rechecked around input handling and presentation so an
-input flood cannot starve VT release or termination. The input descriptors are
+deadline. Run-until-exit repeats the same readiness wait without treating its
+expiry as a presentation deadline. Lifecycle events are checked before
+blocking and after every wake, timeout, or interruption, and take priority when
+lifecycle and input become ready together. Each loop phase drains at most 128
+host events and 64 input events, with host events rechecked around input
+handling and presentation so an input flood cannot starve VT release or
+termination. The input descriptors are
 borrowed only for one wait call, so suspension cannot leave stale descriptors
 registered in the host. `--wscons-input-stats` reports wait calls, input and
 signal-pipe readiness, simultaneous readiness, host events, timeouts, and
@@ -272,25 +277,33 @@ regressions remained zero. Input-read-to-framebuffer-copy completion averaged
 6 ms with a 24 ms maximum, interaction felt good, and console restoration
 passed.
 
-The unmapped parent applies a hard deadline of at most 30000 ms, terminates and
-reaps an unresponsive child, then independently restores and verifies every
-saved console property. Job-control stop signals also request supervised
-shutdown rather than pausing the parent indefinitely. The state file is
-removed only after restoration is verified.
+For bounded runs, the unmapped parent applies a hard deadline of at most 30000
+ms plus startup grace. In run-until-exit mode it instead watches the worker and
+termination signals without a presentation deadline. Both modes use bounded
+TERM and KILL grace periods, attempt restoration even if the child cannot be
+reaped promptly, and independently verify every saved console property.
+`SIGPIPE` is supervised so a lost output channel cannot bypass teardown.
+Job-control stop signals also request shutdown rather than pausing the parent.
+The state file is removed only after restoration is verified and worker reap
+is confirmed.
 
 `tools/run-wsdisplay-smoke.sh` configures, builds, tests, performs preflight,
 explicitly selects `--runtime-preview`, and verifies postflight state. It
 still requires an SSH session, passwordless recovery access, a typed
-`TAKEOVER`, both harness acknowledgements, and the outer timeout. That outer
-deadline is the requested duration rounded up to seconds plus a ten-second
-restoration margin. A direct `--desktop-preview` invocation remains the
-compatible output-only shell preview, while `--interactive-preview` retains the
-previous lightweight interactive scene as a fallback.
+confirmation, both harness acknowledgements, and a second SSH recovery path.
+Bounded runs retain an outer deadline equal to the requested duration rounded
+up to seconds plus a ten-second restoration margin. A direct
+`--desktop-preview` invocation remains the compatible output-only shell
+preview, while `--interactive-preview` retains the previous lightweight
+interactive scene as a fallback.
 
-Its optional `--vt-cycle` form defaults to 30000 ms and supplies the direct
-harness `--require-vt-cycle` option. Before takeover, it captures the
-originating one-based VT, chooses a distinct away VT (VT 2 unless that is the
-origin), and prints the exact commands for the retained second SSH session.
+Its optional `--vt-cycle` form supplies the direct harness
+`--require-vt-cycle` option. With no numeric argument it also supplies
+`--until-exit`, omits the outer timeout, and requires the explicit
+`TAKEOVER-UNTIL-EXIT` confirmation. A numeric argument retains bounded mode.
+Before takeover, it captures the originating one-based VT, chooses a distinct
+away VT (VT 2 unless that is the origin), and prints the exact commands for the
+retained second SSH session.
 `NIXBENCH_VT_AWAY` can select another configured, idle text console. The
 operator pauses until the away console is visible before running the printed
 return command. Required-cycle mode is valid only with an interactive/runtime

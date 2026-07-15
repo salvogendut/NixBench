@@ -36,10 +36,13 @@ static void test_parser_safe_actions(void)
 
     CHECK(parse(2, help, &options, error));
     CHECK(options.action == NB_WSDISPLAY_SMOKE_ACTION_HELP);
+    CHECK(!options.until_exit);
     CHECK(parse(2, preflight, &options, error));
     CHECK(options.action == NB_WSDISPLAY_SMOKE_ACTION_PREFLIGHT);
+    CHECK(!options.until_exit);
     CHECK(parse(2, recover, &options, error));
     CHECK(options.action == NB_WSDISPLAY_SMOKE_ACTION_RECOVER);
+    CHECK(!options.until_exit);
     CHECK(!parse(1, missing_ack, &options, error));
     CHECK(error[0] != '\0');
 }
@@ -86,6 +89,7 @@ static void test_parser_takeover(void)
     CHECK(options.wscons_pointer_profile == NB_WSCONS_POINTER_PROFILE_FLAT);
     CHECK(options.wscons_pointer_sensitivity_percent ==
           NB_WSDISPLAY_SMOKE_DEFAULT_POINTER_SENSITIVITY_PERCENT);
+    CHECK(!options.until_exit);
     CHECK(!options.wscons_input_stats);
     CHECK(parse((int)(sizeof(run) / sizeof(run[0])),
                 run,
@@ -477,6 +481,103 @@ static void test_parser_required_vt_cycle(void)
                  error));
 }
 
+static void test_parser_until_exit(void)
+{
+    struct nb_wsdisplay_smoke_options options;
+    char error[NB_WSDISPLAY_SMOKE_ERROR_CAPACITY];
+    char *runtime[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--runtime-preview",
+        "--until-exit", "--require-vt-cycle"
+    };
+    char *interactive[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--interactive-preview",
+        "--until-exit"
+    };
+    char *duplicate[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--runtime-preview",
+        "--until-exit", "--until-exit"
+    };
+    char *duration_first[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--runtime-preview",
+        "--duration-ms", "30000", "--until-exit"
+    };
+    char *until_first[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--runtime-preview",
+        "--until-exit", "--duration-ms", "30000"
+    };
+    char *diagnostic[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--until-exit"
+    };
+    char *desktop[] = {
+        "smoke", "--acknowledge-console-takeover",
+        "--acknowledge-no-crash-watchdog", "--desktop-preview",
+        "--until-exit"
+    };
+    char *preflight[] = {
+        "smoke", "--preflight-only", "--until-exit"
+    };
+    char *recover[] = {
+        "smoke", "--recover", "--until-exit"
+    };
+    char *help[] = {
+        "smoke", "--help", "--until-exit"
+    };
+
+    CHECK(parse((int)(sizeof(runtime) / sizeof(runtime[0])),
+                runtime,
+                &options,
+                error));
+    CHECK(options.until_exit);
+    CHECK(options.require_vt_cycle);
+    CHECK(options.duration_ms == NB_WSDISPLAY_SMOKE_DEFAULT_DURATION_MS);
+    CHECK(parse((int)(sizeof(interactive) / sizeof(interactive[0])),
+                interactive,
+                &options,
+                error));
+    CHECK(options.until_exit);
+    CHECK(!options.require_vt_cycle);
+    CHECK(options.duration_ms == NB_WSDISPLAY_SMOKE_DEFAULT_DURATION_MS);
+    CHECK(!parse((int)(sizeof(duplicate) / sizeof(duplicate[0])),
+                 duplicate,
+                 &options,
+                 error));
+    CHECK(!parse((int)(sizeof(duration_first) /
+                       sizeof(duration_first[0])),
+                 duration_first,
+                 &options,
+                 error));
+    CHECK(!parse((int)(sizeof(until_first) / sizeof(until_first[0])),
+                 until_first,
+                 &options,
+                 error));
+    CHECK(!parse((int)(sizeof(diagnostic) / sizeof(diagnostic[0])),
+                 diagnostic,
+                 &options,
+                 error));
+    CHECK(!parse((int)(sizeof(desktop) / sizeof(desktop[0])),
+                 desktop,
+                 &options,
+                 error));
+    CHECK(!parse((int)(sizeof(preflight) / sizeof(preflight[0])),
+                 preflight,
+                 &options,
+                 error));
+    CHECK(!parse((int)(sizeof(recover) / sizeof(recover[0])),
+                 recover,
+                 &options,
+                 error));
+    CHECK(!parse((int)(sizeof(help) / sizeof(help[0])),
+                 help,
+                 &options,
+                 error));
+}
+
 static void test_vt_cycle_completion(void)
 {
     struct nb_wsdisplay_smoke_vt_cycle_observation observation;
@@ -602,6 +703,7 @@ int main(void)
     test_parser_wscons_tuning();
     test_parser_rejections();
     test_parser_required_vt_cycle();
+    test_parser_until_exit();
     test_vt_number_translation();
     test_vt_cycle_completion();
     test_pattern();

@@ -867,6 +867,15 @@ if(BUILD_TESTING)
       COMMAND nixbench-wsdisplay-smoke --help
     )
   endif()
+  if(UNIX AND EXISTS "/usr/bin/timeout")
+    add_test(
+      NAME nixbench.wsdisplay.runner-script
+      COMMAND
+        sh
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/wsdisplay_runner_script_test.sh"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-wsdisplay-smoke.sh"
+    )
+  endif()
   add_test(
     NAME nixbench.backend-probe.unit
     COMMAND nixbench_backend_probe_tests

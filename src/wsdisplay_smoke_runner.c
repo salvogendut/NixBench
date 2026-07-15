@@ -50,6 +50,7 @@ enum {
     NB_SMOKE_TERM_GRACE_MS = 2000,
     NB_SMOKE_ACTIVE_RESTORE_MS = 1000,
     NB_SMOKE_WAIT_SLICE_MS = 20,
+    NB_SMOKE_UNBOUNDED_WAIT_SLICE_MS = 250,
     NB_SMOKE_EVENT_SLICE_MS = 50,
     NB_SMOKE_HOST_EVENT_BATCH = 128,
     NB_SMOKE_INPUT_EVENT_BATCH = 64,
@@ -74,7 +75,7 @@ struct nb_smoke_console_snapshot {
 };
 
 static const int parent_signals[] = {
-    SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGTSTP, SIGTTIN, SIGTTOU
+    SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGPIPE, SIGTSTP, SIGTTIN, SIGTTOU
 };
 static volatile sig_atomic_t parent_signal_received;
 
@@ -1654,7 +1655,7 @@ static int run_worker(const struct nb_wsdisplay_smoke_options *options,
 {
     struct nb_host_wsdisplay_options host_options;
     struct nb_smoke_worker worker;
-    uint64_t deadline;
+    uint64_t deadline = 0;
     bool success = false;
 
     memset(&worker, 0, sizeof(worker));
@@ -1708,13 +1709,17 @@ static int run_worker(const struct nb_wsdisplay_smoke_options *options,
             goto cleanup;
         }
     }
-    deadline = add_milliseconds(nb_host_monotonic_milliseconds(worker.host),
-                                options->duration_ms);
+    if (!options->until_exit) {
+        deadline = add_milliseconds(
+            nb_host_monotonic_milliseconds(worker.host),
+            options->duration_ms);
+    }
     if (!try_present_content(&worker)) {
         goto cleanup;
     }
 
-    while (nb_host_monotonic_milliseconds(worker.host) < deadline &&
+    while ((options->until_exit ||
+            nb_host_monotonic_milliseconds(worker.host) < deadline) &&
            (!worker.user_exit_requested || !worker.frame_completed)) {
         uint64_t now;
         uint64_t remaining;
@@ -1731,26 +1736,35 @@ static int run_worker(const struct nb_wsdisplay_smoke_options *options,
         if (worker.user_exit_requested && worker.frame_completed) {
             break;
         }
-        now = nb_host_monotonic_milliseconds(worker.host);
-        if (now >= deadline) {
-            break;
-        }
-        remaining = deadline - now;
-        if (interactive_content(options->content) ||
-            remaining <= NB_SMOKE_EVENT_SLICE_MS) {
-            wait = (uint32_t)remaining;
+        if (options->until_exit) {
+            wait = UINT32_MAX;
         } else {
-            wait = NB_SMOKE_EVENT_SLICE_MS;
+            now = nb_host_monotonic_milliseconds(worker.host);
+            if (now >= deadline) {
+                break;
+            }
+            remaining = deadline - now;
+            if (interactive_content(options->content) ||
+                remaining <= NB_SMOKE_EVENT_SLICE_MS) {
+                wait = (uint32_t)remaining;
+            } else {
+                wait = NB_SMOKE_EVENT_SLICE_MS;
+            }
         }
         if (!wait_for_worker_activity(&worker, wait)) {
             goto cleanup;
         }
     }
-    success = worker.frame_completed;
+    success = worker.frame_completed &&
+              (!options->until_exit || worker.user_exit_requested);
     if (!worker.frame_completed) {
         fprintf(stderr,
                 "No %s frame completion was observed\n",
                 content_description(options->content));
+    }
+    if (options->until_exit && !worker.user_exit_requested) {
+        fputs("Run-until-exit mode ended without an orderly user exit\n",
+              stderr);
     }
     if (options->require_vt_cycle &&
         !required_vt_cycle_completed(&worker)) {
@@ -1831,7 +1845,7 @@ static bool prepare_parent_signals(struct parent_signal_state *state)
     return true;
 }
 
-static void restore_child_signals(const struct parent_signal_state *state)
+static void restore_saved_signals(const struct parent_signal_state *state)
 {
     size_t index;
 
@@ -1848,6 +1862,7 @@ static void unblock_parent_signals(
 }
 
 static bool wait_for_child(pid_t child,
+                           bool deadline_enabled,
                            uint64_t deadline,
                            int *status)
 {
@@ -1863,32 +1878,35 @@ static bool wait_for_child(pid_t child,
             return false;
         }
         if (parent_signal_received != 0 ||
-            monotonic_milliseconds() >= deadline) {
+            (deadline_enabled &&
+             monotonic_milliseconds() >= deadline)) {
             return false;
         }
-        sleep_milliseconds(NB_SMOKE_WAIT_SLICE_MS);
+        sleep_milliseconds(deadline_enabled
+                               ? NB_SMOKE_WAIT_SLICE_MS
+                               : NB_SMOKE_UNBOUNDED_WAIT_SLICE_MS);
     }
 }
 
-static bool reap_child(pid_t child, int *status)
-{
-    pid_t result;
+struct nb_smoke_supervisor_result {
+    int status;
+    bool worker_gone;
+};
 
-    do {
-        result = waitpid(child, status, 0);
-    } while (result < 0 && errno == EINTR);
-    return result == child;
-}
-
-static int supervise_worker(
+static struct nb_smoke_supervisor_result supervise_worker(
     const struct nb_wsdisplay_smoke_options *options,
-    const struct nb_smoke_console_snapshot *snapshot)
+    const struct nb_smoke_console_snapshot *snapshot,
+    const struct parent_signal_state *signal_state)
 {
-    struct parent_signal_state signal_state;
     const uint64_t parent_budget =
         (uint64_t)options->duration_ms +
         NB_SMOKE_PARENT_STARTUP_GRACE_MS;
-    uint64_t deadline;
+    const bool deadline_enabled = !options->until_exit;
+    struct nb_smoke_supervisor_result result = {
+        .status = 1,
+        .worker_gone = true
+    };
+    uint64_t deadline = 0;
     pid_t child;
     int status = 0;
     bool reaped;
@@ -1900,35 +1918,42 @@ static int supervise_worker(
                                                  &expected_active_vt)) {
         fputs("Could not translate the saved screen to a VT number\n",
               stderr);
-        return 1;
+        unblock_parent_signals(signal_state);
+        return result;
     }
-
-    if (!prepare_parent_signals(&signal_state)) {
-        fprintf(stderr, "Could not prepare supervisor signals: %s\n",
-                strerror(errno));
-        return 1;
+    if (options->until_exit) {
+        printf("Supervisor PID: %ld (second-SSH cancellation: "
+               "sudo kill -TERM %ld)\n",
+               (long)getpid(),
+               (long)getpid());
     }
     (void)fflush(NULL);
-    deadline = add_milliseconds(monotonic_milliseconds(), parent_budget);
+    if (deadline_enabled) {
+        deadline = add_milliseconds(monotonic_milliseconds(), parent_budget);
+    }
     child = fork();
     if (child < 0) {
         fprintf(stderr, "Could not fork smoke worker: %s\n", strerror(errno));
-        unblock_parent_signals(&signal_state);
-        return 1;
+        unblock_parent_signals(signal_state);
+        return result;
     }
     if (child == 0) {
-        int result;
+        int worker_status;
 
-        restore_child_signals(&signal_state);
-        result = run_worker(options,
-                            snapshot->screen_device,
-                            expected_active_vt);
+        restore_saved_signals(signal_state);
+        worker_status = run_worker(options,
+                                   snapshot->screen_device,
+                                   expected_active_vt);
         (void)fflush(NULL);
-        _exit(result);
+        _exit(worker_status);
     }
-    unblock_parent_signals(&signal_state);
+    result.worker_gone = false;
+    unblock_parent_signals(signal_state);
 
-    reaped = wait_for_child(child, deadline, &status);
+    reaped = wait_for_child(child,
+                            deadline_enabled,
+                            deadline,
+                            &status);
     if (!reaped) {
         forced = true;
         if (parent_signal_received != 0) {
@@ -1949,6 +1974,7 @@ static int supervise_worker(
         parent_signal_received = 0;
         reaped = wait_for_child(
             child,
+            true,
             add_milliseconds(monotonic_milliseconds(),
                              NB_SMOKE_TERM_GRACE_MS),
             &status);
@@ -1959,19 +1985,27 @@ static int supervise_worker(
             fprintf(stderr, "Could not kill smoke worker: %s\n",
                     strerror(errno));
         }
-        reaped = reap_child(child, &status);
+        parent_signal_received = 0;
+        reaped = wait_for_child(
+            child,
+            true,
+            add_milliseconds(monotonic_milliseconds(),
+                             NB_SMOKE_TERM_GRACE_MS),
+            &status);
     }
     if (!reaped) {
         fputs("Could not reap smoke worker\n", stderr);
-        return 1;
+        return result;
     }
+    result.worker_gone = true;
     if (WIFEXITED(status)) {
         child_result = WEXITSTATUS(status);
     } else if (WIFSIGNALED(status)) {
         fprintf(stderr, "Smoke worker died from signal %d\n",
                 WTERMSIG(status));
     }
-    return !forced && child_result == 0 ? 0 : 1;
+    result.status = !forced && child_result == 0 ? 0 : 1;
+    return result;
 }
 
 static bool remove_recovery_state(void)
@@ -1988,8 +2022,10 @@ int nb_wsdisplay_smoke_run(
     const struct nb_wsdisplay_smoke_options *options)
 {
     struct nb_smoke_console_snapshot snapshot;
+    struct nb_smoke_supervisor_result supervisor;
+    struct parent_signal_state signal_state;
     bool restored;
-    int worker_result;
+    bool recovery_finalized = false;
 
     if (options == NULL) {
         fputs("Invalid wsdisplay smoke options\n", stderr);
@@ -2030,6 +2066,13 @@ int nb_wsdisplay_smoke_run(
               stderr);
         return 2;
     }
+    if (options->until_exit &&
+        (options->action != NB_WSDISPLAY_SMOKE_ACTION_RUN ||
+         options->duration_ms != NB_WSDISPLAY_SMOKE_DEFAULT_DURATION_MS ||
+         !interactive_content(options->content))) {
+        fputs("Invalid run-until-exit selection\n", stderr);
+        return 2;
+    }
     if (options->action != NB_WSDISPLAY_SMOKE_ACTION_RECOVER &&
         (options->status_device_path == NULL ||
          options->status_device_path[0] != '/' ||
@@ -2041,8 +2084,9 @@ int nb_wsdisplay_smoke_run(
     if (options->action == NB_WSDISPLAY_SMOKE_ACTION_RUN &&
         (!options->acknowledge_console_takeover ||
          !options->acknowledge_no_crash_watchdog ||
-         options->duration_ms < NB_WSDISPLAY_SMOKE_MIN_DURATION_MS ||
-         options->duration_ms > NB_WSDISPLAY_SMOKE_MAX_DURATION_MS)) {
+         (!options->until_exit &&
+          (options->duration_ms < NB_WSDISPLAY_SMOKE_MIN_DURATION_MS ||
+           options->duration_ms > NB_WSDISPLAY_SMOKE_MAX_DURATION_MS)))) {
         fputs("Invalid or unacknowledged wsdisplay takeover options\n",
               stderr);
         return 2;
@@ -2072,32 +2116,58 @@ int nb_wsdisplay_smoke_run(
         fputs("Invalid wsdisplay smoke action\n", stderr);
         return 2;
     }
-    if (!persist_snapshot(&snapshot)) {
+    if (!prepare_parent_signals(&signal_state)) {
+        fprintf(stderr, "Could not prepare supervisor signals: %s\n",
+                strerror(errno));
         return 1;
     }
-    printf("Taking over %s for at most %u ms. Recovery state: %s\n",
-           snapshot.screen_device,
-           options->duration_ms,
-           state_path);
+    if (!persist_snapshot(&snapshot)) {
+        restore_saved_signals(&signal_state);
+        return 1;
+    }
+    if (options->until_exit) {
+        printf("Taking over %s until orderly exit or supervisor "
+               "termination. Recovery state: %s\n",
+               snapshot.screen_device,
+               state_path);
+    } else {
+        printf("Taking over %s for at most %u ms. Recovery state: %s\n",
+               snapshot.screen_device,
+               options->duration_ms,
+               state_path);
+    }
     printf("Content: %s\n", content_description(options->content));
     puts("The parent supervisor remains unmapped and will restore and verify "
          "the saved console state after the worker exits.");
     (void)fflush(NULL);
 
-    worker_result = supervise_worker(options, &snapshot);
+    supervisor = supervise_worker(options, &snapshot, &signal_state);
     restored = restore_console(&snapshot);
-    if (restored && !remove_recovery_state()) {
-        restored = false;
+    if (restored && !supervisor.worker_gone) {
+        fputs("Console state currently matches the snapshot, but the worker "
+              "was not reaped; retaining the recovery record\n",
+              stderr);
+    } else if (restored) {
+        recovery_finalized = remove_recovery_state();
     }
     if (!restored) {
         fprintf(stderr,
-                "CONSOLE RESTORATION WAS NOT VERIFIED. Keep SSH open and run:\n"
+                "CONSOLE RESTORATION WAS NOT VERIFIED. Keep SSH open, verify "
+                "no smoke worker remains, then run:\n  sudo %s --recover\n",
+                options->program_path != NULL
+                    ? options->program_path
+                    : "./build/nixbench-wsdisplay-smoke");
+    } else if (!recovery_finalized) {
+        fprintf(stderr,
+                "CONSOLE RECOVERY WAS NOT FINALIZED. The recovery record was "
+                "retained; verify no smoke worker remains, then run:\n"
                 "  sudo %s --recover\n",
                 options->program_path != NULL
                     ? options->program_path
                     : "./build/nixbench-wsdisplay-smoke");
     }
-    return worker_result == 0 && restored ? 0 : 1;
+    restore_saved_signals(&signal_state);
+    return supervisor.status == 0 && restored && recovery_finalized ? 0 : 1;
 }
 
 #endif

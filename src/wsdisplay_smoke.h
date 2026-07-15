@@ -43,6 +43,7 @@ struct nb_wsdisplay_smoke_options {
     uint32_t wscons_pointer_sensitivity_percent;
     bool acknowledge_console_takeover;
     bool acknowledge_no_crash_watchdog;
+    bool until_exit;
     bool wscons_input_stats;
     bool require_vt_cycle;
 };
