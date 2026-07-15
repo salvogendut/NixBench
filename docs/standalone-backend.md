@@ -10,10 +10,11 @@ are replaceable platform adapters, not part of application or shell policy.
 > all-root hardware-research harness. A separate, opt-in
 > `nixbench-wsdisplay-session` milestone now splits root console ownership from
 > an ordinary-user desktop, private Wayland server, and NixClock client. Its
-> device-free integration tests and first physical takeover/normal-exit trial
-> pass, but it has neither completed its failure-injection matrix nor gained
-> complete seat/input support, acceleration, or broad hardware coverage. It is
-> not a production login session or a default crash-safe console owner.
+> device-free integration tests, physical takeover/normal-exit trial, and
+> VT 1 -> 2 -> 1 cycle pass, but it has neither completed its failure-injection
+> matrix nor gained complete seat/input support, acceleration, or broad hardware
+> coverage. It is not a production login session or a default crash-safe console
+> owner.
 
 ## Process and backend boundaries
 
@@ -480,8 +481,13 @@ ownership, and completed query-only preflight without changing the saved
 console state. The first physical takeover launched the desktop and NixClock
 through the ordinary-user private Wayland display, then completed normal exit,
 verified restoration, cleared the recovery record, and returned to one-based
-VT 1. VT release/acquire, core crash or hang, malformed protocol, worker and
-supervisor failure, and repeated-session recovery remain NetBSD hardware gates.
+VT 1. A subsequent privilege-separated trial completed VT 1 -> 2 -> 1 with
+release/acquire completions balanced at 1/1. The ordinary-user desktop and
+NixClock returned after acquisition, normal exit cleared the recovery record,
+and independent postflight verified screen 0 in emulation mode with automatic
+VT handling, video on, and VT 1 active. Forced supervisor termination, core
+crash or hang, malformed protocol, worker or supervisor failure, and
+repeated-session recovery remain NetBSD hardware gates.
 The older all-root smoke harness remains useful only for bounded research and
 does not become an application launcher.
 

@@ -21,9 +21,9 @@ and performs final restoration independently. The device worker owns the fixed
 `wsdisplay` and wscons devices, VT lifecycle, frame presentation, and core
 heartbeat. `nixbench-session-core` runs as the invoking ordinary user, publishes
 a private Wayland display, and launches NixClock. Device-free tests exercise the
-split, and the first physical takeover/normal-exit trial has completed. The
-failure-injection and repeated-session matrix is still pending, so this is not
-a production login session.
+split, and physical takeover, normal exit, and VT 1 -> 2 -> 1 trials have
+completed. The failure-injection and repeated-session matrix is still pending,
+so this is not a production login session.
 
 The implemented boundary is:
 
@@ -216,9 +216,14 @@ The first physical takeover launched the ordinary-user desktop and NixClock on
 the private Wayland display and completed a normal exit. The root supervisor
 verified restoration and removed the recovery record; independent postflight
 found screen 0 in emulation mode, automatic VT handling, video on, and
-one-based VT 1 active. Remaining NetBSD hardware cases are VT 1 -> 2 -> 1,
-`SIGTERM`, `SIGKILL`, a stopped or hung core, malformed protocol, supervisor
-failure, and repeated sessions.
+one-based VT 1 active. A subsequent privilege-separated trial switched from VT
+1 to VT 2 and back with release/acquire completions balanced at 1/1. The
+ordinary-user desktop and NixClock returned after acquisition, clean normal
+exit cleared the recovery record, and independent restoration verification
+again found screen 0 in emulation mode, automatic VT handling, video on, and
+active VT 1. Remaining NetBSD hardware cases are forced supervisor termination,
+a crashed or hung core, malformed protocol, worker or supervisor failure, and
+repeated sessions.
 
 Every case must return to the saved screen in emulation mode with video on and
 automatic VT handling, leave no worker or recovery record, and require no

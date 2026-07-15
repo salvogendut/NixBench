@@ -167,10 +167,10 @@ privileged worker. A separate opt-in `nixbench-wsdisplay-session` milestone now
 implements the audited root supervisor/device-helper and ordinary-user core
 split, publishes a private Wayland display, and launches NixClock after the
 credential drop. Its device-free integration path and first physical
-console-takeover/normal-exit trial are complete. VT cycling and failure
-injection remain pending. Desktop-managed installation,
-popup/subsurface/data protocols, toolkit trials, and broader application-menu
-bridges also remain outstanding.
+console-takeover/normal-exit and VT 1 -> 2 -> 1 trials are complete. Failure
+injection and repeated-session validation remain pending. Desktop-managed
+installation, popup/subsurface/data protocols, toolkit trials, and broader
+application-menu bridges also remain outstanding.
 
 ## Milestone 6: Package and validate the hosted prototype
 
@@ -454,9 +454,13 @@ mandatory. The exact opt-in configuration now builds on NetBSD and passes all
 query-only preflight preserved the expected console state. The first physical
 session also launched NixClock on the private Wayland display, exited normally,
 cleared the recovery record, and restored screen 0, emulation mode, automatic
-VT handling, video on, and one-based VT 1. Its next gates are VT cycling, core
-crash, stopped/hung core, malformed protocol, supervisor termination, and
-repeated-session validation on the X220.
+VT handling, video on, and one-based VT 1. A subsequent privilege-separated
+trial completed VT 1 -> 2 -> 1 with release/acquire completions balanced at
+1/1; the ordinary-user desktop and NixClock returned after acquisition, normal
+exit cleared the recovery record, and independent postflight verified the same
+saved console state with VT 1 active. Its next gates are forced supervisor
+termination, core crash or hang, malformed protocol, worker or supervisor
+failure, and repeated-session validation on the X220.
 Direct KMS remains a Milestone 7 deliverable but is not on that immediate
 critical path.
 

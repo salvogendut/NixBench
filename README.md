@@ -151,8 +151,8 @@ desktop, publishes a private Wayland display, and launches NixClock. The core
 receives only a bounded anonymous protocol endpoint; NixClock does not receive
 that endpoint, and neither process receives a framebuffer, wscons, recovery,
 or VT descriptor. This new path has device-free coverage but has not yet
-completed the broader failure-injection matrix. Its first physical
-console-takeover and normal-exit trial has passed, but it remains an explicitly
+completed the broader failure-injection matrix. Its physical console takeover,
+normal exit, and VT 1 -> 2 -> 1 cycle have passed, but it remains an explicitly
 acknowledged development milestone rather than a supported login session.
 
 The older `nixbench-wsdisplay-smoke` research harness deliberately remains
@@ -472,10 +472,15 @@ The first physical privilege-separated trial then launched the desktop and
 NixClock through the private Wayland display as UID 1000. Normal desktop exit
 completed, the supervisor independently verified restoration, removed the
 recovery record, and postflight again found screen 0 in emulation mode with
-automatic VT handling, video on, and one-based VT 1 active. VT cycling and the
-crash, hang, malformed-protocol, and forced-supervisor cases remain separate
-hardware gates. The guided command therefore remains an opt-in development
-test rather than a login-session installation procedure.
+automatic VT handling, video on, and one-based VT 1 active. A subsequent
+privilege-separated trial switched from VT 1 to VT 2 and back. Release/acquire
+completions balanced at 1/1, the ordinary-user desktop and NixClock returned
+after acquisition, and normal exit again cleared the recovery record.
+Independent postflight verified screen 0, emulation mode, automatic VT
+handling, video on, and active VT 1. Forced supervisor termination, core crash
+or hang, malformed protocol, worker or supervisor failure, and repeated
+sessions remain hardware gates. The guided command therefore remains an opt-in
+development test rather than a login-session installation procedure.
 
 The opt-in `wsdisplay` presentation harness must run as root. Start with its
 query-only preflight:
