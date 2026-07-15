@@ -160,20 +160,26 @@ publication, checked and enabled state, command delivery, surface lifetime,
 clock geometry, redraw timing, and command-line behavior have dedicated tests.
 The earlier `nixbench-wayland-demo` remains an input/protocol probe.
 
-Hosted NixBench remains the physically validated NixClock development path.
-The root `wsdisplay` research harness still does not publish a Wayland socket
-or launch external applications: its compositor and desktop run in the
-privileged worker. A separate opt-in `nixbench-wsdisplay-session` milestone now
-implements the audited root supervisor/device-helper and ordinary-user core
-split, publishes a private Wayland display, and launches NixClock after the
-credential drop. Its device-free integration path now includes a bounded core
-heartbeat, deterministic crash/hang injection policy, and an ordinary-user
-runtime-directory cleanup sentinel. Physical console takeover/normal exit,
-VT 1 -> 2 -> 1, supervised SIGTERM recovery, and deterministic core-crash
-and core-hang recovery are complete. Malformed protocol, harder supervisor/
-worker failures, and repeated-session validation remain. Desktop-managed
-installation, popup/subsurface/data protocols, toolkit trials, and broader
-application-menu bridges also remain outstanding.
+NixClock is now physically validated in both the hosted desktop and the
+privilege-separated standalone session. The root `wsdisplay` research harness
+still does not publish a Wayland socket or launch external applications: its
+compositor and desktop run in the privileged worker. The separate opt-in
+`nixbench-wsdisplay-session` implements the audited root supervisor, device
+helper, and ordinary-user core split, publishes a private Wayland display, and
+launches NixClock by default after the credential drop. Its device-free
+integration path includes a bounded core heartbeat, deterministic crash/hang
+injection policy, and an ordinary-user runtime-directory cleanup sentinel.
+Physical console takeover/normal exit, VT 1 -> 2 -> 1, supervised SIGTERM
+recovery, and deterministic core-crash and core-hang recovery are complete.
+
+The standalone launcher now also accepts one operator-selected absolute
+executable as its initial ordinary-user client. This is a diagnostic startup
+selector, not desktop-managed installation or launching. The installed GTK3
+Midori browser is the first compatibility probe; its physical result will
+identify the next concrete Wayland protocol or rendering gap. Malformed
+protocol, harder supervisor/worker failures, and repeated-session validation
+remain. Desktop-managed installation, popup/subsurface/data protocols,
+toolkit trials, and broader application-menu bridges also remain outstanding.
 
 ## Milestone 6: Package and validate the hosted prototype
 

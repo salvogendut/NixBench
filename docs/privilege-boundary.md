@@ -20,13 +20,14 @@ captures and persists the original console state, watches a root device worker,
 and performs final restoration independently. The device worker owns the fixed
 `wsdisplay` and wscons devices, VT lifecycle, frame presentation, and core
 heartbeat. `nixbench-session-core` runs as the invoking ordinary user, publishes
-a private Wayland display, and launches NixClock. A separately dropped sibling
-of the same internal executable is the ordinary-user runtime sentinel: it owns
-the private runtime directory. On the verified worker path it removes that
-directory only after the complete core/application process group is contained;
-controller loss also triggers its unprivileged cleanup fallback. Device-free
-tests exercise the split, heartbeat timeout, sentinel cleanup, and exact
-crash/hang gate policy.
+a private Wayland display, and launches NixClock by default or one selected
+initial application. A separately dropped sibling of the same
+internal executable is the ordinary-user runtime sentinel: it owns the private
+runtime directory. On the verified worker path it removes that directory only
+after the complete core/application process group is contained; controller
+loss also triggers its unprivileged cleanup fallback. Device-free tests
+exercise the split, heartbeat timeout, sentinel cleanup, and exact crash/hang
+gate policy.
 Physical takeover, normal exit, VT 1 -> 2 -> 1, and supervised-SIGTERM recovery
 have completed, and both physical core-failure gates now pass. The remaining
 failure-injection and repeated-session matrix is still pending, so this is not
@@ -199,7 +200,8 @@ binaries and five process roles:
   sentinel;
 - its sibling `nixbench-session-core` publishes the private Wayland display;
   and
-- the core launches the ordinary-user `nixclock` client.
+- the core launches the selected ordinary-user initial client (`nixclock` by
+  default).
 
 Device-free tests exercise recovery-record and supervisor policy, protocol
 state, credential selection, standard-descriptor reservation, descriptor
@@ -213,6 +215,21 @@ session available to terminate the printed supervisor PID or run:
 ```sh
 sudo /var/run/nixbench-wsdisplay-session --recover
 ```
+
+For a startup compatibility probe, the operator can replace default NixClock
+with one absolute executable path. Arguments are not accepted yet:
+
+```sh
+NIXBENCH_APPLICATION=/usr/pkg/bin/midori ./tools/run-wsdisplay-session.sh
+```
+
+The script checks that file before `sudo` as the ordinary user. The privileged
+launcher rejects an unbounded, relative, trailing-slash, or control-character
+path, but deliberately does not resolve, open, or test the selected file. It
+only forwards the bounded text to the already credential-dropped core, which
+executes the path directly without a shell. This preserves the descriptor and
+credential boundary; it does not sandbox the application from the invoking
+user's home directory or supplementary groups.
 
 `NIXBENCH_EXPECT_SUPERVISOR_TERM=1` selects the forced-supervisor recovery
 gate. In that mode the launcher requires SIGTERM to initiate shutdown and

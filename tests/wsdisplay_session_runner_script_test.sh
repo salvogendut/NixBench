@@ -283,6 +283,20 @@ fi
 grep -F -- 'NIXBENCH_APPLICATION must be an executable regular file' \
     "$nonexecutable_application_output" >/dev/null
 
+control_application=$(printf '%s\t%s' "$temporary/control" application)
+touch "$control_application"
+chmod +x "$control_application"
+control_application_log=$temporary/control-application.log
+control_application_output=$temporary/control-application.out
+if run_session 0 '' 0 0 1 \
+    "$control_application_log" "$control_application_output" \
+    "$control_application"; then
+    echo "control-character NIXBENCH_APPLICATION was accepted" >&2
+    exit 1
+fi
+grep -F -- 'NIXBENCH_APPLICATION must not contain control characters' \
+    "$control_application_output" >/dev/null
+
 conflict_log=$temporary/conflict.log
 conflict_output=$temporary/conflict.out
 if run_session 1 crash 0 0 1 "$conflict_log" "$conflict_output"; then

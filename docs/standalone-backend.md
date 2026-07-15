@@ -9,7 +9,8 @@ are replaceable platform adapters, not part of application or shell policy.
 > hosted window. The older `nixbench-wsdisplay-smoke` command remains an
 > all-root hardware-research harness. A separate, opt-in
 > `nixbench-wsdisplay-session` milestone now splits root console ownership from
-> an ordinary-user desktop, private Wayland server, and NixClock client. Its
+> an ordinary-user desktop and private Wayland server, with NixClock as the
+> default client or one operator-selected initial application. Its
 > device-free integration tests, physical takeover/normal-exit trial, and
 > VT 1 -> 2 -> 1 cycle and supervised SIGTERM recovery gate pass, but it has
 > now also passed both physical core-failure gates. The remaining failure-
@@ -432,7 +433,8 @@ executables whose session uses five process roles:
 - an ordinary-user `nixbench-session-core` runtime sentinel;
 - its ordinary-user `nixbench-session-core` sibling, which publishes the
   private Wayland display; and
-- the unprivileged `nixclock` client launched by that core.
+- the unprivileged selected initial client launched by that core (`nixclock`
+  by default).
 
 Before any privileged state or device open, the launcher ensures descriptors
 0, 1, and 2 are occupied by valid standard streams. Privileged descriptors
@@ -460,6 +462,29 @@ entry point is:
 ```sh
 ./tools/run-wsdisplay-session.sh
 ```
+
+NixClock is the default initial client. An existing application can instead
+be selected for a startup compatibility probe with one absolute executable
+path; application arguments are not supported yet:
+
+```sh
+NIXBENCH_APPLICATION=/usr/pkg/bin/midori ./tools/run-wsdisplay-session.sh
+```
+
+The guided script validates the selected file before `sudo`, while still
+running as the ordinary user. The privileged launcher performs only bounded
+lexical validation and forwards the path; it does not resolve, open, or execute
+the selected file. The core executes it without a shell only after its verified
+credential drop. The application receives `XDG_RUNTIME_DIR` and
+`WAYLAND_DISPLAY`, but no console, recovery, or helper descriptor. This is
+privilege separation, not application sandboxing: the client retains the
+invoking user's home-directory and group access.
+
+The initial Midori run is diagnostic and should use only blank or trusted
+content. A toplevel may appear before the browser is fully usable. Missing
+`xdg_popup`, pointer-axis scrolling, subsurfaces, clipboard/data-device
+support, accelerated buffer sharing, and a generic GTK global-menu bridge are
+the expected first compatibility boundaries.
 
 It configures and builds the opt-in targets, runs device-free tests, stages the
 privileged launcher as the root-owned, non-writable

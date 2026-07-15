@@ -231,9 +231,8 @@ trial.
 EOF
 else
     cat <<EOF
-After closing the initial application, use the desktop's NixBench -> Quit
-command, or press Escape when no Wayland client owns keyboard focus, to end the
-session.
+After closing the initial application, click the empty desktop to return focus
+to the shell. Then use NixBench -> Quit, or press Escape, to end the session.
 
 For the VT lifecycle gate, once the desktop is visible use the second SSH
 session to switch away and back (these are one-based VT numbers):

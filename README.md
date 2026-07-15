@@ -149,10 +149,11 @@ restoration authority. Trusted children irreversibly change to the invoking
 sudo account before executing `nixbench-session-core`. An ordinary-user
 runtime sentinel owns cleanup of the private runtime directory; its sibling
 core creates the desktop, publishes the Wayland display there, and launches
-NixClock. The core receives only a bounded anonymous protocol endpoint;
-NixClock does not receive that endpoint, and neither ordinary-user process
-receives a framebuffer, wscons, recovery, or VT descriptor. The heartbeat,
-runtime cleanup, and deterministic core-crash/core-hang gates have device-free
+NixClock by default or one operator-selected initial application. The core
+receives only a bounded anonymous protocol endpoint; the selected application
+does not receive that endpoint, and neither ordinary-user process receives a
+framebuffer, wscons, recovery, or VT descriptor. The heartbeat, runtime
+cleanup, and deterministic core-crash/core-hang gates have device-free
 coverage. Console takeover, normal exit, VT 1 -> 2 -> 1, supervised SIGTERM
 recovery, and both core-failure gates have passed on hardware. This remains an
 explicitly acknowledged development milestone rather than a supported login
@@ -212,12 +213,13 @@ Neither the in-process event/request contract nor the Wayland integration is a
 stable public API yet. The Wayland slice currently has one scale-1 logical
 output and no touch capability, pointer-axis scrolling, client cursor
 rendering, buffer scale/transform or input-region handling, popups,
-subsurfaces, clipboard, accelerated buffers, resize negotiation, process
-supervision, desktop-managed application launching, or general toolkit bridge
-for application menus. NixClock exercises the first private application-menu
-protocol, but general GTK/SDL applications are therefore not expected to be
-usable yet. NixBench also does not yet offer a supported direct-console
-runtime.
+subsurfaces, clipboard, accelerated buffers, resize negotiation,
+desktop-managed application launching, or general toolkit bridge for
+application menus. NixClock exercises the first private application-menu
+protocol. Existing GTK/SDL Wayland clients are not supported yet; the
+standalone initial-application selector permits diagnostic compatibility
+probes that are expected to expose those missing protocols. NixBench also does
+not yet offer a supported production direct-console login session.
 
 The initial chrome uses an original palette and geometry while exploring a
 classic beveled Workbench/AROS-inspired vocabulary. AROS was studied as a design
@@ -360,8 +362,8 @@ builds:
 - `nixbench-wsdisplay-session`, the root recovery supervisor and device-helper
   launcher;
 - `nixbench-session-core`, its internal ordinary-user desktop process; and
-- `nixclock`, the initial native application launched on the core's private
-  Wayland display.
+- `nixclock`, the default initial native application launched on the core's
+  private Wayland display.
 
 `nixbench-wsdisplay-smoke` is the older, explicitly opt-in root hardware
 harness and is not built by default. Enable it separately with
@@ -427,12 +429,29 @@ The script requires passwordless `sudo` for recovery, configures
 `NIXBENCH_BUILD_WSDISPLAY_SESSION=ON`, builds, runs the non-destructive tests,
 stages the device launcher as the root-owned, non-writable
 `/var/run/nixbench-wsdisplay-session`, and performs a query-only preflight with
-that copy. The ordinary-user core and NixClock remain in the build tree and are
-never executed until after the credential drop. The script changes no display
-state until the operator types `START-NIXBENCH`. The session has no automatic
-deadline: exit from the desktop menu, press Escape while no Wayland client owns
-keyboard focus, or use the printed supervisor `SIGTERM` command from the
-retained second SSH session.
+that copy. The ordinary-user core and default NixClock remain in the build tree
+and are never executed until after the credential drop. The script changes no
+display state until the operator types `START-NIXBENCH`. The session has no
+automatic deadline: exit from the desktop menu, press Escape while no Wayland
+client owns keyboard focus, or use the printed supervisor `SIGTERM` command
+from the retained second SSH session.
+
+Set one absolute executable path to replace NixClock for a startup
+compatibility probe. Arguments are not supported yet:
+
+```sh
+NIXBENCH_APPLICATION=/usr/pkg/bin/midori ./tools/run-wsdisplay-session.sh
+```
+
+The guided script checks that path as the ordinary user before invoking
+`sudo`. Privileged code only validates and forwards bounded path text; the
+credential-dropped core performs the actual `exec` without a shell. This is
+not an application sandbox: the selected program retains the invoking user's
+home-directory and group access. Use Midori only with blank or otherwise
+trusted content during this first probe. A main window may expose the next
+compatibility boundary rather than be fully usable: `xdg_popup`, pointer-axis
+scrolling, subsurfaces, clipboard/data-device support, accelerated buffers,
+and generic GTK global-menu integration remain incomplete.
 
 For the explicit supervisor-termination recovery gate, run:
 
@@ -484,12 +503,13 @@ separate private anonymous socket endpoints after irreversible
 `setgid()`/`setuid()` transitions to the sudo account. The runtime sentinel
 creates and retains descriptor-based ownership of the private runtime
 directory. The core publishes its Wayland socket there and launches NixClock
-with the matching `XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY`. Once the core and
-application process group are gone, the worker asks the ordinary-user sentinel
-to remove direct runtime entries and the directory. Privileged code never
-performs a filesystem operation on the reported user-owned path. NixClock
-participates in the normal global-menu path but receives neither helper
-protocol descriptor nor any console capability.
+by default, or the selected initial application, with the matching
+`XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY`. Once the core and application process
+group are gone, the worker asks the ordinary-user sentinel to remove direct
+runtime entries and the directory. Privileged code never performs a filesystem
+operation on the reported user-owned path. NixClock participates in the normal
+global-menu path. No selected application receives the helper protocol
+descriptor or any console capability.
 
 Keep a second SSH session open throughout the first hardware trials. If the
 launcher leaves the recovery record, first verify that no
