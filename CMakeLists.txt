@@ -437,6 +437,17 @@ target_include_directories(
 )
 nixbench_configure_c_target(nixbench_privsep_protocol)
 
+add_library(nixbench_privsep_helper STATIC src/privsep_helper.c)
+target_include_directories(
+  nixbench_privsep_helper
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(
+  nixbench_privsep_helper
+  PUBLIC nixbench_host nixbench_privsep_protocol
+)
+nixbench_configure_c_target(nixbench_privsep_helper)
+
 add_library(nixbench_host_sdl STATIC src/host_sdl.c)
 target_include_directories(
   nixbench_host_sdl
@@ -833,6 +844,16 @@ if(BUILD_TESTING)
   )
   nixbench_configure_c_target(nixbench_privsep_protocol_tests)
 
+  add_executable(
+    nixbench_privsep_helper_tests
+    tests/privsep_helper_test.c
+  )
+  target_link_libraries(
+    nixbench_privsep_helper_tests
+    PRIVATE nixbench_privsep_helper
+  )
+  nixbench_configure_c_target(nixbench_privsep_helper_tests)
+
   if(UNIX)
     add_executable(
       nixbench_session_credentials_tests
@@ -1039,6 +1060,10 @@ if(BUILD_TESTING)
   add_test(
     NAME nixbench.privsep.protocol
     COMMAND nixbench_privsep_protocol_tests
+  )
+  add_test(
+    NAME nixbench.privsep.helper
+    COMMAND nixbench_privsep_helper_tests
   )
   if(UNIX)
     add_test(
