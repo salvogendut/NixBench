@@ -21,6 +21,11 @@ fi
 WEBKIT_DISABLE_COMPOSITING_MODE=1
 export WEBKIT_DISABLE_COMPOSITING_MODE
 
+if [ "${NIXBENCH_TRACE_WAYLAND:-0}" = 1 ]; then
+    WAYLAND_DEBUG=client
+    export WAYLAND_DEBUG
+fi
+
 echo "NixBench Midori diagnostic: software compositing under ordinary-user GDB" >&2
 exec "$gdb" --quiet --nx --batch \
     -ex 'set pagination off' \

@@ -500,6 +500,9 @@ outside-click dismissal and positioner constraint adjustment, pointer-axis
 scrolling, subsurfaces, clipboard/data transfer beyond the discovery skeleton,
 accelerated buffers, and generic GTK global-menu integration remain incomplete.
 
+Set `NIXBENCH_TRACE_WAYLAND=1` on the Midori probe wrapper when you need a
+client-side protocol trace for the first failing interaction.
+
 For the explicit supervisor-termination recovery gate, run:
 
 ```sh

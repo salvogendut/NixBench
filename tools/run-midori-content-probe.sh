@@ -26,5 +26,10 @@ fi
 WEBKIT_DISABLE_COMPOSITING_MODE=1
 export WEBKIT_DISABLE_COMPOSITING_MODE
 
+if [ "${NIXBENCH_TRACE_WAYLAND:-0}" = 1 ]; then
+    WAYLAND_DEBUG=client
+    export WAYLAND_DEBUG
+fi
+
 echo "NixBench Midori content probe: fixed offline page, software compositing" >&2
 exec "$midori" "$page"
