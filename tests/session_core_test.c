@@ -1,17 +1,28 @@
 #define _POSIX_C_SOURCE 200809L
 
+#ifndef NIXBENCH_TEST_SESSION_CORE
+#define NIXBENCH_TEST_SESSION_CORE 0
+#endif
+
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#if NIXBENCH_TEST_SESSION_CORE
+#include <sys/wait.h>
+#endif
 #include <unistd.h>
 
 #include "host.h"
 #include "host_privsep_client.h"
 #include "privsep_protocol.h"
+#if NIXBENCH_TEST_SESSION_CORE
+#include "session_core.h"
+#endif
 
 static int failures;
 
@@ -120,6 +131,24 @@ static struct nb_privsep_output tiny_output(void)
 
     return output;
 }
+
+#if NIXBENCH_TEST_SESSION_CORE
+static struct nb_privsep_output runtime_output(void)
+{
+    const struct nb_privsep_output output = {
+        .logical_width = 320,
+        .logical_height = 200,
+        .pixel_width = 320,
+        .pixel_height = 200,
+        .refresh_millihertz = 60000,
+        .stride = 1280,
+        .frame_bytes = 256000,
+        .format = NB_PRIVSEP_PIXEL_FORMAT_XRGB8888
+    };
+
+    return output;
+}
+#endif
 
 static void test_host_proxy(void)
 {
@@ -264,6 +293,112 @@ static void test_host_proxy(void)
     CHECK(event.data.pointer_motion.x == 2);
     CHECK(event.data.pointer_motion.y == 1);
 
+    /* A helper can reacquire the VT before the core has completed release. */
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_SUSPEND;
+    message.data.suspend.generation = 3;
+    message.data.suspend.milliseconds = 40;
+    CHECK(send_helper_message(sockets[1], helper_sequence++, &message));
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_RESUME;
+    message.data.ready.generation = 3;
+    message.data.ready.output = tiny_output();
+    CHECK(send_helper_message(sockets[1], helper_sequence++, &message));
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_POINTER_MOTION;
+    message.data.pointer_motion.generation = 3;
+    message.data.pointer_motion.milliseconds = 41;
+    message.data.pointer_motion.x = 1;
+    message.data.pointer_motion.y = 1;
+    CHECK(send_helper_message(sockets[1], helper_sequence++, &message));
+    CHECK(nb_host_wait_event(host, 1000, &event) ==
+          NB_HOST_EVENT_STATUS_AVAILABLE);
+    CHECK(event.type == NB_HOST_EVENT_CONSOLE_RELEASE_REQUESTED);
+    CHECK(nb_host_get_state(host) == NB_HOST_STATE_RELEASE_PENDING);
+    CHECK(nb_host_complete_console_release(host) == NB_HOST_RESULT_OK);
+    CHECK(nb_host_get_state(host) == NB_HOST_STATE_ACQUIRE_PENDING);
+    CHECK(nb_host_poll_event(host, &event) ==
+          NB_HOST_EVENT_STATUS_AVAILABLE);
+    CHECK(event.type == NB_HOST_EVENT_CONSOLE_ACQUIRE_REQUESTED);
+    CHECK(nb_host_complete_console_acquire(host) == NB_HOST_RESULT_OK);
+    CHECK(nb_host_get_state(host) == NB_HOST_STATE_ACTIVE);
+    CHECK(nb_host_poll_event(host, &event) == NB_HOST_EVENT_STATUS_EMPTY);
+
+    /* The inverse race is deferred until the local acquire is complete. */
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_SUSPEND;
+    message.data.suspend.generation = 4;
+    message.data.suspend.milliseconds = 50;
+    CHECK(send_helper_message(sockets[1], helper_sequence++, &message));
+    CHECK(nb_host_wait_event(host, 1000, &event) ==
+          NB_HOST_EVENT_STATUS_AVAILABLE);
+    CHECK(event.type == NB_HOST_EVENT_CONSOLE_RELEASE_REQUESTED);
+    CHECK(nb_host_complete_console_release(host) == NB_HOST_RESULT_OK);
+    CHECK(nb_host_get_state(host) == NB_HOST_STATE_SUSPENDED);
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_RESUME;
+    message.data.ready.generation = 4;
+    message.data.ready.output = tiny_output();
+    CHECK(send_helper_message(sockets[1], helper_sequence++, &message));
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_SUSPEND;
+    message.data.suspend.generation = 5;
+    message.data.suspend.milliseconds = 51;
+    CHECK(send_helper_message(sockets[1], helper_sequence++, &message));
+    CHECK(nb_host_wait_event(host, 1000, &event) ==
+          NB_HOST_EVENT_STATUS_AVAILABLE);
+    CHECK(event.type == NB_HOST_EVENT_CONSOLE_ACQUIRE_REQUESTED);
+    CHECK(nb_host_get_state(host) == NB_HOST_STATE_ACQUIRE_PENDING);
+    CHECK(nb_host_complete_console_acquire(host) == NB_HOST_RESULT_OK);
+    CHECK(nb_host_get_state(host) == NB_HOST_STATE_RELEASE_PENDING);
+    CHECK(nb_host_poll_event(host, &event) ==
+          NB_HOST_EVENT_STATUS_AVAILABLE);
+    CHECK(event.type == NB_HOST_EVENT_CONSOLE_RELEASE_REQUESTED);
+    CHECK(nb_host_complete_console_release(host) == NB_HOST_RESULT_OK);
+    CHECK(nb_host_get_state(host) == NB_HOST_STATE_SUSPENDED);
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_RESUME;
+    message.data.ready.generation = 5;
+    message.data.ready.output = tiny_output();
+    CHECK(send_helper_message(sockets[1], helper_sequence++, &message));
+    CHECK(nb_host_wait_event(host, 1000, &event) ==
+          NB_HOST_EVENT_STATUS_AVAILABLE);
+    CHECK(event.type == NB_HOST_EVENT_CONSOLE_ACQUIRE_REQUESTED);
+    CHECK(nb_host_complete_console_acquire(host) == NB_HOST_RESULT_OK);
+    CHECK(nb_host_get_state(host) == NB_HOST_STATE_ACTIVE);
+
+    /* Saturated queued input must not hide a following VT release. */
+    for (index = 0; index < 96; ++index) {
+        memset(&message, 0, sizeof(message));
+        message.type = NB_PRIVSEP_MESSAGE_POINTER_MOTION;
+        message.data.pointer_motion.generation = 5;
+        message.data.pointer_motion.milliseconds = 60 + index;
+        message.data.pointer_motion.x = (int32_t)(index % 3);
+        message.data.pointer_motion.y = (int32_t)(index % 2);
+        CHECK(send_helper_message(sockets[1], helper_sequence++, &message));
+    }
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_SUSPEND;
+    message.data.suspend.generation = 6;
+    message.data.suspend.milliseconds = 200;
+    CHECK(send_helper_message(sockets[1], helper_sequence++, &message));
+    CHECK(nb_host_wait_event(host, 1000, &event) ==
+          NB_HOST_EVENT_STATUS_AVAILABLE);
+    CHECK(event.type == NB_HOST_EVENT_CONSOLE_RELEASE_REQUESTED);
+    CHECK(nb_host_complete_console_release(host) == NB_HOST_RESULT_OK);
+    CHECK(nb_host_get_state(host) == NB_HOST_STATE_SUSPENDED);
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_RESUME;
+    message.data.ready.generation = 6;
+    message.data.ready.output = tiny_output();
+    CHECK(send_helper_message(sockets[1], helper_sequence++, &message));
+    CHECK(nb_host_wait_event(host, 1000, &event) ==
+          NB_HOST_EVENT_STATUS_AVAILABLE);
+    CHECK(event.type == NB_HOST_EVENT_CONSOLE_ACQUIRE_REQUESTED);
+    CHECK(nb_host_complete_console_acquire(host) == NB_HOST_RESULT_OK);
+    CHECK(nb_host_get_state(host) == NB_HOST_STATE_ACTIVE);
+    CHECK(nb_host_poll_event(host, &event) == NB_HOST_EVENT_STATUS_EMPTY);
+
     CHECK(nb_host_privsep_client_request_shutdown(
         host, UINT64_C(0xaabbccddeeff0011)));
     CHECK(nb_host_poll_event(host, &event) == NB_HOST_EVENT_STATUS_EMPTY);
@@ -273,20 +408,227 @@ static void test_host_proxy(void)
     memset(&message, 0, sizeof(message));
     message.type = NB_PRIVSEP_MESSAGE_SHUTDOWN_ACCEPTED;
     message.data.token = UINT64_C(0xaabbccddeeff0011);
+    {
+        struct nb_privsep_message ping;
+
+        memset(&ping, 0, sizeof(ping));
+        ping.type = NB_PRIVSEP_MESSAGE_PING;
+        ping.data.token = UINT64_C(0x9988776655443322);
+        CHECK(send_helper_message(sockets[1], helper_sequence++, &ping));
+    }
     CHECK(send_helper_message(sockets[1], helper_sequence++, &message));
     CHECK(nb_host_wait_event(host, 1000, &event) ==
           NB_HOST_EVENT_STATUS_AVAILABLE);
     CHECK(event.type == NB_HOST_EVENT_QUIT);
+    {
+        struct pollfd descriptor = {
+            .fd = sockets[1],
+            .events = POLLIN,
+            .revents = 0
+        };
+        int poll_result;
+
+        do {
+            poll_result = poll(&descriptor, 1, 50);
+        } while (poll_result < 0 && errno == EINTR);
+        CHECK(poll_result == 0);
+    }
 
     nb_host_destroy(host);
     (void)close(sockets[1]);
 }
 
-int main(void)
+static void test_shutdown_acknowledgement_before_eof(void)
 {
+    int sockets[2] = {-1, -1};
+    struct wire_reader reader;
+    struct nb_privsep_message message;
+    struct nb_host_event event;
+    struct nb_host *host;
+    const uint64_t token = UINT64_C(0x123456789abcdef0);
+
+    memset(&reader, 0, sizeof(reader));
+    nb_privsep_parser_init(&reader.parser, NB_PRIVSEP_ENDPOINT_CORE);
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    if (sockets[0] < 0 || sockets[1] < 0) {
+        return;
+    }
+    host = nb_host_privsep_client_create(sockets[0]);
+    CHECK(host != NULL);
+    if (host == NULL) {
+        (void)close(sockets[0]);
+        (void)close(sockets[1]);
+        return;
+    }
+    CHECK(nb_host_poll_event(host, &event) == NB_HOST_EVENT_STATUS_EMPTY);
+    CHECK(receive_core_message(sockets[1], &reader, &message));
+    CHECK(message.type == NB_PRIVSEP_MESSAGE_CORE_HELLO);
+    CHECK(nb_host_privsep_client_request_shutdown(host, token));
+    CHECK(nb_host_poll_event(host, &event) == NB_HOST_EVENT_STATUS_EMPTY);
+    CHECK(receive_core_message(sockets[1], &reader, &message));
+    CHECK(message.type == NB_PRIVSEP_MESSAGE_SHUTDOWN_REQUEST);
+    CHECK(message.data.token == token);
+
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_SHUTDOWN_ACCEPTED;
+    message.data.token = token;
+    CHECK(send_helper_message(sockets[1], 1, &message));
+    CHECK(close(sockets[1]) == 0);
+    sockets[1] = -1;
+    CHECK(nb_host_wait_event(host, 1000, &event) ==
+          NB_HOST_EVENT_STATUS_AVAILABLE);
+    CHECK(event.type == NB_HOST_EVENT_QUIT);
+    CHECK(nb_host_get_state(host) != NB_HOST_STATE_FAILED);
+
+    nb_host_destroy(host);
+}
+
+#if NIXBENCH_TEST_SESSION_CORE
+static void test_session_core_with_fake_helper(const char *application_path)
+{
+    int sockets[2] = {-1, -1};
+    struct wire_reader reader;
+    struct nb_privsep_message message;
+    const struct nb_privsep_output output = runtime_output();
+    uint64_t helper_sequence = 1;
+    uint64_t frame_serial = 0;
+    uint64_t shutdown_token = 0;
+    uint32_t received = 0;
+    pid_t child;
+    int child_status = 0;
+    bool committed = false;
+    bool shutdown_requested = false;
+
+    memset(&reader, 0, sizeof(reader));
+    nb_privsep_parser_init(&reader.parser, NB_PRIVSEP_ENDPOINT_CORE);
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    if (sockets[0] < 0 || sockets[1] < 0) {
+        return;
+    }
+    child = fork();
+    CHECK(child >= 0);
+    if (child < 0) {
+        (void)close(sockets[0]);
+        (void)close(sockets[1]);
+        return;
+    }
+    if (child == 0) {
+        int result;
+
+        (void)close(sockets[1]);
+        result = nb_session_core_run(sockets[0], application_path);
+        _exit(result);
+    }
+    (void)close(sockets[0]);
+    sockets[0] = -1;
+
+    CHECK(receive_core_message(sockets[1], &reader, &message));
+    CHECK(message.type == NB_PRIVSEP_MESSAGE_CORE_HELLO);
+    CHECK(message.data.credentials.process_id == (uint32_t)child);
+
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_READY;
+    message.data.ready.generation = 1;
+    message.data.ready.output = output;
+    CHECK(send_helper_message(sockets[1], helper_sequence++, &message));
+
+    while (!committed) {
+        CHECK(receive_core_message(sockets[1], &reader, &message));
+        if (message.type == NB_PRIVSEP_MESSAGE_FRAME_BEGIN) {
+            CHECK(frame_serial == 0);
+            CHECK(message.data.frame_begin.generation == 1);
+            CHECK(message.data.frame_begin.frame_bytes == output.frame_bytes);
+            frame_serial = message.data.frame_begin.serial;
+            received = 0;
+        } else if (message.type == NB_PRIVSEP_MESSAGE_FRAME_DATA) {
+            CHECK(frame_serial != 0);
+            CHECK(message.data.frame_data.generation == 1);
+            CHECK(message.data.frame_data.serial == frame_serial);
+            CHECK(message.data.frame_data.offset == received);
+            received += message.data.frame_data.size;
+            CHECK(received <= output.frame_bytes);
+        } else if (message.type == NB_PRIVSEP_MESSAGE_FRAME_COMMIT) {
+            CHECK(message.data.frame_reference.generation == 1);
+            CHECK(message.data.frame_reference.serial == frame_serial);
+            CHECK(received == output.frame_bytes);
+            committed = true;
+        } else {
+            CHECK(false);
+            break;
+        }
+    }
+
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_KEY;
+    message.data.key.generation = 1;
+    message.data.key.milliseconds = 101;
+    (void)snprintf(message.data.key.xkb_key_name,
+                   sizeof(message.data.key.xkb_key_name),
+                   "ESC");
+    message.data.key.pressed = true;
+    CHECK(send_helper_message(sockets[1], helper_sequence++, &message));
+
+    {
+        struct pollfd descriptor = {
+            .fd = sockets[1],
+            .events = POLLIN,
+            .revents = 0
+        };
+        int poll_result;
+
+        do {
+            poll_result = poll(&descriptor, 1, 100);
+        } while (poll_result < 0 && errno == EINTR);
+        /* A quit request must not overtake its accepted, incomplete frame. */
+        CHECK(poll_result == 0);
+    }
+
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_FRAME_COMPLETE;
+    message.data.frame_complete.generation = 1;
+    message.data.frame_complete.serial = frame_serial;
+    message.data.frame_complete.milliseconds = 102;
+    CHECK(send_helper_message(sockets[1], helper_sequence++, &message));
+
+    while (!shutdown_requested) {
+        CHECK(receive_core_message(sockets[1], &reader, &message));
+        if (message.type == NB_PRIVSEP_MESSAGE_SHUTDOWN_REQUEST) {
+            CHECK(message.data.token != 0);
+            shutdown_token = message.data.token;
+            shutdown_requested = true;
+        } else {
+            CHECK(message.type == NB_PRIVSEP_MESSAGE_PONG);
+        }
+    }
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_SHUTDOWN_ACCEPTED;
+    message.data.token = shutdown_token;
+    CHECK(send_helper_message(sockets[1], helper_sequence++, &message));
+
+    while (waitpid(child, &child_status, 0) < 0 && errno == EINTR) {
+    }
+    (void)close(sockets[1]);
+    CHECK(WIFEXITED(child_status));
+    CHECK(WEXITSTATUS(child_status) == 0);
+}
+#endif
+
+int main(int argc, char *argv[])
+{
+#if NIXBENCH_TEST_SESSION_CORE
+    const char *application_path = argc > 1 ? argv[1] : "/bin/true";
+#else
+    (void)argc;
+    (void)argv;
+#endif
+
     CHECK(nb_host_privsep_client_create(-1) == NULL);
     CHECK(nb_host_privsep_client_creation_error()[0] != '\0');
     test_host_proxy();
+    test_shutdown_acknowledgement_before_eof();
+#if NIXBENCH_TEST_SESSION_CORE
+    test_session_core_with_fake_helper(application_path);
+#endif
 
     if (failures != 0) {
         fprintf(stderr, "session-core tests: %d failure(s)\n", failures);

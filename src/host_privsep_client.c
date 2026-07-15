@@ -82,14 +82,19 @@ struct nb_host_privsep_client_context {
     struct nb_privsep_client_frame frame;
     struct nb_host_output output;
     uint64_t generation;
+    uint64_t suspend_milliseconds;
+    uint64_t resume_milliseconds;
     uint64_t next_sequence;
     uint64_t shutdown_token;
     enum nb_host_state state;
     int system_error;
     char error[NB_PRIVSEP_CLIENT_ERROR_CAPACITY];
     bool has_output;
+    bool helper_active;
     bool hello_sent;
     bool shutdown_requested;
+    bool shutdown_message_sent;
+    bool shutdown_accepted;
     bool failure_event_pending;
     bool failed;
 };
@@ -214,6 +219,78 @@ static bool push_event(struct nb_host_privsep_client_context *context,
     return true;
 }
 
+static bool event_is_input(const struct nb_host_event *event)
+{
+    return event->type == NB_HOST_EVENT_POINTER_MOTION ||
+           event->type == NB_HOST_EVENT_POINTER_BUTTON ||
+           event->type == NB_HOST_EVENT_POINTER_LEAVE ||
+           event->type == NB_HOST_EVENT_KEY;
+}
+
+static bool discard_oldest_queued_input(
+    struct nb_host_privsep_client_context *context)
+{
+    size_t index;
+
+    for (index = 0; index < context->event_count; ++index) {
+        const size_t candidate =
+            (context->event_head + index) %
+            NB_PRIVSEP_CLIENT_EVENT_CAPACITY;
+        size_t shift;
+
+        if (!event_is_input(&context->events[candidate])) {
+            continue;
+        }
+        for (shift = index; shift + 1 < context->event_count; ++shift) {
+            const size_t destination =
+                (context->event_head + shift) %
+                NB_PRIVSEP_CLIENT_EVENT_CAPACITY;
+            const size_t source =
+                (context->event_head + shift + 1) %
+                NB_PRIVSEP_CLIENT_EVENT_CAPACITY;
+
+            context->events[destination] = context->events[source];
+        }
+        --context->event_count;
+        return true;
+    }
+    return false;
+}
+
+static bool push_input_event(
+    struct nb_host_privsep_client_context *context,
+    const struct nb_host_event *event)
+{
+    if (context->event_count >= NB_PRIVSEP_CLIENT_EVENT_CAPACITY) {
+        if (!discard_oldest_queued_input(context)) {
+            return true;
+        }
+    }
+    return push_event(context, event);
+}
+
+static void discard_queued_input(
+    struct nb_host_privsep_client_context *context)
+{
+    size_t read_index;
+    size_t write_index = context->event_head;
+    size_t kept = 0;
+
+    for (read_index = 0; read_index < context->event_count; ++read_index) {
+        const size_t source =
+            (context->event_head + read_index) %
+            NB_PRIVSEP_CLIENT_EVENT_CAPACITY;
+
+        if (!event_is_input(&context->events[source])) {
+            context->events[write_index] = context->events[source];
+            write_index =
+                (write_index + 1) % NB_PRIVSEP_CLIENT_EVENT_CAPACITY;
+            ++kept;
+        }
+    }
+    context->event_count = kept;
+}
+
 static bool queue_control(
     struct nb_host_privsep_client_context *context,
     const struct nb_privsep_message *message)
@@ -302,6 +379,17 @@ static bool stage_next_message(
                              NB_PRIVSEP_CLIENT_WIRE_CONTROL);
     }
 
+    if (context->shutdown_requested &&
+        !context->shutdown_message_sent &&
+        context->frame.phase == NB_PRIVSEP_CLIENT_FRAME_NONE) {
+        memset(&message, 0, sizeof(message));
+        message.type = NB_PRIVSEP_MESSAGE_SHUTDOWN_REQUEST;
+        message.data.token = context->shutdown_token;
+        return stage_message(context,
+                             &message,
+                             NB_PRIVSEP_CLIENT_WIRE_CONTROL);
+    }
+
     memset(&message, 0, sizeof(message));
     if (context->frame.phase == NB_PRIVSEP_CLIENT_FRAME_BEGIN) {
         message.type = NB_PRIVSEP_MESSAGE_FRAME_BEGIN;
@@ -364,6 +452,8 @@ static void complete_staged_message(
     if (kind == NB_PRIVSEP_CLIENT_WIRE_CONTROL) {
         if (type == NB_PRIVSEP_MESSAGE_CORE_HELLO) {
             context->hello_sent = true;
+        } else if (type == NB_PRIVSEP_MESSAGE_SHUTDOWN_REQUEST) {
+            context->shutdown_message_sent = true;
         }
         return;
     }
@@ -498,9 +588,18 @@ static bool input_state_accepts(
     const struct nb_host_privsep_client_context *context,
     uint64_t generation)
 {
-    return generation_matches(context, generation) &&
+    return context->helper_active &&
+           generation_matches(context, generation) &&
            (context->state == NB_HOST_STATE_ACTIVE ||
             context->state == NB_HOST_STATE_ACQUIRE_PENDING);
+}
+
+static bool input_message_is_valid(
+    const struct nb_host_privsep_client_context *context,
+    uint64_t generation)
+{
+    return context->helper_active &&
+           generation_matches(context, generation);
 }
 
 static bool coordinates_are_valid(
@@ -524,6 +623,7 @@ static bool handle_ready(struct nb_host_privsep_client_context *context,
     }
     context->generation = message->data.ready.generation;
     context->has_output = true;
+    context->helper_active = true;
     context->state = NB_HOST_STATE_ACTIVE;
     memset(&event, 0, sizeof(event));
     event.type = NB_HOST_EVENT_OUTPUT_CHANGED;
@@ -539,7 +639,7 @@ static bool handle_suspend(struct nb_host_privsep_client_context *context,
     const uint64_t abandoned =
         message->data.suspend.abandoned_frame_serial;
 
-    if (context->state != NB_HOST_STATE_ACTIVE ||
+    if (!context->helper_active ||
         context->generation == UINT64_MAX ||
         message->data.suspend.generation != context->generation + 1 ||
         (abandoned != 0 &&
@@ -548,11 +648,21 @@ static bool handle_suspend(struct nb_host_privsep_client_context *context,
         return false;
     }
     request_frame_abort(context);
+    discard_queued_input(context);
     context->generation = message->data.suspend.generation;
+    context->suspend_milliseconds = message->data.suspend.milliseconds;
+    context->helper_active = false;
+    if (context->state == NB_HOST_STATE_RELEASE_PENDING ||
+        context->state == NB_HOST_STATE_ACQUIRE_PENDING) {
+        return true;
+    }
+    if (context->state != NB_HOST_STATE_ACTIVE) {
+        return false;
+    }
     context->state = NB_HOST_STATE_RELEASE_PENDING;
     memset(&event, 0, sizeof(event));
     event.type = NB_HOST_EVENT_CONSOLE_RELEASE_REQUESTED;
-    event.milliseconds = message->data.suspend.milliseconds;
+    event.milliseconds = context->suspend_milliseconds;
     return push_event(context, &event);
 }
 
@@ -562,17 +672,25 @@ static bool handle_resume(struct nb_host_privsep_client_context *context,
     struct nb_host_output output;
     struct nb_host_event event;
 
-    if (context->state != NB_HOST_STATE_SUSPENDED ||
+    if (context->helper_active ||
         message->data.ready.generation != context->generation ||
         !output_to_host(&message->data.ready.output, &output)) {
         return false;
     }
-    context->generation = message->data.ready.generation;
+    context->helper_active = true;
+    context->resume_milliseconds = monotonic_milliseconds();
     context->output = output;
+    if (context->state == NB_HOST_STATE_RELEASE_PENDING ||
+        context->state == NB_HOST_STATE_ACQUIRE_PENDING) {
+        return true;
+    }
+    if (context->state != NB_HOST_STATE_SUSPENDED) {
+        return false;
+    }
     context->state = NB_HOST_STATE_ACQUIRE_PENDING;
     memset(&event, 0, sizeof(event));
     event.type = NB_HOST_EVENT_CONSOLE_ACQUIRE_REQUESTED;
-    event.milliseconds = monotonic_milliseconds();
+    event.milliseconds = context->resume_milliseconds;
     return push_event(context, &event);
 }
 
@@ -582,19 +700,23 @@ static bool handle_pointer_motion(
 {
     struct nb_host_event event;
 
-    if (!input_state_accepts(context,
-                             message->data.pointer_motion.generation) ||
+    if (!input_message_is_valid(
+            context, message->data.pointer_motion.generation) ||
         !coordinates_are_valid(context,
                                message->data.pointer_motion.x,
                                message->data.pointer_motion.y)) {
         return false;
+    }
+    if (!input_state_accepts(
+            context, message->data.pointer_motion.generation)) {
+        return true;
     }
     memset(&event, 0, sizeof(event));
     event.type = NB_HOST_EVENT_POINTER_MOTION;
     event.milliseconds = message->data.pointer_motion.milliseconds;
     event.data.pointer_motion.x = message->data.pointer_motion.x;
     event.data.pointer_motion.y = message->data.pointer_motion.y;
-    return push_event(context, &event);
+    return push_input_event(context, &event);
 }
 
 static bool handle_pointer_button(
@@ -603,12 +725,16 @@ static bool handle_pointer_button(
 {
     struct nb_host_event event;
 
-    if (!input_state_accepts(context,
-                             message->data.pointer_button.generation) ||
+    if (!input_message_is_valid(
+            context, message->data.pointer_button.generation) ||
         !coordinates_are_valid(context,
                                message->data.pointer_button.x,
                                message->data.pointer_button.y)) {
         return false;
+    }
+    if (!input_state_accepts(
+            context, message->data.pointer_button.generation)) {
+        return true;
     }
     memset(&event, 0, sizeof(event));
     event.type = NB_HOST_EVENT_POINTER_BUTTON;
@@ -619,7 +745,7 @@ static bool handle_pointer_button(
         (enum nb_host_pointer_button)message->data.pointer_button.button;
     event.data.pointer_button.pressed =
         message->data.pointer_button.pressed;
-    return push_event(context, &event);
+    return push_input_event(context, &event);
 }
 
 static bool handle_key(struct nb_host_privsep_client_context *context,
@@ -627,8 +753,11 @@ static bool handle_key(struct nb_host_privsep_client_context *context,
 {
     struct nb_host_event event;
 
-    if (!input_state_accepts(context, message->data.key.generation)) {
+    if (!input_message_is_valid(context, message->data.key.generation)) {
         return false;
+    }
+    if (!input_state_accepts(context, message->data.key.generation)) {
+        return true;
     }
     memset(&event, 0, sizeof(event));
     event.type = NB_HOST_EVENT_KEY;
@@ -638,7 +767,7 @@ static bool handle_key(struct nb_host_privsep_client_context *context,
            sizeof(event.data.key.xkb_key_name));
     event.data.key.pressed = message->data.key.pressed;
     event.data.key.repeat = message->data.key.repeat;
-    return push_event(context, &event);
+    return push_input_event(context, &event);
 }
 
 static bool handle_frame_complete(
@@ -667,6 +796,12 @@ static bool handle_ping(struct nb_host_privsep_client_context *context,
 {
     struct nb_privsep_message response;
 
+    if (context->shutdown_message_sent ||
+        (context->wire_kind == NB_PRIVSEP_CLIENT_WIRE_CONTROL &&
+         context->wire_type == NB_PRIVSEP_MESSAGE_SHUTDOWN_REQUEST)) {
+        return true;
+    }
+
     memset(&response, 0, sizeof(response));
     response.type = NB_PRIVSEP_MESSAGE_PONG;
     response.data.token = message->data.token;
@@ -680,9 +815,13 @@ static bool handle_shutdown_accepted(
     struct nb_host_event event;
 
     if (!context->shutdown_requested ||
+        !context->shutdown_message_sent ||
         message->data.token != context->shutdown_token) {
         return false;
     }
+    context->shutdown_accepted = true;
+    context->event_head = 0;
+    context->event_count = 0;
     memset(&event, 0, sizeof(event));
     event.type = NB_HOST_EVENT_QUIT;
     event.milliseconds = monotonic_milliseconds();
@@ -735,9 +874,8 @@ static bool ingest_input(struct nb_host_privsep_client_context *context)
 {
     unsigned int messages = 0;
 
-    while (!context->failed &&
-           messages < NB_PRIVSEP_CLIENT_IO_MESSAGE_BUDGET &&
-           context->event_count < NB_PRIVSEP_CLIENT_EVENT_CAPACITY) {
+    while (!context->failed && !context->shutdown_accepted &&
+           messages < NB_PRIVSEP_CLIENT_IO_MESSAGE_BUDGET) {
         struct nb_privsep_message message;
         enum nb_privsep_parse_status status;
         size_t consumed;
@@ -792,6 +930,9 @@ static bool ingest_input(struct nb_host_privsep_client_context *context)
                 }
                 return false;
             }
+            if (context->shutdown_accepted) {
+                return true;
+            }
         } else if (consumed == 0) {
             fail_client(context,
                         "Privsep parser made no progress",
@@ -830,15 +971,16 @@ static enum nb_host_event_status service_nonblocking(
     struct nb_host_privsep_client_context *context,
     struct nb_host_event *event)
 {
-    enum nb_host_event_status status = pop_event(context, event);
+    enum nb_host_event_status status;
 
-    if (status != NB_HOST_EVENT_STATUS_EMPTY) {
-        return status;
+    if (context->failure_event_pending) {
+        return pop_event(context, event);
     }
     (void)ingest_input(context);
     (void)flush_output(context);
     (void)ingest_input(context);
-    return pop_event(context, event);
+    status = pop_event(context, event);
+    return status;
 }
 
 static bool privsep_get_output(const void *opaque,
@@ -922,6 +1064,9 @@ static enum nb_host_event_status privsep_wait_event(
         descriptor.events = POLLIN;
         if (context->wire_kind != NB_PRIVSEP_CLIENT_WIRE_NONE ||
             context->control_count != 0 ||
+            (context->shutdown_requested &&
+             !context->shutdown_message_sent &&
+             context->frame.phase == NB_PRIVSEP_CLIENT_FRAME_NONE) ||
             (context->frame.phase != NB_PRIVSEP_CLIENT_FRAME_NONE &&
              context->frame.phase !=
                  NB_PRIVSEP_CLIENT_FRAME_WAIT_COMPLETE)) {
@@ -1022,7 +1167,19 @@ static enum nb_host_result privsep_complete_console_release(void *opaque)
     if (context->state != NB_HOST_STATE_RELEASE_PENDING) {
         return NB_HOST_RESULT_INVALID_STATE;
     }
-    context->state = NB_HOST_STATE_SUSPENDED;
+    if (context->helper_active) {
+        struct nb_host_event event;
+
+        context->state = NB_HOST_STATE_ACQUIRE_PENDING;
+        memset(&event, 0, sizeof(event));
+        event.type = NB_HOST_EVENT_CONSOLE_ACQUIRE_REQUESTED;
+        event.milliseconds = context->resume_milliseconds;
+        if (!push_event(context, &event)) {
+            return NB_HOST_RESULT_ERROR;
+        }
+    } else {
+        context->state = NB_HOST_STATE_SUSPENDED;
+    }
     return NB_HOST_RESULT_OK;
 }
 
@@ -1036,7 +1193,19 @@ static enum nb_host_result privsep_complete_console_acquire(void *opaque)
     if (context->state != NB_HOST_STATE_ACQUIRE_PENDING) {
         return NB_HOST_RESULT_INVALID_STATE;
     }
-    context->state = NB_HOST_STATE_ACTIVE;
+    if (!context->helper_active) {
+        struct nb_host_event event;
+
+        context->state = NB_HOST_STATE_RELEASE_PENDING;
+        memset(&event, 0, sizeof(event));
+        event.type = NB_HOST_EVENT_CONSOLE_RELEASE_REQUESTED;
+        event.milliseconds = context->suspend_milliseconds;
+        if (!push_event(context, &event)) {
+            return NB_HOST_RESULT_ERROR;
+        }
+    } else {
+        context->state = NB_HOST_STATE_ACTIVE;
+    }
     return NB_HOST_RESULT_OK;
 }
 
@@ -1199,16 +1368,8 @@ bool nb_host_privsep_client_request_shutdown(struct nb_host *host,
 {
     struct nb_host_privsep_client_context *context =
         nb_host_backend_context(host, &privsep_client_operations);
-    struct nb_privsep_message message;
-
     if (context == NULL || context->failed || token == 0 ||
         context->shutdown_requested || !context->hello_sent) {
-        return false;
-    }
-    memset(&message, 0, sizeof(message));
-    message.type = NB_PRIVSEP_MESSAGE_SHUTDOWN_REQUEST;
-    message.data.token = token;
-    if (!queue_control(context, &message)) {
         return false;
     }
     context->shutdown_requested = true;
