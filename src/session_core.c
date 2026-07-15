@@ -880,9 +880,12 @@ int nb_session_core_run(int protocol_descriptor,
     status = core.shutdown_requested ? 0 : 1;
 
 cleanup:
+    /* Keep the private Wayland display alive while the tracked client exits.
+     * Destroying the compositor first turns an orderly session shutdown into
+     * a misleading client-side connection error. */
+    stop_application(&core);
     nb_desktop_runtime_destroy(core.desktop);
     core.desktop = NULL;
-    stop_application(&core);
     if (!destroy_runtime_directory(&core.runtime_directory)) {
         status = 1;
     }

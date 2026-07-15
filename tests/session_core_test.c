@@ -496,10 +496,58 @@ static void prior_sigterm_handler(int signal_number)
     (void)signal_number;
 }
 
+static bool application_result_matches(const char *path,
+                                       const char *expected)
+{
+    char buffer[32];
+    const size_t expected_size = strlen(expected);
+    size_t used = 0;
+    int descriptor = open(path, O_RDONLY);
+    bool matched;
+
+    if (descriptor < 0) {
+        return false;
+    }
+    while (used < sizeof(buffer)) {
+        const ssize_t count = read(descriptor,
+                                   buffer + used,
+                                   sizeof(buffer) - used);
+
+        if (count > 0) {
+            used += (size_t)count;
+        } else if (count == 0) {
+            break;
+        } else if (errno != EINTR) {
+            (void)close(descriptor);
+            return false;
+        }
+    }
+    matched = close(descriptor) == 0 &&
+              used == expected_size &&
+              memcmp(buffer, expected, expected_size) == 0;
+    return matched;
+}
+
+static bool wait_for_application_ready(const char *path)
+{
+    unsigned int attempt;
+
+    for (attempt = 0; attempt < 200; ++attempt) {
+        if (application_result_matches(path, "ready\n")) {
+            return true;
+        }
+        (void)poll(NULL, 0, 10);
+    }
+    return false;
+}
+
 static void test_session_core_with_fake_helper(
     const char *application_path,
-    enum session_core_shutdown_trigger trigger)
+    enum session_core_shutdown_trigger trigger,
+    bool verify_application_cleanup)
 {
+    char application_result[] =
+        "/tmp/nixbench-session-app-result-XXXXXX";
     int sockets[2] = {-1, -1};
     struct wire_reader reader;
     struct nb_privsep_message message;
@@ -512,15 +560,27 @@ static void test_session_core_with_fake_helper(
     int child_status = 0;
     bool committed = false;
     bool shutdown_requested = false;
+    int temporary;
 
     if (geteuid() == 0) {
         puts("session-core runtime integration skipped for uid 0");
         return;
     }
+    if (verify_application_cleanup) {
+        temporary = mkstemp(application_result);
+        CHECK(temporary >= 0);
+        if (temporary < 0) {
+            return;
+        }
+        CHECK(close(temporary) == 0);
+    }
     memset(&reader, 0, sizeof(reader));
     nb_privsep_parser_init(&reader.parser, NB_PRIVSEP_ENDPOINT_CORE);
     CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
     if (sockets[0] < 0 || sockets[1] < 0) {
+        if (verify_application_cleanup) {
+            (void)unlink(application_result);
+        }
         return;
     }
     child = fork();
@@ -528,6 +588,9 @@ static void test_session_core_with_fake_helper(
     if (child < 0) {
         (void)close(sockets[0]);
         (void)close(sockets[1]);
+        if (verify_application_cleanup) {
+            (void)unlink(application_result);
+        }
         return;
     }
     if (child == 0) {
@@ -535,6 +598,12 @@ static void test_session_core_with_fake_helper(
         int result;
 
         (void)close(sockets[1]);
+        if (verify_application_cleanup &&
+            setenv("NIXBENCH_TEST_APPLICATION_RESULT",
+                   application_result,
+                   1) != 0) {
+            _exit(123);
+        }
         if (trigger == SESSION_CORE_SHUTDOWN_BY_SIGTERM) {
             memset(&prior_action, 0, sizeof(prior_action));
             prior_action.sa_handler = prior_sigterm_handler;
@@ -599,6 +668,10 @@ static void test_session_core_with_fake_helper(
         }
     }
 
+    if (verify_application_cleanup) {
+        CHECK(wait_for_application_ready(application_result));
+    }
+
     if (trigger == SESSION_CORE_SHUTDOWN_BY_SIGTERM) {
         CHECK(kill(child, SIGTERM) == 0);
     } else {
@@ -655,6 +728,11 @@ static void test_session_core_with_fake_helper(
     (void)close(sockets[1]);
     CHECK(WIFEXITED(child_status));
     CHECK(WEXITSTATUS(child_status) == 0);
+    if (verify_application_cleanup) {
+        CHECK(application_result_matches(application_result,
+                                         "socket-alive\n"));
+        (void)unlink(application_result);
+    }
 }
 
 static void test_session_core_rejects_unlaunchable_application(void)
@@ -720,6 +798,7 @@ int main(int argc, char *argv[])
 {
 #if NIXBENCH_TEST_SESSION_CORE
     const char *application_path = argc > 1 ? argv[1] : "/usr/bin/true";
+    const bool verify_application_cleanup = argc > 1;
 #else
     (void)argc;
     (void)argv;
@@ -732,10 +811,12 @@ int main(int argc, char *argv[])
 #if NIXBENCH_TEST_SESSION_CORE
     test_session_core_with_fake_helper(
         application_path,
-        SESSION_CORE_SHUTDOWN_BY_ESCAPE);
+        SESSION_CORE_SHUTDOWN_BY_ESCAPE,
+        verify_application_cleanup);
     test_session_core_with_fake_helper(
         application_path,
-        SESSION_CORE_SHUTDOWN_BY_SIGTERM);
+        SESSION_CORE_SHUTDOWN_BY_SIGTERM,
+        verify_application_cleanup);
     test_session_core_rejects_unlaunchable_application();
 #endif
 

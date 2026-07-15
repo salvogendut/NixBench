@@ -956,6 +956,14 @@ if(BUILD_TESTING)
   nixbench_configure_c_target(nixbench_privsep_helper_tests)
 
   if(UNIX)
+    if(NIXBENCH_WAYLAND_ENABLED)
+      add_executable(
+        nixbench_session_test_application
+        tests/session_test_application.c
+      )
+      nixbench_configure_c_target(nixbench_session_test_application)
+    endif()
+
     add_executable(
       nixbench_session_credentials_tests
       tests/session_credentials_test.c
@@ -1206,10 +1214,19 @@ if(BUILD_TESTING)
       NAME nixbench.session.credentials
       COMMAND nixbench_session_credentials_tests
     )
-    add_test(
-      NAME nixbench.privsep.core-host
-      COMMAND nixbench_host_privsep_client_tests
-    )
+    if(NIXBENCH_WAYLAND_ENABLED)
+      add_test(
+        NAME nixbench.privsep.core-host
+        COMMAND
+          nixbench_host_privsep_client_tests
+          $<TARGET_FILE:nixbench_session_test_application>
+      )
+    else()
+      add_test(
+        NAME nixbench.privsep.core-host
+        COMMAND nixbench_host_privsep_client_tests
+      )
+    endif()
     add_test(
       NAME nixbench.wsdisplay.recovery-record
       COMMAND nixbench_wsdisplay_recovery_tests
