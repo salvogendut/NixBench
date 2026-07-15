@@ -809,6 +809,93 @@ if(NIXBENCH_NIXCLOCK_AVAILABLE)
   install(TARGETS nixclock RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 endif()
 
+if(NIXBENCH_BUILD_WSDISPLAY_SESSION)
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+    message(
+      FATAL_ERROR
+      "The privilege-separated wsdisplay session is supported only on NetBSD"
+    )
+  endif()
+  if(NOT NIXBENCH_WAYLAND_ENABLED)
+    message(
+      FATAL_ERROR
+      "The wsdisplay session requires NIXBENCH_WAYLAND=ON"
+    )
+  endif()
+  if(NOT NIXBENCH_NIXCLOCK_AVAILABLE)
+    message(
+      FATAL_ERROR
+      "The wsdisplay session requires Wayland client development files and "
+      "NIXBENCH_BUILD_APPLICATIONS=ON so NixClock can be launched"
+    )
+  endif()
+endif()
+
+if(
+  UNIX
+  AND NIXBENCH_WAYLAND_ENABLED
+  AND (BUILD_TESTING OR NIXBENCH_BUILD_WSDISPLAY_SESSION)
+)
+  add_library(nixbench_session_core STATIC src/session_core.c)
+  target_include_directories(
+    nixbench_session_core
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  )
+  target_link_libraries(
+    nixbench_session_core
+    PRIVATE nixbench_desktop_runtime nixbench_host_privsep_client
+  )
+  nixbench_configure_c_target(nixbench_session_core)
+endif()
+
+if(UNIX AND (BUILD_TESTING OR NIXBENCH_BUILD_WSDISPLAY_SESSION))
+  add_library(
+    nixbench_wsdisplay_session_runner STATIC
+    src/wsdisplay_session_runner.c
+  )
+  target_include_directories(
+    nixbench_wsdisplay_session_runner
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  )
+  if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+    target_link_libraries(
+      nixbench_wsdisplay_session_runner
+      PRIVATE
+        nixbench_host_wsdisplay
+        nixbench_privsep_helper
+        nixbench_session_credentials
+        nixbench_wscons_input
+        nixbench_wsdisplay_console_session
+        nixbench_wsdisplay_recovery
+    )
+  endif()
+  nixbench_configure_c_target(nixbench_wsdisplay_session_runner)
+endif()
+
+if(NIXBENCH_BUILD_WSDISPLAY_SESSION)
+  add_executable(nixbench-session-core src/session_core_main.c)
+  target_link_libraries(
+    nixbench-session-core
+    PRIVATE nixbench_session_core
+  )
+  nixbench_configure_c_target(nixbench-session-core)
+
+  add_executable(
+    nixbench-wsdisplay-session
+    src/wsdisplay_session_main.c
+  )
+  target_link_libraries(
+    nixbench-wsdisplay-session
+    PRIVATE nixbench_wsdisplay_session_runner
+  )
+  nixbench_configure_c_target(nixbench-wsdisplay-session)
+
+  install(
+    TARGETS nixbench-session-core nixbench-wsdisplay-session
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+  )
+endif()
+
 if(BUILD_TESTING)
   add_executable(
     nixbench_backend_probe_tests
@@ -887,6 +974,21 @@ if(BUILD_TESTING)
       nixbench_host_privsep_client_tests
       PRIVATE nixbench_host_privsep_client
     )
+    if(NIXBENCH_WAYLAND_ENABLED)
+      target_compile_definitions(
+        nixbench_host_privsep_client_tests
+        PRIVATE NIXBENCH_TEST_SESSION_CORE=1
+      )
+      target_link_libraries(
+        nixbench_host_privsep_client_tests
+        PRIVATE nixbench_session_core
+      )
+    else()
+      target_compile_definitions(
+        nixbench_host_privsep_client_tests
+        PRIVATE NIXBENCH_TEST_SESSION_CORE=0
+      )
+    endif()
     nixbench_configure_c_target(nixbench_host_privsep_client_tests)
 
     add_executable(
@@ -898,6 +1000,16 @@ if(BUILD_TESTING)
       PRIVATE nixbench_wsdisplay_recovery
     )
     nixbench_configure_c_target(nixbench_wsdisplay_recovery_tests)
+
+    add_executable(
+      nixbench_wsdisplay_session_tests
+      tests/wsdisplay_session_test.c
+    )
+    target_link_libraries(
+      nixbench_wsdisplay_session_tests
+      PRIVATE nixbench_wsdisplay_session_runner
+    )
+    nixbench_configure_c_target(nixbench_wsdisplay_session_tests)
   endif()
 
   add_executable(nixbench_host_sdl_tests tests/host_sdl_test.c)
@@ -1102,6 +1214,10 @@ if(BUILD_TESTING)
       NAME nixbench.wsdisplay.recovery-record
       COMMAND nixbench_wsdisplay_recovery_tests
     )
+    add_test(
+      NAME nixbench.wsdisplay.session-options
+      COMMAND nixbench_wsdisplay_session_tests
+    )
   endif()
   add_test(NAME nixbench.host.sdl COMMAND nixbench_host_sdl_tests)
   set_tests_properties(
@@ -1137,6 +1253,19 @@ if(BUILD_TESTING)
     add_test(
       NAME nixbench.wsdisplay.smoke-help
       COMMAND nixbench-wsdisplay-smoke --help
+    )
+  endif()
+  if(NIXBENCH_BUILD_WSDISPLAY_SESSION)
+    add_test(
+      NAME nixbench.wsdisplay.session-help
+      COMMAND nixbench-wsdisplay-session --help
+    )
+  endif()
+  if(UNIX)
+    add_test(
+      NAME nixbench.wsdisplay.session-runner-script-syntax
+      COMMAND
+        sh -n "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-wsdisplay-session.sh"
     )
   endif()
   if(UNIX AND EXISTS "/usr/bin/timeout")

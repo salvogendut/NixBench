@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #if NIXBENCH_TEST_SESSION_CORE
@@ -499,6 +500,10 @@ static void test_session_core_with_fake_helper(const char *application_path)
     bool committed = false;
     bool shutdown_requested = false;
 
+    if (geteuid() == 0) {
+        puts("session-core runtime integration skipped for uid 0");
+        return;
+    }
     memset(&reader, 0, sizeof(reader));
     nb_privsep_parser_init(&reader.parser, NB_PRIVSEP_ENDPOINT_CORE);
     CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
@@ -611,6 +616,64 @@ static void test_session_core_with_fake_helper(const char *application_path)
     CHECK(WIFEXITED(child_status));
     CHECK(WEXITSTATUS(child_status) == 0);
 }
+
+static void test_session_core_rejects_unlaunchable_application(void)
+{
+    char missing_path[] = "/tmp/nixbench-missing-application-XXXXXX";
+    int temporary;
+    int sockets[2] = {-1, -1};
+    struct wire_reader reader;
+    struct nb_privsep_message message;
+    const struct nb_privsep_output output = runtime_output();
+    pid_t child;
+    int child_status = 0;
+
+    if (geteuid() == 0) {
+        return;
+    }
+    temporary = mkstemp(missing_path);
+    CHECK(temporary >= 0);
+    if (temporary < 0) {
+        return;
+    }
+    CHECK(close(temporary) == 0);
+    CHECK(unlink(missing_path) == 0);
+
+    memset(&reader, 0, sizeof(reader));
+    nb_privsep_parser_init(&reader.parser, NB_PRIVSEP_ENDPOINT_CORE);
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    if (sockets[0] < 0 || sockets[1] < 0) {
+        return;
+    }
+    child = fork();
+    CHECK(child >= 0);
+    if (child < 0) {
+        (void)close(sockets[0]);
+        (void)close(sockets[1]);
+        return;
+    }
+    if (child == 0) {
+        const int result = nb_session_core_run(sockets[0], missing_path);
+
+        _exit(result);
+    }
+    (void)close(sockets[0]);
+    sockets[0] = -1;
+    CHECK(receive_core_message(sockets[1], &reader, &message));
+    CHECK(message.type == NB_PRIVSEP_MESSAGE_CORE_HELLO);
+
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_READY;
+    message.data.ready.generation = 1;
+    message.data.ready.output = output;
+    CHECK(send_helper_message(sockets[1], 1, &message));
+
+    while (waitpid(child, &child_status, 0) < 0 && errno == EINTR) {
+    }
+    (void)close(sockets[1]);
+    CHECK(WIFEXITED(child_status));
+    CHECK(WEXITSTATUS(child_status) == 1);
+}
 #endif
 
 int main(int argc, char *argv[])
@@ -628,6 +691,7 @@ int main(int argc, char *argv[])
     test_shutdown_acknowledgement_before_eof();
 #if NIXBENCH_TEST_SESSION_CORE
     test_session_core_with_fake_helper(application_path);
+    test_session_core_rejects_unlaunchable_application();
 #endif
 
     if (failures != 0) {
