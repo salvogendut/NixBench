@@ -471,6 +471,19 @@ path; application arguments are not supported yet:
 NIXBENCH_APPLICATION=/usr/pkg/bin/midori ./tools/run-wsdisplay-session.sh
 ```
 
+An empty-history Midori Speed Dial has no shortcut tiles and can look like an
+unpainted gray page. Use the fixed offline content wrapper to verify WebKit
+page pixels without application arguments, keyboard text entry, or a network:
+
+```sh
+NIXBENCH_APPLICATION="$PWD/tools/run-midori-content-probe.sh" \
+  ./tools/run-wsdisplay-session.sh
+```
+
+It selects WebKitGTK 2.36's software-compositing compatibility path and
+executes the installed Midori with a built-in `data:` page that visibly names
+the NixBench WebKit probe.
+
 For a post-map Midori crash that occurs only on the physical standalone host,
 the same selector can launch a fixed, ordinary-user debugger wrapper:
 
@@ -495,11 +508,13 @@ the selected file. The core executes it without a shell only after its verified
 credential drop. The application receives `XDG_RUNTIME_DIR` and
 `WAYLAND_DISPLAY`; the core also sets `EGL_PLATFORM=wayland` explicitly so
 NetBSD libEGL cannot choose its X11 default in this X-free session. These
-values are established after the sanitized credential drop rather than
-inherited from the privileged launcher. The application receives no console,
-recovery, or helper descriptor. This is privilege separation, not application
-sandboxing: the client retains the invoking user's home-directory and group
-access.
+values and the fixed standalone identity `XDG_CURRENT_DESKTOP=NixBench`,
+`XDG_SESSION_DESKTOP=NixBench`, `XDG_SESSION_TYPE=wayland`,
+`GDK_BACKEND=wayland`, and `LANG=C.UTF-8` are established after the sanitized
+credential drop rather than inherited from the privileged launcher. The
+application receives no console, recovery, or helper descriptor. This is
+privilege separation, not application sandboxing: the client retains the
+invoking user's home-directory and group access.
 
 The initial Midori run is diagnostic and should use only blank or trusted
 content. A toplevel may appear before the browser is fully usable. Missing
@@ -594,9 +609,18 @@ frame callbacks. WebKit reports that EGL initialization itself is unavailable
 with the base-system library and takes a software path. The next physical run
 did display the Speed Dial window, but the tracked Midori UI process later
 terminated with a second `SIGSEGV`. A matching device-free run survived for 20
-seconds while emitting the same non-fatal warnings, leaving a physical output,
-timing, or input-dependent fault. The fixed ordinary-user GDB wrapper is the
-next diagnostic gate.
+seconds while emitting the same non-fatal warnings. The fixed ordinary-user
+GDB wrapper then remained stable on the physical console and Midori exited
+normally through its close gadget, validating forced software compositing as
+the compatibility path.
+
+A later device-free capture loaded a fixed `data:` page and showed both the
+complete browser chrome and large WebKit-rendered HTML text. Midori's original
+gray Speed Dial was its normal empty-history page, not a missing surface or
+composition failure. The dedicated content wrapper above makes the same check
+available on the physical console. Missing user-session D-Bus services still
+produce non-fatal accessibility and GApplication diagnostics; one supervised
+ordinary-user D-Bus session for the complete desktop remains future work.
 
 The older all-root smoke harness remains useful only for bounded research and
 does not become an application launcher.

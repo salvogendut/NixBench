@@ -194,8 +194,14 @@ frames. The core now establishes this fixed application environment after the
 credential drop. The next physical run displayed Midori's real Speed Dial
 window, then exposed a second UI-process `SIGSEGV`. An equivalent 20-second
 offscreen run did not reproduce it despite matching the application warnings.
-A fixed ordinary-user GDB launcher now captures that physical-only backtrace
-without enabling core dumps or changing process-group containment.
+A fixed ordinary-user GDB launcher remained stable on the physical console;
+Midori exited normally through its close gadget under forced software
+compositing. A later offscreen capture loaded a deterministic `data:` page and
+showed WebKit-rendered HTML text, proving that the original empty-looking Speed
+Dial was simply its fresh-history state. A dedicated ordinary-user content
+wrapper now exposes that same offline test on the physical console. Standalone
+clients also receive an explicit NixBench/Wayland XDG session identity, GTK
+backend, and UTF-8 locale. Per-session D-Bus supervision remains future work.
 Malformed protocol, harder supervisor/worker failures, and repeated-session
 validation remain. Installation and launching managed by the desktop,
 popup/subsurface/data transfer, broader toolkit trials, and application-menu

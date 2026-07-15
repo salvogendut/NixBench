@@ -223,6 +223,14 @@ with one absolute executable path. Arguments are not accepted yet:
 NIXBENCH_APPLICATION=/usr/pkg/bin/midori ./tools/run-wsdisplay-session.sh
 ```
 
+A fixed-argument compatibility wrapper can itself be selected when a probe
+needs deterministic arguments without broadening the privileged protocol. For
+example, `tools/run-midori-content-probe.sh` finally executes Midori with a
+built-in offline page after the same credential drop. The ordinary-user core
+sets the private Wayland address, Wayland EGL and GTK backends, NixBench XDG
+desktop/session identity, and UTF-8 locale before launching any selected
+client; none of those values are inherited from `sudo`.
+
 The script checks that file before `sudo` as the ordinary user. The privileged
 launcher rejects an unbounded, relative, trailing-slash, or control-character
 path, but deliberately does not resolve, open, or test the selected file. It

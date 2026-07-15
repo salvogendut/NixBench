@@ -727,6 +727,14 @@ static void test_session_core_with_fake_helper(
             setenv("EGL_PLATFORM", "x11", 1) != 0) {
             _exit(119);
         }
+        if (verify_application_cleanup &&
+            (setenv("XDG_CURRENT_DESKTOP", "HostDesktop", 1) != 0 ||
+             setenv("XDG_SESSION_DESKTOP", "HostDesktop", 1) != 0 ||
+             setenv("XDG_SESSION_TYPE", "x11", 1) != 0 ||
+             setenv("GDK_BACKEND", "x11", 1) != 0 ||
+             setenv("LANG", "C", 1) != 0)) {
+            _exit(118);
+        }
         if (trigger == SESSION_CORE_SHUTDOWN_BY_SIGTERM) {
             memset(&prior_action, 0, sizeof(prior_action));
             prior_action.sa_handler = prior_sigterm_handler;

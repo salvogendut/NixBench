@@ -443,6 +443,20 @@ compatibility probe. Arguments are not supported yet:
 NIXBENCH_APPLICATION=/usr/pkg/bin/midori ./tools/run-wsdisplay-session.sh
 ```
 
+Midori's fresh Speed Dial contains no tiles until browsing history exists, so
+its page area can look empty even when WebKit is rendering correctly. Load a
+fixed, offline HTML page to verify browser content without general text input
+or network access:
+
+```sh
+NIXBENCH_APPLICATION="$PWD/tools/run-midori-content-probe.sh" \
+  ./tools/run-wsdisplay-session.sh
+```
+
+The NetBSD/pkgsrc-specific wrapper selects WebKitGTK 2.36's software
+compositing path and finally executes `/usr/pkg/bin/midori` with a built-in
+`data:` URL. The page visibly identifies itself as the NixBench WebKit probe.
+
 If Midori maps its Speed Dial window and later crashes, capture the
 physical-session-only fault without enabling core dumps:
 
@@ -610,9 +624,20 @@ now sets that fixed platform for every client after the credential drop.
 The next physical run confirmed that the real Speed Dial window is visible,
 but the Midori UI process later encountered a second `SIGSEGV`. An equivalent
 device-free run remained alive for 20 seconds despite the same EGL, Cairo,
-accessibility, and D-Bus warnings, so those diagnostics alone are not the
-cause. The ordinary-user GDB launcher above is the next gate; it preserves the
-supervised cleanup path while collecting the physical-only backtrace.
+accessibility, and D-Bus warnings. The ordinary-user GDB launcher then remained
+stable on the physical console and Midori exited normally through its close
+gadget, proving that the software-compositing run avoids the second fault.
+
+An SDL offscreen capture with a fixed `data:` page subsequently showed the
+complete Midori chrome and large rendered HTML text. The apparently blank
+Speed Dial was therefore its valid empty-history state, not missing NixBench
+surface pixels. The dedicated content-probe wrapper above makes that result
+repeatable on the physical console. Standalone clients also receive
+`XDG_CURRENT_DESKTOP=NixBench`, `XDG_SESSION_DESKTOP=NixBench`,
+`XDG_SESSION_TYPE=wayland`, `GDK_BACKEND=wayland`, and `LANG=C.UTF-8` alongside
+the private display and EGL selection. A supervised per-session D-Bus remains
+future work; the current accessibility and GApplication bus warnings are
+non-fatal.
 
 The opt-in `wsdisplay` presentation harness must run as root. Start with its
 query-only preflight:

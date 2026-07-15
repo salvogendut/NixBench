@@ -223,7 +223,12 @@ static bool launch_application(struct nb_session_core *core,
         setenv("WAYLAND_DISPLAY",
                core->runtime_directory.display_name,
                1) != 0 ||
-        setenv("EGL_PLATFORM", "wayland", 1) != 0) {
+        setenv("EGL_PLATFORM", "wayland", 1) != 0 ||
+        setenv("XDG_CURRENT_DESKTOP", "NixBench", 1) != 0 ||
+        setenv("XDG_SESSION_DESKTOP", "NixBench", 1) != 0 ||
+        setenv("XDG_SESSION_TYPE", "wayland", 1) != 0 ||
+        setenv("GDK_BACKEND", "wayland", 1) != 0 ||
+        setenv("LANG", "C.UTF-8", 1) != 0) {
         fputs("Could not prepare the initial application environment\n",
               stderr);
         return false;

@@ -64,6 +64,11 @@ int main(void)
     const char *runtime = getenv("XDG_RUNTIME_DIR");
     const char *display = getenv("WAYLAND_DISPLAY");
     const char *egl_platform = getenv("EGL_PLATFORM");
+    const char *current_desktop = getenv("XDG_CURRENT_DESKTOP");
+    const char *session_desktop = getenv("XDG_SESSION_DESKTOP");
+    const char *session_type = getenv("XDG_SESSION_TYPE");
+    const char *gdk_backend = getenv("GDK_BACKEND");
+    const char *locale = getenv("LANG");
     const char *result_path =
         getenv("NIXBENCH_TEST_APPLICATION_RESULT");
     struct sigaction action;
@@ -78,6 +83,13 @@ int main(void)
     if (runtime == NULL || runtime[0] == '\0' ||
         display == NULL || display[0] == '\0' ||
         egl_platform == NULL || strcmp(egl_platform, "wayland") != 0 ||
+        current_desktop == NULL ||
+        strcmp(current_desktop, "NixBench") != 0 ||
+        session_desktop == NULL ||
+        strcmp(session_desktop, "NixBench") != 0 ||
+        session_type == NULL || strcmp(session_type, "wayland") != 0 ||
+        gdk_backend == NULL || strcmp(gdk_backend, "wayland") != 0 ||
+        locale == NULL || strcmp(locale, "C.UTF-8") != 0 ||
         result_path == NULL || result_path[0] == '\0') {
         return 2;
     }
