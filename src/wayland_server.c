@@ -25,8 +25,6 @@ enum {
     NB_WAYLAND_SUBCOMPOSITOR_VERSION = 1,
     NB_WAYLAND_XDG_SHELL_VERSION = 1,
     NB_WAYLAND_MAX_FRAME_CALLBACKS = 16,
-    NB_WAYLAND_INITIAL_CONTENT_WIDTH = 560,
-    NB_WAYLAND_INITIAL_CONTENT_HEIGHT = 300,
     NB_WAYLAND_INITIAL_X = 120,
     NB_WAYLAND_INITIAL_Y = 78,
     NB_WAYLAND_CASCADE = 28,
@@ -1693,16 +1691,29 @@ static void map_surface(struct nb_wayland_surface *surface)
 static void send_initial_configure(struct nb_wayland_surface *surface)
 {
     struct wl_array states;
+    int width;
+    int height;
     uint32_t serial;
 
     if (surface->xdg_surface_resource == NULL) {
         return;
     }
     if (surface->toplevel_resource != NULL) {
+        width = surface->server->output_width -
+                (2 * NB_WINDOW_BORDER_WIDTH);
+        height = surface->server->output_height -
+                 (2 * NB_WINDOW_BORDER_WIDTH) -
+                 NB_WINDOW_TITLE_HEIGHT - NB_WINDOW_FOOTER_HEIGHT;
+        if (width < NB_WINDOW_MIN_WIDTH) {
+            width = NB_WINDOW_MIN_WIDTH;
+        }
+        if (height < NB_WINDOW_MIN_HEIGHT) {
+            height = NB_WINDOW_MIN_HEIGHT;
+        }
         wl_array_init(&states);
         xdg_toplevel_send_configure(surface->toplevel_resource,
-                                    NB_WAYLAND_INITIAL_CONTENT_WIDTH,
-                                    NB_WAYLAND_INITIAL_CONTENT_HEIGHT,
+                                    width,
+                                    height,
                                     &states);
         wl_array_release(&states);
     } else if (surface->popup_resource != NULL &&
