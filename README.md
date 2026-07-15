@@ -661,11 +661,9 @@ implemented" protocol response disconnected the client, after which Midori
 terminated with `SIGSEGV`; this was a compositor protocol gap, not a failed
 letter mapping. NixBench now implements the basic positioner/popup lifecycle,
 accepts GTK's valid pre-map popup grab, CPU-composites the popup, and safely
-dismisses descendants when their parent disappears. Grabbed popups now take
-keyboard focus while they are mapped and restore focus to their parent when
-they go away. The NetBSD device-free suite passes all 50 tests with this
-slice. A physical Control+L, type/edit, and Return retry remains the
-acceptance gate.
+dismisses descendants when their parent disappears. The NetBSD device-free
+suite passes all 50 tests with this slice. A physical Control+L, type/edit,
+and Return retry remains the acceptance gate.
 
 The opt-in `wsdisplay` presentation harness must run as root. Start with its
 query-only preflight:

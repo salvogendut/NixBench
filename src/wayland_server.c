@@ -214,7 +214,6 @@ static const struct nixbench_application_menu_manager_v1_interface
     application_menu_manager_implementation;
 static const struct nixbench_application_menu_v1_interface
     application_menu_implementation;
-static bool surface_is_mapped(const struct nb_wayland_surface *surface);
 
 static void copy_text(char *destination,
                       size_t capacity,
@@ -1024,30 +1023,6 @@ static void clear_surface_keyboard_state(
     }
 }
 
-static void restore_keyboard_focus_after_popup_dismissal(
-    struct nb_wayland_surface *surface,
-    bool send_events)
-{
-    struct nb_wayland_server *server;
-    struct nb_wayland_surface *parent;
-
-    if (surface == NULL || surface->server == NULL) {
-        return;
-    }
-    server = surface->server;
-    if (server->keyboard_focus != surface) {
-        return;
-    }
-    parent = surface->popup_parent;
-    if (send_events && parent != NULL && surface_is_mapped(parent)) {
-        (void)keyboard_change_focus(server, parent);
-    } else if (send_events) {
-        (void)keyboard_change_focus(server, NULL);
-    } else {
-        server->keyboard_focus = NULL;
-    }
-}
-
 static bool initialize_keyboard_state(struct nb_wayland_server *server)
 {
     server->xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
@@ -1507,8 +1482,7 @@ static void dismiss_popup_descendants(
                 xdg_popup_send_popup_done(popup->popup_resource);
             }
         }
-        restore_keyboard_focus_after_popup_dismissal(popup,
-                                                     send_client_events);
+        clear_surface_keyboard_state(popup, send_client_events);
         clear_surface_pointer_state(popup, send_client_events);
         clear_pending_attach(popup);
         destroy_frame_resources(popup);
@@ -1943,11 +1917,6 @@ static void surface_commit(struct wl_client *client,
             } else {
                 if (!was_mapped) {
                     surface_send_output_membership(surface, true);
-                }
-                if (surface->popup_grabbed) {
-                    restore_keyboard_focus_after_popup_dismissal(surface,
-                                                                  false);
-                    (void)keyboard_change_focus(surface->server, surface);
                 }
                 surface_tree_changed(surface, false);
             }
@@ -2991,7 +2960,6 @@ static void popup_resource_destroyed(struct wl_resource *resource)
     }
     root = surface_root_toplevel(surface);
     dismiss_popup_descendants(surface, false);
-    restore_keyboard_focus_after_popup_dismissal(surface, false);
     clear_surface_pointer_state(surface, false);
     clear_surface_keyboard_state(surface, false);
     clear_pending_attach(surface);

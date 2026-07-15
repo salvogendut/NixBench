@@ -1687,10 +1687,6 @@ static void test_wayland_surface_lifecycle(void)
     REQUIRE(pump_barrier(server, display));
     CHECK(client.application_menu_command_count == 2);
     CHECK(client.application_menu_command == APPLICATION_COMMAND_QUIT);
-    CHECK(nb_wayland_server_keyboard_focus(server, window));
-    REQUIRE(pump_barrier(server, display));
-    CHECK(client.keyboard_enter_count == 1);
-    CHECK(client.keyboard_enter_surface == surface);
     REQUIRE(nb_wayland_server_surface_snapshot(server,
                                                window,
                                                &snapshot));
@@ -1817,10 +1813,6 @@ static void test_wayland_surface_lifecycle(void)
     popup = NULL;
     REQUIRE(pump_barrier(server, display));
     CHECK(popup_client.done_count == 0);
-    CHECK(client.keyboard_leave_count == 2);
-    CHECK(client.keyboard_leave_surface == popup_surface);
-    CHECK(client.keyboard_enter_count == 3);
-    CHECK(client.keyboard_enter_surface == surface);
     CHECK(nb_wayland_server_window_count(server) == 1);
     CHECK(nb_wayland_server_window_at(server, 0) == window);
     CHECK(nb_wayland_server_owns_window(server, window));
