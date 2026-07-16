@@ -46,10 +46,8 @@ enum {
     WAYLAND_MENU_SOURCE = 2,
     OUTPUT_WIDTH = 1024,
     OUTPUT_HEIGHT = 640,
-    INITIAL_WIDTH = OUTPUT_WIDTH - (2 * NB_WINDOW_BORDER_WIDTH),
-    INITIAL_HEIGHT = OUTPUT_HEIGHT - NB_MENU_BAR_HEIGHT -
-                     (2 * NB_WINDOW_BORDER_WIDTH) -
-                     NB_WINDOW_TITLE_HEIGHT - NB_WINDOW_FOOTER_HEIGHT,
+    INITIAL_WIDTH = 560,
+    INITIAL_HEIGHT = 300,
     POPUP_WIDTH = 160,
     POPUP_HEIGHT = 72,
     POPUP_EXPECTED_X = 27,
@@ -1548,8 +1546,8 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(client.toplevel_configure_count == 1);
     CHECK(client.surface_configure_count == 1);
     CHECK(client.configure_serial != 0);
-    CHECK(client.configured_width == INITIAL_WIDTH);
-    CHECK(client.configured_height == INITIAL_HEIGHT);
+    CHECK(client.configured_width == 0);
+    CHECK(client.configured_height == 0);
     CHECK(nb_wayland_server_window_count(server) == 0);
     CHECK(!nb_wayland_server_take_redraw(server));
 

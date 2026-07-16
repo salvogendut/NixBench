@@ -577,6 +577,18 @@ static void send_toplevel_configure(struct nb_wayland_surface *surface,
     xdg_surface_send_configure(surface->xdg_surface_resource, serial);
 }
 
+static void send_work_area_configure(struct nb_wayland_surface *surface)
+{
+    int width;
+    int height;
+
+    if (surface == NULL) {
+        return;
+    }
+    wayland_toplevel_content_size(surface->server, &width, &height);
+    send_toplevel_configure(surface, width, height);
+}
+
 #if NIXBENCH_HAS_WAYLAND_DECORATION
 static void send_decoration_configure(struct nb_wayland_surface *surface)
 {
@@ -1815,16 +1827,14 @@ static void map_surface(struct nb_wayland_surface *surface)
 
 static void send_initial_configure(struct nb_wayland_surface *surface)
 {
-    int width;
-    int height;
     uint32_t serial;
 
     if (surface->xdg_surface_resource == NULL) {
         return;
     }
     if (surface->toplevel_resource != NULL) {
-        wayland_toplevel_content_size(surface->server, &width, &height);
-        send_toplevel_configure(surface, width, height);
+        /* A zero size lets the client commit its preferred initial size. */
+        send_toplevel_configure(surface, 0, 0);
     } else if (surface->popup_resource != NULL &&
                !surface->popup_dismissed) {
         xdg_popup_send_configure(
@@ -3745,7 +3755,7 @@ static void xdg_toplevel_request_state(struct wl_client *client,
 
     (void)client;
     if (surface->configure_sent && surface->configured) {
-        send_initial_configure(surface);
+        send_work_area_configure(surface);
     }
 }
 
