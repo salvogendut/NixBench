@@ -383,7 +383,8 @@ bool nb_user_config_save(const char *path,
     }
     (void)snprintf(temporary_path, capacity, "%s.tmp.XXXXXX", path);
     descriptor = mkstemp(temporary_path);
-    if (descriptor < 0 || fchmod(descriptor, S_IRUSR | S_IWUSR) != 0) {
+    /* POSIX mkstemp creates the file with S_IRUSR | S_IWUSR. */
+    if (descriptor < 0) {
         set_error(error,
                   error_capacity,
                   "could not create configuration temporary file: %s",
