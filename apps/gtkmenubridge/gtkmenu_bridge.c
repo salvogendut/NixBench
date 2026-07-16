@@ -13,6 +13,10 @@
 
 #include "nixbench-application-menu-v1-client-protocol.h"
 
+#ifndef NB_WAYLAND_APPLICATION_MENU_VERSION
+#define NB_WAYLAND_APPLICATION_MENU_VERSION 1
+#endif
+
 enum {
     NB_GTK_MENU_ACTION_CAPACITY = 128,
     NB_GTK_MENU_COMMAND_CAPACITY = NB_MENU_MAX_MENUS * NB_MENU_MAX_ITEMS
@@ -358,14 +362,13 @@ static struct nb_gtk_menu_window_state *window_state_attach(
 static void activate_command(struct nb_gtk_menu_window_state *state,
                              const struct nb_gtk_menu_command_entry *entry)
 {
-    GtkWidget *widget;
-
     if (state == NULL || entry == NULL) {
         return;
     }
-    widget = GTK_WIDGET(state->window);
     if (entry->scope == NB_GTK_MENU_ACTION_SCOPE_WINDOW) {
-        gtk_widget_activate_action(widget, entry->action, entry->target);
+        g_warning("NixBench GTK menu bridge does not yet route window-scoped "
+                  "actions: %s",
+                  entry->action);
         return;
     }
     g_action_group_activate_action(G_ACTION_GROUP(state->bridge->application),
@@ -419,10 +422,8 @@ static gboolean append_menu_item(struct nb_gtk_menu_window_state *state,
     GVariant *label;
     GVariant *action;
     GVariant *target;
-    GVariant *toggle_state;
     const char *label_text = NULL;
     const char *action_text = NULL;
-    gboolean checked = FALSE;
     struct nb_gtk_menu_command_entry *entry;
 
     if (state->command_count >= NB_GTK_MENU_COMMAND_CAPACITY) {
@@ -441,19 +442,12 @@ static gboolean append_menu_item(struct nb_gtk_menu_window_state *state,
                                                    index,
                                                    G_MENU_ATTRIBUTE_TARGET,
                                                    NULL);
-    toggle_state = g_menu_model_get_item_attribute_value(model,
-                                                         index,
-                                                         G_MENU_ATTRIBUTE_TOGGLE_STATE,
-                                                         NULL);
 
     if (label != NULL) {
         label_text = g_variant_get_string(label, NULL);
     }
     if (action != NULL) {
         action_text = g_variant_get_string(action, NULL);
-    }
-    if (toggle_state != NULL && g_variant_is_of_type(toggle_state, G_VARIANT_TYPE_BOOLEAN)) {
-        checked = g_variant_get_boolean(toggle_state);
     }
     if (label_text == NULL || label_text[0] == '\0' ||
         action_text == NULL || action_text[0] == '\0') {
@@ -465,9 +459,6 @@ static gboolean append_menu_item(struct nb_gtk_menu_window_state *state,
         }
         if (target != NULL) {
             g_variant_unref(target);
-        }
-        if (toggle_state != NULL) {
-            g_variant_unref(toggle_state);
         }
         return FALSE;
     }
@@ -493,8 +484,7 @@ static gboolean append_menu_item(struct nb_gtk_menu_window_state *state,
         menu,
         label_text,
         entry->command,
-        NIXBENCH_APPLICATION_MENU_V1_ITEM_FLAGS_ENABLED |
-            (checked ? NIXBENCH_APPLICATION_MENU_V1_ITEM_FLAGS_CHECKED : 0));
+        NIXBENCH_APPLICATION_MENU_V1_ITEM_FLAGS_ENABLED);
 
     if (label != NULL) {
         g_variant_unref(label);
@@ -504,9 +494,6 @@ static gboolean append_menu_item(struct nb_gtk_menu_window_state *state,
     }
     if (target != NULL) {
         g_variant_unref(target);
-    }
-    if (toggle_state != NULL) {
-        g_variant_unref(toggle_state);
     }
     ++state->command_count;
     return TRUE;
