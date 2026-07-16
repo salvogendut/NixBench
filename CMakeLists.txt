@@ -894,7 +894,7 @@ elseif(
       set(NIXBENCH_GTK_MENU_BRIDGE_AVAILABLE TRUE)
       message(
         STATUS
-        "GTK menu bridge enabled (${NIXBENCH_GTK3_VERSION})"
+        "GTK menu bridge enabled"
       )
     elseif(NIXBENCH_GTK_MENU_BRIDGE STREQUAL "ON")
       message(
