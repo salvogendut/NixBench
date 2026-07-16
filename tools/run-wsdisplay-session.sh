@@ -225,7 +225,9 @@ if [ "$allow_local" -eq 1 ]; then
 LOCAL CONSOLE LAUNCH: once takeover begins, this terminal is unavailable until
 NixBench exits and restores it. Keep a separate SSH login open when possible;
 without one, there is no independent channel for the printed cancellation or
-manual recovery commands.
+manual recovery commands. Ctrl+Alt+Backspace is handled by the privileged
+device worker as an emergency request to terminate the session and restore the
+console, even when an application owns keyboard focus or the desktop is hung.
 EOF
 fi
 
@@ -353,7 +355,8 @@ nixbench-wsdisplay-session helper remains, then recover with:
 
 The session has no automatic deadline. The recovery record is retained until
 the core and helper have exited and the saved console state has been restored
-and independently verified.
+and independently verified. Ctrl+Alt+Backspace provides an emergency exit from
+the physical console; it is intercepted before input reaches the desktop core.
 EOF
 
 if [ "$installed_mode" -eq 0 ]; then

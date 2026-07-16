@@ -501,7 +501,11 @@ nixbench-session --local
 
 The supervisor and restoration protocol remain active, but a separate SSH
 login is still strongly recommended because the launching terminal is hidden
-during console takeover.
+during console takeover. The privileged device worker intercepts the physical
+Ctrl+Alt+Backspace chord before it can reach the desktop core. It closes raw
+input, terminates the ordinary-user session with bounded TERM/KILL escalation,
+and returns through the same verified console-restoration path, so the chord
+also works while a client has focus or the core is unresponsive.
 
 This follows pkgsrc's standard `${LOCALBASE}` layout; `/usr/pkg` is the
 default prefix. The source-tree script remains the build-and-test development

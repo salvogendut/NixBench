@@ -95,7 +95,10 @@ The privileged supervisor and device worker are collectively allowed to:
 - close input and unmap output before acknowledging a VT release;
 - reopen and revalidate devices after acquisition;
 - monitor the core, enforce heartbeat and termination grace periods, and
-  restore the saved console state after exit or failure.
+  restore the saved console state after exit or failure; and
+- intercept the fixed physical Ctrl+Alt+Backspace emergency chord, close raw
+  input, terminate the ordinary-user session with bounded escalation, and
+  enter that same verified restoration path without consulting the core.
 
 Neither root process is allowed to accept a device path, ioctl number, VT
 number, memory address, mapping range, command, executable path, or environment
@@ -154,7 +157,11 @@ reopens input, sends any output change, and requires a full replacement frame.
 EOF, malformed protocol, core exit, fatal signal, or heartbeat expiry all use
 the same idempotent restoration path. TERM and KILL escalation remains bounded.
 The recovery record is removed only after the core is reaped and every saved
-console property is independently verified.
+console property is independently verified. The privileged wscons worker also
+recognizes the physical Ctrl+Alt+Backspace chord before forwarding it to the
+core. It clears input ownership and drives bounded core cleanup plus that same
+restoration path, so it remains available regardless of Wayland focus or core
+responsiveness.
 
 The root recovery supervisor and root device worker remain trusted failure
 domains. The supervisor stays outside the desktop process tree, monitors the

@@ -303,7 +303,10 @@ reaped promptly, and independently verify every saved console property.
 `SIGPIPE` is supervised so a lost output channel cannot bypass teardown.
 Job-control stop signals also request shutdown rather than pausing the parent.
 The state file is removed only after restoration is verified and worker reap
-is confirmed.
+is confirmed. The physical Ctrl+Alt+Backspace chord is recognized in the
+privileged wscons worker before input forwarding. It closes raw input and
+drives bounded core cleanup plus the normal verified restoration path, so it
+remains usable regardless of Wayland focus or core responsiveness.
 
 `tools/run-wsdisplay-smoke.sh` configures, builds, tests, performs preflight,
 explicitly selects `--runtime-preview`, and verifies postflight state. It

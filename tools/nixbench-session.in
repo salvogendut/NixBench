@@ -21,6 +21,9 @@ launch applications from the global Applications menu.
   --local  Allow launch from the physical NetBSD console. A separate SSH
            recovery login remains strongly recommended.
 
+During takeover, Ctrl+Alt+Backspace requests emergency session termination and
+console restoration below the desktop core and focused applications.
+
 Environment:
   NIXBENCH_APPLICATION      Absolute executable to open at startup
   NIXBENCH_GTK_MENU_BRIDGE  Export GTK3 application menus (default: 1)
