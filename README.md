@@ -55,6 +55,7 @@ toolkits while NixBench owns window management and composition:
   and appear as NixBench-managed windows.
 - A small NixBench shell extension can carry desktop-specific integration such
   as an application's global menu model without replacing its widget toolkit.
+  The first GTK slice bridges `GtkApplication` menubars and `app-menu` models.
 - Xaw and other X11-only applications remain candidates for a later, optional
   Xwayland compatibility service.
 - Moving the outer display from SDL/Xorg to NetBSD KMS changes the physical
@@ -224,13 +225,14 @@ stable public API yet. The Wayland slice currently has one scale-1 logical
 output and no touch capability, pointer-axis scrolling, client cursor
 rendering, buffer scale/transform or input-region handling, subsurfaces,
 clipboard, accelerated buffers, resize negotiation,
-desktop-managed application launching, or general toolkit bridge for
+desktop-managed application launching, or a full toolkit bridge for
 application menus. Its popup support is deliberately narrow: full pointer
 routing into popups, outside-click dismissal policy, and positioner constraint
 adjustment are not implemented yet. NixClock exercises the first private
-application-menu protocol. Existing GTK/SDL Wayland clients are not supported
-yet; the standalone initial-application selector permits diagnostic
-compatibility probes that are expected to expose those missing protocols.
+application-menu protocol. Existing GTK/SDL Wayland clients are still only
+partially supported; the standalone initial-application selector permits
+diagnostic compatibility probes that are expected to expose the remaining
+gaps.
 NixBench also does not yet offer a supported production direct-console login
 session.
 
@@ -502,6 +504,8 @@ accelerated buffers, and generic GTK global-menu integration remain incomplete.
 
 Set `NIXBENCH_TRACE_WAYLAND=1` when invoking `./tools/run-wsdisplay-session.sh`
 if you need a client-side protocol trace for the first failing interaction.
+Set `NIXBENCH_GTK_MENU_BRIDGE=1` when running the GTK probes if you want them
+to load the optional NixBench GTK menu bridge.
 When rerunning tests after one of those probes, `./tools/run-clean-env.sh`
 clears the `NIXBENCH_*` launch variables first.
 

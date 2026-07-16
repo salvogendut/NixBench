@@ -844,6 +844,94 @@ if(NIXBENCH_BUILD_APPLICATIONS)
   endif()
 endif()
 
+set(
+  NIXBENCH_GTK_MENU_BRIDGE "AUTO"
+  CACHE STRING "Build the optional GTK3 menu bridge (AUTO, ON, or OFF)"
+)
+set_property(
+  CACHE NIXBENCH_GTK_MENU_BRIDGE PROPERTY STRINGS AUTO ON OFF
+)
+string(TOUPPER "${NIXBENCH_GTK_MENU_BRIDGE}" NIXBENCH_GTK_MENU_BRIDGE)
+set(
+  NIXBENCH_GTK_MENU_BRIDGE "${NIXBENCH_GTK_MENU_BRIDGE}"
+  CACHE STRING "Build the optional GTK3 menu bridge (AUTO, ON, or OFF)"
+  FORCE
+)
+
+if(
+  NOT NIXBENCH_GTK_MENU_BRIDGE STREQUAL "AUTO"
+  AND NOT NIXBENCH_GTK_MENU_BRIDGE STREQUAL "ON"
+  AND NOT NIXBENCH_GTK_MENU_BRIDGE STREQUAL "OFF"
+)
+  message(
+    FATAL_ERROR
+    "NIXBENCH_GTK_MENU_BRIDGE must be one of AUTO, ON, or OFF "
+    "(received '${NIXBENCH_GTK_MENU_BRIDGE}')"
+  )
+endif()
+
+set(NIXBENCH_GTK_MENU_BRIDGE_AVAILABLE FALSE)
+if(
+  NIXBENCH_WAYLAND_ENABLED
+  AND NIXBENCH_WAYLAND_CLIENT_AVAILABLE
+  AND NIXBENCH_GTK_MENU_BRIDGE STREQUAL "OFF"
+)
+  message(STATUS "GTK menu bridge disabled")
+elseif(
+  NIXBENCH_WAYLAND_ENABLED
+  AND NIXBENCH_WAYLAND_CLIENT_AVAILABLE
+  AND NIXBENCH_BUILD_APPLICATIONS
+)
+  find_package(PkgConfig QUIET)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(
+      NIXBENCH_GTK3
+      QUIET
+      gtk+-3.0
+      gdk-wayland-3.0
+    )
+    if(NIXBENCH_GTK3_FOUND)
+      set(NIXBENCH_GTK_MENU_BRIDGE_AVAILABLE TRUE)
+      message(
+        STATUS
+        "GTK menu bridge enabled (${NIXBENCH_GTK3_VERSION})"
+      )
+    elseif(NIXBENCH_GTK_MENU_BRIDGE STREQUAL "ON")
+      message(
+        FATAL_ERROR
+        "GTK menu bridge was requested, but gtk+-3.0 and gdk-wayland-3.0 "
+        "were not found"
+      )
+    else()
+      message(
+        STATUS
+        "GTK menu bridge unavailable: gtk+-3.0 and gdk-wayland-3.0 not found"
+      )
+    endif()
+  elseif(NIXBENCH_GTK_MENU_BRIDGE STREQUAL "ON")
+    message(
+      FATAL_ERROR
+      "GTK menu bridge was requested, but pkg-config is not available"
+    )
+  else()
+    message(
+      STATUS
+      "GTK menu bridge unavailable: pkg-config is not available"
+    )
+  endif()
+elseif(NIXBENCH_GTK_MENU_BRIDGE STREQUAL "ON")
+  message(
+    FATAL_ERROR
+    "GTK menu bridge requires Wayland client support and application builds"
+  )
+elseif(NOT NIXBENCH_GTK_MENU_BRIDGE STREQUAL "OFF")
+  message(
+    STATUS
+    "GTK menu bridge unavailable: currently requires the Wayland client "
+    "build and application targets"
+  )
+endif()
+
 set(NIXBENCH_NIXCLOCK_AVAILABLE FALSE)
 if(
   NIXBENCH_WAYLAND_ENABLED
@@ -913,6 +1001,42 @@ if(NIXBENCH_X11_AVAILABLE)
   )
   nixbench_configure_c_target(nixbench_x11_probe)
   install(TARGETS nixbench_x11_probe RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+endif()
+
+if(NIXBENCH_GTK_MENU_BRIDGE_AVAILABLE)
+  add_library(
+    nixbench_gtk_menu_bridge MODULE
+    apps/gtkmenubridge/gtkmenu_bridge.c
+    "${NIXBENCH_APPLICATION_MENU_PRIVATE_CODE}"
+  )
+  add_dependencies(nixbench_gtk_menu_bridge nixbench_wayland_protocol)
+  target_include_directories(
+    nixbench_gtk_menu_bridge
+    PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/src"
+      "${NIXBENCH_WAYLAND_GENERATED_DIR}"
+      "${NIXBENCH_WAYLAND_CLIENT_INCLUDE_DIR}"
+      ${NIXBENCH_GTK3_INCLUDE_DIRS}
+  )
+  target_compile_options(
+    nixbench_gtk_menu_bridge
+    PRIVATE ${NIXBENCH_GTK3_CFLAGS_OTHER}
+  )
+  target_link_directories(
+    nixbench_gtk_menu_bridge
+    PRIVATE ${NIXBENCH_GTK3_LIBRARY_DIRS}
+  )
+  target_link_libraries(
+    nixbench_gtk_menu_bridge
+    PRIVATE
+      "${NIXBENCH_WAYLAND_CLIENT_LIBRARY}"
+      ${NIXBENCH_GTK3_LIBRARIES}
+  )
+  nixbench_configure_c_target(nixbench_gtk_menu_bridge)
+  install(
+    TARGETS nixbench_gtk_menu_bridge
+    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/gtk-3.0/modules"
+  )
 endif()
 
 if(NIXBENCH_BUILD_WSDISPLAY_SESSION)

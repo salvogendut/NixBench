@@ -33,6 +33,10 @@ WEBKIT_DISABLE_COMPOSITING_MODE=1
 export WEBKIT_DISABLE_COMPOSITING_MODE
 GTK_CSD=0
 export GTK_CSD
+if [ "${NIXBENCH_GTK_MENU_BRIDGE:-0}" = 1 ]; then
+    GTK_MODULES=nixbench_gtk_menu_bridge${GTK_MODULES:+:$GTK_MODULES}
+    export GTK_MODULES
+fi
 XDG_CONFIG_HOME=$profile_root/config
 XDG_CACHE_HOME=$profile_root/cache
 XDG_DATA_HOME=$profile_root/data
