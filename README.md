@@ -491,6 +491,18 @@ bridge in `/usr/pkg/lib/gtk-3.0/modules`. Run the installed session with:
 nixbench-session
 ```
 
+The installed launcher normally requires SSH so a recovery channel remains
+available while it owns the console. To start it directly from a physical
+NetBSD console, use the explicit local-launch mode:
+
+```sh
+nixbench-session --local
+```
+
+The supervisor and restoration protocol remain active, but a separate SSH
+login is still strongly recommended because the launching terminal is hidden
+during console takeover.
+
 This follows pkgsrc's standard `${LOCALBASE}` layout; `/usr/pkg` is the
 default prefix. The source-tree script remains the build-and-test development
 harness.

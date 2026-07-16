@@ -16,6 +16,14 @@ if [ "$installed_mode" -eq 1 ]; then
 else
     staged_session=/var/run/nixbench-wsdisplay-session
 fi
+allow_local=${NIXBENCH_ALLOW_LOCAL:-0}
+case "$allow_local" in
+    0|1) ;;
+    *)
+        echo "nixbench standalone session: invalid local-launch mode" >&2
+        exit 1
+        ;;
+esac
 
 fail()
 {
@@ -117,8 +125,12 @@ else
 fi
 
 [ "$(uname -s)" = NetBSD ] || fail "this session is NetBSD-only"
-[ -n "${SSH_CONNECTION:-}" ] ||
-    fail "run this script over SSH while watching the physical console"
+if [ -z "${SSH_CONNECTION:-}" ] && [ "$allow_local" -ne 1 ]; then
+    fail "run over SSH, or use the installed nixbench-session --local command"
+fi
+if [ "$allow_local" -eq 1 ] && [ "$installed_mode" -ne 1 ]; then
+    fail "local launch is available only through the installed command"
+fi
 if [ "$installed_mode" -eq 0 ]; then
     command -v cmake >/dev/null 2>&1 || fail "cmake is not installed"
     command -v ctest >/dev/null 2>&1 || fail "ctest is not installed"
@@ -206,6 +218,16 @@ frame presentation, heartbeat, and restoration duties. The NixBench desktop,
 its private Wayland server, and applications run as your ordinary sudo user.
 They receive no framebuffer, keyboard, mouse, recovery, or VT descriptor.
 EOF
+
+if [ "$allow_local" -eq 1 ]; then
+    cat <<EOF
+
+LOCAL CONSOLE LAUNCH: once takeover begins, this terminal is unavailable until
+NixBench exits and restores it. Keep a separate SSH login open when possible;
+without one, there is no independent channel for the printed cancellation or
+manual recovery commands.
+EOF
+fi
 
 if [ -n "$application" ]; then
     cat <<EOF

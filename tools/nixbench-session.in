@@ -2,15 +2,24 @@
 
 set -eu
 
+if [ "$#" -gt 1 ]; then
+    echo "nixbench-session: usage: nixbench-session [--local]" >&2
+    exit 2
+fi
+
+local_launch=0
 case "${1-}" in
     --help)
         cat <<EOF
-Usage: nixbench-session
+Usage: nixbench-session [--local]
 
 Start the standalone NixBench desktop on the active NetBSD wsdisplay console.
 Run it over SSH while the physical console is visible. The desktop starts
 empty and takes over after preflight without an additional confirmation;
 launch applications from the global Applications menu.
+
+  --local  Allow launch from the physical NetBSD console. A separate SSH
+           recovery login remains strongly recommended.
 
 Environment:
   NIXBENCH_APPLICATION      Absolute executable to open at startup
@@ -19,9 +28,12 @@ Environment:
 EOF
         exit 0
         ;;
+    --local)
+        local_launch=1
+        ;;
     '') ;;
     *)
-        echo "nixbench-session: usage: nixbench-session [--help]" >&2
+        echo "nixbench-session: usage: nixbench-session [--local]" >&2
         exit 2
         ;;
 esac
@@ -56,7 +68,8 @@ NIXBENCH_INSTALLED_MODE=1
 NIXBENCH_SESSION_HELPER=$libexecdir/nixbench/nixbench-wsdisplay-session
 NIXBENCH_SESSION_CORE=$libexecdir/nixbench/nixbench-session-core
 NIXBENCH_GTK_MENU_BRIDGE=${NIXBENCH_GTK_MENU_BRIDGE:-1}
+NIXBENCH_ALLOW_LOCAL=$local_launch
 export NIXBENCH_INSTALLED_MODE NIXBENCH_SESSION_HELPER
-export NIXBENCH_SESSION_CORE NIXBENCH_GTK_MENU_BRIDGE
+export NIXBENCH_SESSION_CORE NIXBENCH_GTK_MENU_BRIDGE NIXBENCH_ALLOW_LOCAL
 
 exec "$libexecdir/nixbench/run-wsdisplay-session.sh"

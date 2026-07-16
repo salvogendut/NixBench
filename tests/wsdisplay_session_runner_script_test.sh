@@ -196,6 +196,41 @@ if grep -F -- 'Type START-NIXBENCH' "$installed_output" >/dev/null; then
     exit 1
 fi
 
+local_log=$temporary/local.log
+local_output=$temporary/local.out
+env -u SSH_CONNECTION \
+    PATH="$temporary/bin:/usr/bin:/bin" \
+    NIXBENCH_INSTALLED_MODE=1 \
+    NIXBENCH_ALLOW_LOCAL=1 \
+    NIXBENCH_SESSION_HELPER="$installed_helper" \
+    NIXBENCH_SESSION_CORE="$installed_core" \
+    NIXBENCH_GTK_MENU_BRIDGE=1 \
+    NB_LAUNCH_STATUS=0 \
+    NB_ABSENCE_STATUS=0 \
+    NB_INITIAL_VT=1 \
+    NB_RESTORED_VT=1 \
+    NB_VT_COUNT_FILE="$local_log.vt-count" \
+    NB_TEST_LOG="$local_log" \
+    "$runner" >"$local_output" 2>&1
+grep -F -- 'LOCAL CONSOLE LAUNCH' "$local_output" >/dev/null
+grep -F -- "$installed_helper --acknowledge-console-takeover" \
+    "$local_log" >/dev/null
+
+local_rejected_log=$temporary/local-rejected.log
+local_rejected_output=$temporary/local-rejected.out
+if env -u SSH_CONNECTION \
+    PATH="$temporary/bin:/usr/bin:/bin" \
+    NIXBENCH_INSTALLED_MODE=1 \
+    NIXBENCH_SESSION_HELPER="$installed_helper" \
+    NIXBENCH_SESSION_CORE="$installed_core" \
+    NB_TEST_LOG="$local_rejected_log" \
+    "$runner" >"$local_rejected_output" 2>&1; then
+    echo "local launch without --local opt-in was accepted" >&2
+    exit 1
+fi
+grep -F -- 'use the installed nixbench-session --local command' \
+    "$local_rejected_output" >/dev/null
+
 application_log=$temporary/application.log
 application_output=$temporary/application.out
 run_session 0 '' 0 0 1 "$application_log" "$application_output" \
