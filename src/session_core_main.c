@@ -39,14 +39,22 @@ int main(int argc, char *argv[])
         parse_descriptor(argv[2], &descriptor) &&
         descriptor == NB_SESSION_CORE_PROTOCOL_DESCRIPTOR &&
         argv[4][0] == '/' && argv[6][0] == '/') {
-        return nb_session_core_run(descriptor, argv[4], argv[6], argv[0]);
+        return nb_session_core_run(descriptor,
+                                   argv[4],
+                                   argv[6],
+                                   argv[0],
+                                   NULL);
     }
     if (argc == 5 && strcmp(argv[1], "--ipc-fd") == 0 &&
         strcmp(argv[3], "--runtime-dir") == 0 &&
         parse_descriptor(argv[2], &descriptor) &&
         descriptor == NB_SESSION_CORE_PROTOCOL_DESCRIPTOR &&
         argv[4][0] == '/') {
-        return nb_session_core_run(descriptor, NULL, argv[4], argv[0]);
+        return nb_session_core_run(descriptor,
+                                   NULL,
+                                   argv[4],
+                                   argv[0],
+                                   NULL);
     }
     fprintf(stderr, "%s: this is an internal NixBench session process\n",
             argv[0]);

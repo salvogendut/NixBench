@@ -48,6 +48,9 @@ bool nb_desktop_activate_window(struct nb_desktop *desktop, nb_window_id id);
 bool nb_desktop_toggle_window_maximized(struct nb_desktop *desktop,
                                         nb_window_id id,
                                         struct nb_rect bounds);
+void nb_desktop_set_window_controls(struct nb_desktop *desktop,
+                                    bool maximize_gadget_visible,
+                                    enum nb_window_control_layout layout);
 
 size_t nb_desktop_window_count(const struct nb_desktop *desktop);
 nb_window_id nb_desktop_window_id_at(const struct nb_desktop *desktop,

@@ -7,6 +7,7 @@
 
 #include "desktop.h"
 #include "host.h"
+#include "preferences.h"
 
 /*
  * The desktop runtime owns shell, application, compositor-service, and
@@ -27,12 +28,15 @@ struct nb_desktop_runtime_options {
     bool publish_wayland_socket;
     bool software_pointer;
     bool enable_application_launcher;
+    const struct nb_user_preferences *preferences;
 };
 
 struct nb_desktop_runtime_update {
     bool redraw;
     bool quit_requested;
     enum nb_desktop_launch_request launch_request;
+    bool preferences_changed;
+    struct nb_user_preferences preferences;
 };
 
 /* Defaults to a host-independent runtime with optional services disabled. */
@@ -130,5 +134,8 @@ bool nb_desktop_runtime_active_window_frame(
     const struct nb_desktop_runtime *runtime,
     nb_window_id *window,
     struct nb_rect *frame);
+bool nb_desktop_runtime_get_preferences(
+    const struct nb_desktop_runtime *runtime,
+    struct nb_user_preferences *preferences);
 
 #endif

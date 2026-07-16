@@ -153,6 +153,8 @@ void nb_shell_init(struct nb_shell *shell,
     shell->active_menu_source = NB_MENU_SOURCE_NONE;
     shell->active_menu_window = NB_WINDOW_ID_NONE;
     shell->pointer_owner = NB_SHELL_POINTER_NONE;
+    shell->maximize_gadget_visible = true;
+    shell->window_control_layout = NB_WINDOW_CONTROLS_SPLIT;
     sync_active_menu(shell);
 }
 
@@ -167,6 +169,21 @@ void nb_shell_set_menu_overlay(struct nb_shell *shell,
     if (shell->pointer_owner == NB_SHELL_POINTER_MENU) {
         shell->pointer_owner = NB_SHELL_POINTER_NONE;
     }
+}
+
+void nb_shell_set_window_controls(struct nb_shell *shell,
+                                  bool maximize_gadget_visible,
+                                  enum nb_window_control_layout layout)
+{
+    if (shell == NULL || layout < NB_WINDOW_CONTROLS_SPLIT ||
+        layout > NB_WINDOW_CONTROLS_RIGHT) {
+        return;
+    }
+    shell->maximize_gadget_visible = maximize_gadget_visible;
+    shell->window_control_layout = layout;
+    nb_desktop_set_window_controls(&shell->desktop,
+                                   maximize_gadget_visible,
+                                   layout);
 }
 
 nb_window_id nb_shell_open_window(struct nb_shell *shell,
@@ -194,6 +211,9 @@ nb_window_id nb_shell_open_window(struct nb_shell *shell,
     if (window == NB_WINDOW_ID_NONE) {
         return NB_WINDOW_ID_NONE;
     }
+    nb_desktop_set_window_controls(&shell->desktop,
+                                   shell->maximize_gadget_visible,
+                                   shell->window_control_layout);
 
     shell->menu_bindings[binding_index].window = window;
     shell->menu_bindings[binding_index].menu_source = menu_source;

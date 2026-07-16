@@ -193,6 +193,42 @@ static void test_maximize_toggle(void)
     CHECK(window.frame.height == 220);
 }
 
+static void test_window_control_preferences(void)
+{
+    struct nb_window window = make_window();
+    struct nb_rect close;
+    struct nb_rect maximize;
+
+    nb_window_set_controls(&window, true, NB_WINDOW_CONTROLS_LEFT);
+    close = nb_window_close_rect(&window);
+    maximize = nb_window_maximize_rect(&window);
+    CHECK(close.x == 107);
+    CHECK(maximize.x == 127);
+    CHECK(nb_window_hit_test(&window,
+                             maximize.x + 1,
+                             maximize.y + 1) == NB_WINDOW_HIT_MAXIMIZE);
+
+    nb_window_set_controls(&window, true, NB_WINDOW_CONTROLS_RIGHT);
+    close = nb_window_close_rect(&window);
+    maximize = nb_window_maximize_rect(&window);
+    CHECK(close.x == 397);
+    CHECK(maximize.x == 377);
+
+    CHECK(nb_window_pointer_down(&window,
+                                 maximize.x + 1,
+                                 maximize.y + 1) ==
+          NB_WINDOW_HIT_MAXIMIZE);
+    nb_window_set_controls(&window, false, NB_WINDOW_CONTROLS_RIGHT);
+    maximize = nb_window_maximize_rect(&window);
+    CHECK(maximize.width == 0);
+    CHECK(maximize.height == 0);
+    CHECK(window.pointer_mode == NB_WINDOW_POINTER_IDLE);
+    CHECK(nb_window_hit_test(&window, 380, 90) == NB_WINDOW_HIT_TITLE);
+    close = nb_window_close_rect(&window);
+    CHECK(nb_window_hit_test(&window, close.x + 1, close.y + 1) ==
+          NB_WINDOW_HIT_CLOSE);
+}
+
 static void test_resizing(void)
 {
     struct nb_window window = make_window();
@@ -339,6 +375,7 @@ int main(void)
     test_dragging();
     test_clamping();
     test_maximize_toggle();
+    test_window_control_preferences();
     test_resizing();
     test_close_tracking();
     test_cancel_and_repeated_down();

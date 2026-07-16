@@ -237,6 +237,25 @@ bool nb_desktop_toggle_window_maximized(struct nb_desktop *desktop,
     return nb_window_toggle_maximized(window, bounds);
 }
 
+void nb_desktop_set_window_controls(struct nb_desktop *desktop,
+                                    bool maximize_gadget_visible,
+                                    enum nb_window_control_layout layout)
+{
+    size_t index;
+
+    if (desktop == NULL) {
+        return;
+    }
+    for (index = 0; index < desktop->window_count; ++index) {
+        struct nb_desktop_slot *slot =
+            &desktop->slots[desktop->stack[index]];
+
+        nb_window_set_controls(&slot->window,
+                               maximize_gadget_visible,
+                               layout);
+    }
+}
+
 size_t nb_desktop_window_count(const struct nb_desktop *desktop)
 {
     return desktop->window_count;

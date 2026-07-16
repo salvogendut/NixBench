@@ -4,6 +4,7 @@
 #include <SDL3/SDL.h>
 
 #include "desktop_renderer.h"
+#include "backdrop_renderer.h"
 #include "menu_renderer.h"
 
 static int failures;
@@ -267,10 +268,64 @@ static void test_checked_menu_item_gutter(void)
     SDL_DestroySurface(surface);
 }
 
+static void test_backdrop_gradients(void)
+{
+    SDL_Surface *surface =
+        SDL_CreateSurface(5, 5, SDL_PIXELFORMAT_RGBA32);
+    SDL_Renderer *renderer = NULL;
+    struct nb_user_preferences preferences;
+    const struct nb_rect viewport = {0, 0, 5, 5};
+
+    CHECK(surface != NULL);
+    if (surface == NULL) {
+        return;
+    }
+    renderer = SDL_CreateSoftwareRenderer(surface);
+    CHECK(renderer != NULL);
+    if (renderer == NULL) {
+        SDL_DestroySurface(surface);
+        return;
+    }
+    nb_user_preferences_init(&preferences);
+    preferences.backdrop_primary = (struct nb_color){10, 20, 30};
+    preferences.backdrop_secondary = (struct nb_color){110, 120, 130};
+
+    CHECK(nb_backdrop_render(renderer, viewport, &preferences));
+    CHECK(SDL_RenderPresent(renderer));
+    CHECK(pixel_equals(surface, 0, 0, 10, 20, 30));
+    CHECK(pixel_equals(surface, 4, 4, 10, 20, 30));
+
+    preferences.backdrop_gradient_enabled = true;
+    preferences.backdrop_gradient_direction =
+        NB_BACKDROP_GRADIENT_VERTICAL;
+    CHECK(nb_backdrop_render(renderer, viewport, &preferences));
+    CHECK(SDL_RenderPresent(renderer));
+    CHECK(pixel_equals(surface, 2, 0, 10, 20, 30));
+    CHECK(pixel_equals(surface, 2, 4, 110, 120, 130));
+
+    preferences.backdrop_gradient_direction =
+        NB_BACKDROP_GRADIENT_HORIZONTAL;
+    CHECK(nb_backdrop_render(renderer, viewport, &preferences));
+    CHECK(SDL_RenderPresent(renderer));
+    CHECK(pixel_equals(surface, 0, 2, 10, 20, 30));
+    CHECK(pixel_equals(surface, 4, 2, 110, 120, 130));
+
+    preferences.backdrop_gradient_direction =
+        NB_BACKDROP_GRADIENT_DIAGONAL;
+    CHECK(nb_backdrop_render(renderer, viewport, &preferences));
+    CHECK(SDL_RenderPresent(renderer));
+    CHECK(pixel_equals(surface, 0, 0, 10, 20, 30));
+    CHECK(pixel_equals(surface, 4, 4, 110, 120, 130));
+
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroySurface(surface);
+}
+
 int main(void)
 {
     test_content_callback_and_clip_restoration();
     test_checked_menu_item_gutter();
+    test_backdrop_gradients();
 
     if (failures != 0) {
         fprintf(stderr, "%d renderer check(s) failed\n", failures);

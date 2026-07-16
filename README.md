@@ -207,10 +207,12 @@ now be supplied by the experimental Wayland shared-memory surface path.
 
 The standalone session appends an **Applications** menu to the currently
 focused application's menus, so the launcher remains reachable even when a
-client covers the desktop. It currently contains explicit entries for
-NixClock and the pkgsrc Sakura and Midori executables. Every launched process
-inherits the private Wayland display and is tracked for orderly session
-shutdown; a missing executable is reported without ending the desktop.
+client covers the desktop. It contains pinned entries for NixClock and the
+pkgsrc Sakura and Midori executables, plus **Edit Application Pins...**. Pin
+changes are applied immediately and persist in the invoking user's
+`~/.nixbenchrc`. Every launched process inherits the private Wayland display
+and is tracked for orderly session shutdown; a missing executable is reported
+without ending the desktop.
 
 NixClock is the first real out-of-process application. It creates an
 `xdg_toplevel`, manages release-aware shared-memory buffers and frame callbacks,
@@ -468,6 +470,26 @@ resolved from the build tree or installed prefix; the GTK entries currently use
 `/usr/pkg/bin/sakura` and `/usr/pkg/bin/midori`. To export GTK application
 menus into the bar as well, start the session with
 `NIXBENCH_GTK_MENU_BRIDGE=1`.
+
+The ordinary-user core creates `~/.nixbenchrc` with mode `0600` the first time
+`nixbench-session` runs. The shell's **NixBench > Settings...** command opens
+the same panel as **Applications > Edit Application Pins...**. Settings are
+live and saved atomically. The current panel provides:
+
+- two palette color pickers for the desktop backdrop;
+- an optional vertical, horizontal, or diagonal gradient from color 1 to
+  color 2;
+- persistent pins for NixClock, Sakura, and Midori; and
+- maximize-gadget visibility and split, left, or right window-gadget
+  placement.
+
+The version-1 file also reserves `desktop.wallpaper`, `desktop.theme`,
+`windows.theme`, and `windows.minimize` keys. They make future wallpaper,
+skinning, and minimize work forward-compatible, but changing those keys does
+not yet change rendering or add a minimize gadget. Unknown keys are ignored so
+newer configurations remain readable by older builds. A malformed known value
+is reported and the session uses safe defaults without giving the file to the
+privileged helper.
 
 For a package-style NetBSD installation, configure the standard pkgsrc prefix,
 build, test, and install as root:

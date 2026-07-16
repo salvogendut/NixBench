@@ -223,9 +223,17 @@ device-free suite passes 50/50 tests. Physical Control+L, text editing, and
 Return validation remains the acceptance gate; full popup pointer routing,
 outside-click policy, and constraint adjustment remain later work.
 Malformed protocol, harder supervisor/worker failures, and repeated-session
-validation remain. Installation and launching managed by the desktop,
-complete popup interaction policy, subsurface/data transfer, broader toolkit
-trials, and application-menu bridges also remain outstanding.
+validation remain. General application discovery/installation, complete popup
+interaction policy, subsurface/data transfer, broader toolkit trials, and
+application-menu bridges also remain outstanding.
+
+The first persistent shell-preferences slice is now implemented in the
+ordinary-user standalone core. It creates `~/.nixbenchrc`, atomically saves
+application pins, two backdrop colors with an optional vertical, horizontal,
+or diagonal gradient, and supported window-gadget visibility/placement, and
+exposes them through **NixBench > Settings...**. Wallpaper, desktop/window
+theme, and minimize keys are reserved for later desktop-object and skinning
+work; they do not yet claim unimplemented behavior.
 
 ## Milestone 6: Package and validate the hosted prototype
 

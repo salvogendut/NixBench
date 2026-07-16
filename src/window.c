@@ -91,6 +91,24 @@ void nb_window_init(struct nb_window *window,
     window->restore_frame = window->frame;
     window->restore_frame_valid = false;
     window->maximized = false;
+    window->maximize_gadget_visible = true;
+    window->control_layout = NB_WINDOW_CONTROLS_SPLIT;
+}
+
+void nb_window_set_controls(struct nb_window *window,
+                            bool maximize_gadget_visible,
+                            enum nb_window_control_layout layout)
+{
+    if (window == NULL || layout < NB_WINDOW_CONTROLS_SPLIT ||
+        layout > NB_WINDOW_CONTROLS_RIGHT) {
+        return;
+    }
+    if (!maximize_gadget_visible &&
+        window->pointer_mode == NB_WINDOW_POINTER_MAXIMIZE) {
+        nb_window_pointer_cancel(window);
+    }
+    window->maximize_gadget_visible = maximize_gadget_visible;
+    window->control_layout = layout;
 }
 
 struct nb_rect nb_window_title_rect(const struct nb_window *window)
@@ -155,8 +173,14 @@ struct nb_rect nb_window_close_rect(const struct nb_window *window)
                                             (2 * NB_WINDOW_GADGET_MARGIN));
     const int size = minimum(NB_WINDOW_CLOSE_SIZE,
                              minimum(available_width, available_height));
-    struct nb_rect close = {
-        title.x + NB_WINDOW_GADGET_MARGIN,
+    int x = title.x + NB_WINDOW_GADGET_MARGIN;
+    struct nb_rect close;
+
+    if (window->control_layout == NB_WINDOW_CONTROLS_RIGHT) {
+        x = title.x + title.width - NB_WINDOW_GADGET_MARGIN - size;
+    }
+    close = (struct nb_rect){
+        x,
         title.y + ((title.height - size) / 2),
         size,
         size
@@ -177,8 +201,22 @@ struct nb_rect nb_window_maximize_rect(const struct nb_window *window)
                                             (2 * NB_WINDOW_GADGET_MARGIN));
     const int size = minimum(NB_WINDOW_MAXIMIZE_SIZE,
                              minimum(available_width, available_height));
-    struct nb_rect maximize = {
-        title.x + title.width - NB_WINDOW_GADGET_MARGIN - size,
+    int x;
+    struct nb_rect maximize;
+
+    if (!window->maximize_gadget_visible) {
+        return (struct nb_rect){0, 0, 0, 0};
+    }
+    if (window->control_layout == NB_WINDOW_CONTROLS_LEFT) {
+        x = close.x + close.width + NB_WINDOW_GADGET_MARGIN;
+    } else {
+        x = close.x - NB_WINDOW_GADGET_MARGIN - size;
+        if (window->control_layout == NB_WINDOW_CONTROLS_SPLIT) {
+            x = title.x + title.width - NB_WINDOW_GADGET_MARGIN - size;
+        }
+    }
+    maximize = (struct nb_rect){
+        x,
         title.y + ((title.height - size) / 2),
         size,
         size

@@ -781,7 +781,8 @@ static void test_session_core_with_fake_helper(
             sockets[0],
             application_path,
             verify_application_cleanup ? runtime_directory : NULL,
-            core_program_path);
+            core_program_path,
+            "/dev/null");
         if (trigger == SESSION_CORE_SHUTDOWN_BY_SIGTERM) {
             struct sigaction restored_action;
 
@@ -951,7 +952,8 @@ static void test_session_core_rejects_unlaunchable_application(
         const int result = nb_session_core_run(sockets[0],
                                                missing_path,
                                                NULL,
-                                               core_program_path);
+                                               core_program_path,
+                                               "/dev/null");
 
         _exit(result);
     }

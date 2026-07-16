@@ -63,6 +63,8 @@ struct nb_shell {
     nb_menu_source_id active_menu_source;
     nb_window_id active_menu_window;
     enum nb_shell_pointer_owner pointer_owner;
+    bool maximize_gadget_visible;
+    enum nb_window_control_layout window_control_layout;
 };
 
 void nb_shell_init(struct nb_shell *shell,
@@ -72,6 +74,9 @@ void nb_shell_init(struct nb_shell *shell,
 /* Append shell-owned menus to every active desktop/application menu model. */
 void nb_shell_set_menu_overlay(struct nb_shell *shell,
                                const struct nb_menu_model *menu_overlay_model);
+void nb_shell_set_window_controls(struct nb_shell *shell,
+                                  bool maximize_gadget_visible,
+                                  enum nb_window_control_layout layout);
 
 nb_window_id nb_shell_open_window(struct nb_shell *shell,
                                   const char *title,

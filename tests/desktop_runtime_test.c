@@ -85,6 +85,22 @@ static struct nb_host_event key_event(const char *name,
     return event;
 }
 
+static struct nb_desktop_runtime_update click_runtime(
+    struct nb_desktop_runtime *runtime,
+    int x,
+    int y,
+    uint64_t milliseconds)
+{
+    struct nb_desktop_runtime_update update;
+    struct nb_host_event event = left_button(x, y, true, milliseconds);
+
+    memset(&update, 0, sizeof(update));
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = left_button(x, y, false, milliseconds + 1);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    return update;
+}
+
 static struct nb_desktop_runtime *create_runtime_with_launcher(
     bool software_pointer,
     bool application_launcher)
@@ -385,6 +401,108 @@ static void test_application_launcher_menu(void)
     nb_desktop_runtime_destroy(runtime);
 }
 
+static void test_settings_and_application_pins(void)
+{
+    struct nb_user_preferences initial_preferences;
+    struct nb_user_preferences preferences;
+    struct nb_desktop_runtime_options options;
+    struct nb_desktop_runtime *runtime;
+    struct nb_desktop_runtime_update update;
+    struct nb_host_event event;
+    struct nb_rect frame;
+    struct nb_rect content;
+    nb_window_id window;
+    uint64_t milliseconds = 100;
+
+    nb_user_preferences_init(&initial_preferences);
+    nb_desktop_runtime_options_init(&options);
+    options.enable_application_launcher = true;
+    options.preferences = &initial_preferences;
+    runtime = nb_desktop_runtime_create(&options, &initial_output);
+    CHECK(runtime != NULL);
+    if (runtime == NULL) {
+        return;
+    }
+
+    update = click_runtime(runtime, 900, 600, milliseconds);
+    milliseconds += 2;
+    event = key_event("FK10", true, milliseconds++);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("DOWN", true, milliseconds++);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("DOWN", true, milliseconds++);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RTRN", true, milliseconds++);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    CHECK(nb_desktop_runtime_window_count(runtime) == 2);
+    CHECK(nb_desktop_runtime_active_window_frame(runtime, &window, &frame));
+    CHECK(frame.width == 640);
+    CHECK(frame.height == 550);
+    content = (struct nb_rect){
+        frame.x + NB_WINDOW_BORDER_WIDTH,
+        frame.y + NB_WINDOW_BORDER_WIDTH + NB_WINDOW_TITLE_HEIGHT,
+        frame.width - (2 * NB_WINDOW_BORDER_WIDTH),
+        frame.height - (2 * NB_WINDOW_BORDER_WIDTH) -
+            NB_WINDOW_TITLE_HEIGHT - NB_WINDOW_FOOTER_HEIGHT
+    };
+
+    update = click_runtime(runtime,
+                           content.x + 20,
+                           content.y + 70,
+                           milliseconds);
+    milliseconds += 2;
+    CHECK(!update.preferences_changed);
+    update = click_runtime(runtime,
+                           content.x + 16 + 5 * 37 + 2,
+                           content.y + 114,
+                           milliseconds);
+    milliseconds += 2;
+    CHECK(update.preferences_changed);
+    CHECK(nb_color_equal(update.preferences.backdrop_secondary,
+                         (struct nb_color){196, 112, 45}));
+
+    update = click_runtime(runtime,
+                           content.x + 20,
+                           content.y + 175,
+                           milliseconds);
+    milliseconds += 2;
+    CHECK(update.preferences_changed);
+    CHECK(update.preferences.backdrop_gradient_enabled);
+
+    update = click_runtime(runtime,
+                           content.x + 20,
+                           content.y + 275,
+                           milliseconds);
+    milliseconds += 2;
+    CHECK(update.preferences_changed);
+    CHECK(!update.preferences.pinned_applications[
+        NB_PINNED_APPLICATION_SAKURA]);
+
+    update = click_runtime(runtime,
+                           content.x + 20,
+                           content.y + 351,
+                           milliseconds);
+    milliseconds += 2;
+    CHECK(update.preferences_changed);
+    CHECK(!update.preferences.maximize_gadget_visible);
+    CHECK(nb_desktop_runtime_get_preferences(runtime, &preferences));
+    CHECK(!preferences.maximize_gadget_visible);
+    CHECK(preferences.backdrop_gradient_enabled);
+
+    /* Settings has one base menu; its overlay is the rebuilt Applications. */
+    event = key_event("FK10", true, milliseconds++);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RGHT", true, milliseconds++);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("DOWN", true, milliseconds++);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RTRN", true, milliseconds++);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_MIDORI);
+
+    nb_desktop_runtime_destroy(runtime);
+}
+
 static void test_defensive_api(void)
 {
     struct nb_desktop_runtime_options invalid_options;
@@ -395,9 +513,11 @@ static void test_defensive_api(void)
     struct nb_host_event event;
     struct nb_host_frame frame;
     struct nb_rect window_frame;
+    struct nb_user_preferences preferences;
     nb_window_id window;
 
     nb_desktop_runtime_options_init(NULL);
+    nb_desktop_runtime_options_init(&invalid_options);
     invalid_options.enable_wayland = false;
     invalid_options.publish_wayland_socket = true;
     invalid_options.software_pointer = false;
@@ -459,6 +579,7 @@ static void test_defensive_api(void)
     CHECK(!nb_desktop_runtime_active_window_frame(runtime,
                                                    &window,
                                                    NULL));
+    CHECK(!nb_desktop_runtime_get_preferences(NULL, &preferences));
     nb_desktop_runtime_frame_presented(NULL, 0);
     nb_desktop_runtime_cancel_input(NULL, 0);
     nb_desktop_runtime_destroy(runtime);
@@ -472,6 +593,7 @@ int main(void)
     test_software_pointer_and_escape();
     test_keyboard_menu_path();
     test_application_launcher_menu();
+    test_settings_and_application_pins();
     test_defensive_api();
 
     if (failures != 0) {

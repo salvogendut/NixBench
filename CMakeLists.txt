@@ -471,6 +471,17 @@ if(NIXBENCH_WAYLAND_ENABLED)
 endif()
 
 add_library(
+  nixbench_preferences STATIC
+  src/preferences.c
+  src/user_config.c
+)
+target_include_directories(
+  nixbench_preferences
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+nixbench_configure_c_target(nixbench_preferences)
+
+add_library(
   nixbench_model STATIC
   src/application.c
   src/desktop.c
@@ -484,6 +495,7 @@ target_include_directories(
   nixbench_model
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
+target_link_libraries(nixbench_model PUBLIC nixbench_preferences)
 nixbench_configure_c_target(nixbench_model)
 
 add_library(
@@ -547,21 +559,12 @@ target_link_libraries(
 nixbench_configure_c_target(nixbench_software_canvas)
 
 add_library(
-  nixbench_preferences STATIC
-  src/preferences.c
-  src/user_config.c
-)
-target_include_directories(
-  nixbench_preferences
-  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
-)
-nixbench_configure_c_target(nixbench_preferences)
-
-add_library(
   nixbench_renderers STATIC
+  src/backdrop_renderer.c
   src/desktop_renderer.c
   src/menu_renderer.c
   src/nixinfo_renderer.c
+  src/settings_ui.c
   src/shell_renderer.c
   src/window_renderer.c
 )

@@ -266,6 +266,8 @@ else
     cat <<EOF
 NixBench will start with an empty desktop. Use the Applications menu in the
 global bar to launch NixClock, Sakura Terminal, or Midori Web Browser.
+Use Applications -> Edit Application Pins... or NixBench -> Settings... to
+change persistent pins, backdrop colors and gradients, and window gadgets.
 EOF
 fi
 

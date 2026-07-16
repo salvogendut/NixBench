@@ -3,6 +3,8 @@
 
 #include <stdbool.h>
 
+#include "preferences.h"
+
 enum {
     NB_WINDOW_BORDER_WIDTH = 3,
     NB_WINDOW_TITLE_HEIGHT = 24,
@@ -63,11 +65,16 @@ struct nb_window {
     struct nb_rect restore_frame;
     bool restore_frame_valid;
     bool maximized;
+    bool maximize_gadget_visible;
+    enum nb_window_control_layout control_layout;
 };
 
 void nb_window_init(struct nb_window *window,
                     const char *title,
                     struct nb_rect frame);
+void nb_window_set_controls(struct nb_window *window,
+                            bool maximize_gadget_visible,
+                            enum nb_window_control_layout layout);
 
 struct nb_rect nb_window_title_rect(const struct nb_window *window);
 struct nb_rect nb_window_content_rect(const struct nb_window *window);

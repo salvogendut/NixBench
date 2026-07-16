@@ -29,6 +29,7 @@
 #include "desktop_runtime.h"
 #include "host.h"
 #include "host_privsep_client.h"
+#include "user_config.h"
 
 enum {
     NB_SESSION_CORE_RUNTIME_PATH_CAPACITY = 512,
@@ -68,6 +69,7 @@ struct nb_session_core {
     uint64_t shutdown_deadline;
     struct nb_session_application applications[NB_SESSION_CORE_MAX_APPLICATIONS];
     char program_directory[PATH_MAX];
+    char user_config_path[PATH_MAX];
     char clock_text[NB_SESSION_CORE_CLOCK_CAPACITY];
     bool redraw_needed;
     bool shutdown_pending;
@@ -760,6 +762,25 @@ static bool apply_runtime_update(
     bool software_webkit = false;
 
     core->redraw_needed = core->redraw_needed || update->redraw;
+    if (update->preferences_changed) {
+        char error[256];
+
+        if (!nb_user_preferences_is_valid(&update->preferences)) {
+            fputs("Desktop produced invalid user preferences\n", stderr);
+            return false;
+        }
+        if (core->user_config_path[0] == '\0' ||
+            !nb_user_config_save(core->user_config_path,
+                                 &update->preferences,
+                                 error,
+                                 sizeof(error))) {
+            fprintf(stderr,
+                    "Could not save NixBench settings: %s\n",
+                    core->user_config_path[0] != '\0'
+                        ? error
+                        : "configuration path is unavailable");
+        }
+    }
     switch (update->launch_request) {
     case NB_DESKTOP_LAUNCH_NONE:
         break;
@@ -1024,10 +1045,12 @@ static bool core_identity_is_unprivileged(void)
 int nb_session_core_run(int protocol_descriptor,
                         const char *initial_application_path,
                         const char *runtime_directory_path,
-                        const char *core_program_path)
+                        const char *core_program_path,
+                        const char *user_config_path)
 {
     struct nb_session_core core;
     struct nb_desktop_runtime_options desktop_options;
+    struct nb_user_preferences preferences;
     struct nb_desktop_runtime_update focus_update;
     struct nb_host_output output;
     struct sigaction previous_sigterm_action;
@@ -1086,6 +1109,40 @@ int nb_session_core_run(int protocol_descriptor,
         fputs("The session core executable path must be absolute\n", stderr);
         goto cleanup;
     }
+    nb_user_preferences_init(&preferences);
+    {
+        char config_error[256];
+        enum nb_user_config_load_result config_result;
+
+        if (!nb_user_config_path(user_config_path,
+                                 core.user_config_path,
+                                 sizeof(core.user_config_path),
+                                 config_error,
+                                 sizeof(config_error))) {
+            fprintf(stderr,
+                    "Could not resolve NixBench user configuration: %s; "
+                    "using session defaults\n",
+                    config_error);
+            core.user_config_path[0] = '\0';
+        } else {
+            config_result = nb_user_config_load_or_create(
+                core.user_config_path,
+                &preferences,
+                config_error,
+                sizeof(config_error));
+            if (config_result == NB_USER_CONFIG_LOAD_ERROR) {
+                fprintf(stderr,
+                        "Could not load %s: %s; using session defaults\n",
+                        core.user_config_path,
+                        config_error);
+                nb_user_preferences_init(&preferences);
+            } else if (config_result == NB_USER_CONFIG_CREATED) {
+                fprintf(stderr,
+                        "Created NixBench user configuration: %s\n",
+                        core.user_config_path);
+            }
+        }
+    }
     if (!wait_for_ready(&core, &output) ||
         !use_runtime_directory(&core.runtime_directory,
                                runtime_directory_path)) {
@@ -1097,6 +1154,7 @@ int nb_session_core_run(int protocol_descriptor,
     desktop_options.publish_wayland_socket = true;
     desktop_options.software_pointer = true;
     desktop_options.enable_application_launcher = true;
+    desktop_options.preferences = &preferences;
     core.desktop = nb_desktop_runtime_create(&desktop_options, &output);
     if (core.desktop == NULL) {
         fputs("Could not create the standalone desktop runtime\n", stderr);

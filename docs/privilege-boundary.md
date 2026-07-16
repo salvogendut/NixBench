@@ -251,6 +251,12 @@ tracks up to a fixed number of ordinary-user clients for orderly teardown.
 The root supervisor and device worker receive neither executable paths nor
 launch commands for these additional clients.
 
+The same ordinary-user core exclusively loads, creates, and atomically saves
+`$HOME/.nixbenchrc`. The root supervisor and device worker never open the file
+and receive neither its path nor its contents. Application pins, backdrop
+colors and gradient direction, and supported window-decoration preferences
+therefore stay on the unprivileged side of the session boundary.
+
 The script checks that file before `sudo` as the ordinary user. The privileged
 launcher rejects an unbounded, relative, trailing-slash, or control-character
 path, but deliberately does not resolve, open, or test the selected file. It

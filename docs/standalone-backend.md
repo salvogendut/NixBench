@@ -476,7 +476,12 @@ entry point is:
 ```
 
 The session starts with an empty desktop; NixClock, Sakura, and Midori are
-available from **Applications**. An existing application can be selected for a
+available as persistent pins in **Applications**. **Edit Application Pins...**
+opens the ordinary-user Settings panel; the desktop's own **Settings...**
+command opens the same window. The core creates `$HOME/.nixbenchrc` on first
+run, then atomically saves pin, backdrop/gradient, and supported window-gadget
+changes without involving the privileged device process. An existing
+application can be selected for a
 startup compatibility probe with one absolute executable path; application
 arguments are not supported yet:
 
@@ -532,7 +537,9 @@ invoking user's home-directory and group access.
 The ordinary-user core also owns a bounded multi-application process table.
 The global **Applications** menu launches NixClock from beside the core and
 the pkgsrc Sakura and Midori executables directly on the private Wayland
-display. The launcher menu is appended to the focused client's menu model,
+display. Only applications pinned in `~/.nixbenchrc` are listed; the Settings
+entry remains available even when all three applications are unpinned. The
+launcher menu is appended to the focused client's menu model,
 and all tracked clients receive orderly termination before compositor
 teardown. Missing programs and capacity exhaustion are nonfatal menu-launch
 errors; neither condition expands the privileged helper's responsibilities.

@@ -111,6 +111,10 @@ static bool render_maximize_gadget(SDL_Renderer *renderer,
     const float right = (float)(maximize.x + maximize.width - 1) + inset;
     const float bottom = (float)(maximize.y + maximize.height - 1) + inset;
 
+    if (!window->maximize_gadget_visible || maximize.width <= 0 ||
+        maximize.height <= 0) {
+        return true;
+    }
     if (!fill_rect(renderer, maximize, frame_color) ||
         !render_bevel(renderer, maximize, pressed)) {
         return false;
@@ -164,11 +168,29 @@ static bool render_title(SDL_Renderer *renderer,
     const struct nb_rect close = nb_window_close_rect(window);
     const struct nb_rect maximize = nb_window_maximize_rect(window);
     const char *text = window->title;
-    const float text_x = (float)(close.x + close.width + 8);
+    int text_left = title.x + 8;
+    int text_right = title.x + title.width - 8;
+    float text_x;
     const float text_y = (float)(title.y + ((title.height - 8) / 2));
     char clipped_text[64];
     size_t maximum_characters;
     size_t index;
+
+    if (close.x < title.x + (title.width / 2)) {
+        text_left = close.x + close.width + 8;
+    } else {
+        text_right = close.x - 8;
+    }
+    if (maximize.width > 0) {
+        if (maximize.x < title.x + (title.width / 2)) {
+            if (maximize.x + maximize.width + 8 > text_left) {
+                text_left = maximize.x + maximize.width + 8;
+            }
+        } else if (maximize.x - 8 < text_right) {
+            text_right = maximize.x - 8;
+        }
+    }
+    text_x = (float)text_left;
 
     if (!fill_rect(renderer,
                    title,
@@ -179,13 +201,11 @@ static bool render_title(SDL_Renderer *renderer,
         return false;
     }
 
-    if (text[0] == '\0' ||
-        text_x + 8.0f >= (float)(maximize.x - NB_WINDOW_GADGET_MARGIN)) {
+    if (text[0] == '\0' || text_right - text_left < 8) {
         return true;
     }
 
-    maximum_characters =
-        (size_t)(((float)maximize.x - text_x - 4.0f) / 8.0f);
+    maximum_characters = (size_t)((text_right - text_left) / 8);
     if (maximum_characters >= sizeof(clipped_text)) {
         maximum_characters = sizeof(clipped_text) - 1;
     }

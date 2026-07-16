@@ -6,9 +6,11 @@
 #include <SDL3/SDL.h>
 
 #include "application.h"
+#include "backdrop_renderer.h"
 #include "menu.h"
 #include "nixinfo.h"
 #include "nixinfo_renderer.h"
+#include "settings_ui.h"
 #include "shell.h"
 #include "shell_renderer.h"
 #include "software_canvas.h"
@@ -28,28 +30,34 @@ enum {
     NIXBENCH_ABOUT_WINDOW_Y = 190,
     NIXBENCH_ABOUT_WINDOW_WIDTH = 430,
     NIXBENCH_ABOUT_WINDOW_HEIGHT = 230,
-    NIXBENCH_DESKTOP_RED = 24,
-    NIXBENCH_DESKTOP_GREEN = 54,
-    NIXBENCH_DESKTOP_BLUE = 76,
+    NIXBENCH_SETTINGS_WINDOW_WIDTH = 640,
+    NIXBENCH_SETTINGS_WINDOW_HEIGHT = 550,
     NIXBENCH_SHELL_KEY_CAPTURE_CAPACITY = 32
 };
 
 #define NIXBENCH_MENU_SOURCE_DESKTOP UINT64_C(1)
 #define NIXBENCH_MENU_SOURCE_ABOUT UINT64_MAX
+#define NIXBENCH_MENU_SOURCE_SETTINGS (UINT64_MAX - UINT64_C(1))
 #define NIXBENCH_MENU_SOURCE_WAYLAND UINT64_C(0x4000000000000000)
 
 enum {
     NIXBENCH_DESKTOP_COMMAND_ABOUT = 1,
     NIXBENCH_DESKTOP_COMMAND_OPEN_NIXINFO,
+    NIXBENCH_DESKTOP_COMMAND_SETTINGS,
     NIXBENCH_DESKTOP_COMMAND_QUIT
 };
 
 #define NIXBENCH_DESKTOP_COMMAND_LAUNCH_NIXCLOCK UINT32_C(0xfffffff0)
 #define NIXBENCH_DESKTOP_COMMAND_LAUNCH_SAKURA UINT32_C(0xfffffff1)
 #define NIXBENCH_DESKTOP_COMMAND_LAUNCH_MIDORI UINT32_C(0xfffffff2)
+#define NIXBENCH_DESKTOP_COMMAND_APPLICATION_PINS UINT32_C(0xfffffff3)
 
 enum {
     NIXBENCH_ABOUT_COMMAND_CLOSE = 1
+};
+
+enum {
+    NIXBENCH_SETTINGS_COMMAND_CLOSE = 1
 };
 
 enum {
@@ -60,6 +68,8 @@ static const struct nb_menu_item_spec desktop_items[] = {
     {"About NixBench", NIXBENCH_DESKTOP_COMMAND_ABOUT,
      NB_MENU_ITEM_COMMAND, true, false},
     {"Open NixInfo", NIXBENCH_DESKTOP_COMMAND_OPEN_NIXINFO,
+     NB_MENU_ITEM_COMMAND, true, false},
+    {"Settings...", NIXBENCH_DESKTOP_COMMAND_SETTINGS,
      NB_MENU_ITEM_COMMAND, true, false},
     {NULL, NB_MENU_COMMAND_NONE, NB_MENU_ITEM_SEPARATOR, false, false},
     {"Quit NixBench", NIXBENCH_DESKTOP_COMMAND_QUIT,
@@ -76,25 +86,6 @@ static const struct nb_menu_model desktop_menu_model = {
     sizeof(desktop_menus) / sizeof(desktop_menus[0])
 };
 
-static const struct nb_menu_item_spec launcher_items[] = {
-    {"NixClock", NIXBENCH_DESKTOP_COMMAND_LAUNCH_NIXCLOCK,
-     NB_MENU_ITEM_COMMAND, true, false},
-    {"Sakura Terminal", NIXBENCH_DESKTOP_COMMAND_LAUNCH_SAKURA,
-     NB_MENU_ITEM_COMMAND, true, false},
-    {"Midori Web Browser", NIXBENCH_DESKTOP_COMMAND_LAUNCH_MIDORI,
-     NB_MENU_ITEM_COMMAND, true, false}
-};
-
-static const struct nb_menu_spec launcher_menus[] = {
-    {"Applications", launcher_items,
-     sizeof(launcher_items) / sizeof(launcher_items[0])}
-};
-
-static const struct nb_menu_model launcher_menu_model = {
-    launcher_menus,
-    sizeof(launcher_menus) / sizeof(launcher_menus[0])
-};
-
 static const struct nb_menu_item_spec about_items[] = {
     {"Close About", NIXBENCH_ABOUT_COMMAND_CLOSE,
      NB_MENU_ITEM_COMMAND, true, false}
@@ -108,6 +99,21 @@ static const struct nb_menu_spec about_menus[] = {
 static const struct nb_menu_model about_menu_model = {
     about_menus,
     sizeof(about_menus) / sizeof(about_menus[0])
+};
+
+static const struct nb_menu_item_spec settings_items[] = {
+    {"Close Settings", NIXBENCH_SETTINGS_COMMAND_CLOSE,
+     NB_MENU_ITEM_COMMAND, true, false}
+};
+
+static const struct nb_menu_spec settings_menus[] = {
+    {"NixBench", settings_items,
+     sizeof(settings_items) / sizeof(settings_items[0])}
+};
+
+static const struct nb_menu_model settings_menu_model = {
+    settings_menus,
+    sizeof(settings_menus) / sizeof(settings_menus[0])
 };
 
 #if NIXBENCH_HAS_WAYLAND
@@ -137,6 +143,14 @@ struct nb_desktop_runtime {
     struct nb_rect viewport;
     nb_application_id nixinfo_application;
     nb_window_id about_window;
+    nb_window_id settings_window;
+    struct nb_user_preferences preferences;
+    struct nb_menu_item_spec launcher_items[5];
+    struct nb_menu_spec launcher_menus[1];
+    struct nb_menu_model launcher_menu_model;
+    enum nb_settings_color_target settings_color_target;
+    enum nb_settings_action settings_pressed_action;
+    bool pending_preferences_changed;
 #if NIXBENCH_HAS_WAYLAND
     struct nb_wayland_server *wayland;
     bool host_keyboard_focused;
@@ -174,6 +188,66 @@ static void remember_pointer(struct nb_desktop_runtime *runtime,
     }
 }
 
+static void set_launcher_item(struct nb_menu_item_spec *item,
+                              const char *label,
+                              nb_menu_command command,
+                              enum nb_menu_item_kind kind)
+{
+    item->label = label;
+    item->command = command;
+    item->kind = kind;
+    item->enabled = kind == NB_MENU_ITEM_COMMAND;
+    item->checked = false;
+}
+
+static void rebuild_launcher_menu(struct nb_desktop_runtime *runtime)
+{
+    size_t count = 0;
+
+    if (runtime->preferences.pinned_applications[
+            NB_PINNED_APPLICATION_NIXCLOCK]) {
+        set_launcher_item(&runtime->launcher_items[count++],
+                          "NixClock",
+                          NIXBENCH_DESKTOP_COMMAND_LAUNCH_NIXCLOCK,
+                          NB_MENU_ITEM_COMMAND);
+    }
+    if (runtime->preferences.pinned_applications[
+            NB_PINNED_APPLICATION_SAKURA]) {
+        set_launcher_item(&runtime->launcher_items[count++],
+                          "Sakura Terminal",
+                          NIXBENCH_DESKTOP_COMMAND_LAUNCH_SAKURA,
+                          NB_MENU_ITEM_COMMAND);
+    }
+    if (runtime->preferences.pinned_applications[
+            NB_PINNED_APPLICATION_MIDORI]) {
+        set_launcher_item(&runtime->launcher_items[count++],
+                          "Midori Web Browser",
+                          NIXBENCH_DESKTOP_COMMAND_LAUNCH_MIDORI,
+                          NB_MENU_ITEM_COMMAND);
+    }
+    if (count != 0) {
+        set_launcher_item(&runtime->launcher_items[count++],
+                          NULL,
+                          NB_MENU_COMMAND_NONE,
+                          NB_MENU_ITEM_SEPARATOR);
+    }
+    set_launcher_item(&runtime->launcher_items[count++],
+                      "Edit Application Pins...",
+                      NIXBENCH_DESKTOP_COMMAND_APPLICATION_PINS,
+                      NB_MENU_ITEM_COMMAND);
+    runtime->launcher_menus[0].label = "Applications";
+    runtime->launcher_menus[0].items = runtime->launcher_items;
+    runtime->launcher_menus[0].item_count = count;
+    runtime->launcher_menu_model.menus = runtime->launcher_menus;
+    runtime->launcher_menu_model.menu_count = 1;
+
+    nb_shell_set_menu_overlay(&runtime->shell, NULL);
+    if (runtime->options.enable_application_launcher) {
+        nb_shell_set_menu_overlay(&runtime->shell,
+                                  &runtime->launcher_menu_model);
+    }
+}
+
 static bool render_window_content(SDL_Renderer *renderer,
                                   nb_window_id id,
                                   const struct nb_window *window,
@@ -199,6 +273,12 @@ static bool render_window_content(SDL_Renderer *renderer,
                                          window,
                                          content_rect,
                                          &runtime->nixinfo);
+    }
+    if (id == runtime->settings_window) {
+        return nb_settings_render(renderer,
+                                  content_rect,
+                                  &runtime->preferences,
+                                  runtime->settings_color_target);
     }
     return nb_window_render_default_content(renderer, window);
 }
@@ -333,6 +413,153 @@ static bool close_about_window(struct nb_desktop_runtime *runtime,
     return sync_application_focus(runtime);
 }
 
+static bool show_settings_window(struct nb_desktop_runtime *runtime)
+{
+    const struct nb_rect work_area = nb_menu_work_area(runtime->viewport);
+    int width = NIXBENCH_SETTINGS_WINDOW_WIDTH;
+    int height = NIXBENCH_SETTINGS_WINDOW_HEIGHT;
+    struct nb_rect frame;
+
+    if (runtime->settings_window != NB_WINDOW_ID_NONE &&
+        nb_desktop_find_window(&runtime->shell.desktop,
+                               runtime->settings_window) != NULL) {
+        return nb_shell_activate_window(&runtime->shell,
+                                        runtime->settings_window) &&
+               sync_application_focus(runtime);
+    }
+    if (width > work_area.width - 24) {
+        width = work_area.width - 24;
+    }
+    if (height > work_area.height - 24) {
+        height = work_area.height - 24;
+    }
+    if (width < NB_WINDOW_MIN_WIDTH) {
+        width = NB_WINDOW_MIN_WIDTH;
+    }
+    if (height < NB_WINDOW_MIN_HEIGHT) {
+        height = NB_WINDOW_MIN_HEIGHT;
+    }
+    frame = (struct nb_rect){
+        work_area.x + (work_area.width - width) / 2,
+        work_area.y + (work_area.height - height) / 2,
+        width,
+        height
+    };
+    runtime->settings_window = nb_shell_open_window(
+        &runtime->shell,
+        "NixBench Settings",
+        frame,
+        NIXBENCH_MENU_SOURCE_SETTINGS,
+        &settings_menu_model);
+    if (runtime->settings_window == NB_WINDOW_ID_NONE) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Could not open the NixBench Settings window");
+        return false;
+    }
+    return sync_application_focus(runtime);
+}
+
+static bool close_settings_window(struct nb_desktop_runtime *runtime,
+                                  nb_window_id window)
+{
+    if (window == NB_WINDOW_ID_NONE || window != runtime->settings_window) {
+        return false;
+    }
+    if (!nb_shell_destroy_window(&runtime->shell, window)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Could not close the NixBench Settings window");
+        return false;
+    }
+    runtime->settings_window = NB_WINDOW_ID_NONE;
+    runtime->settings_pressed_action = NB_SETTINGS_ACTION_NONE;
+    return sync_application_focus(runtime);
+}
+
+static bool apply_settings_action(struct nb_desktop_runtime *runtime,
+                                  enum nb_settings_action action)
+{
+    struct nb_color color;
+    bool changed = false;
+
+    if (action == NB_SETTINGS_ACTION_SELECT_PRIMARY) {
+        runtime->settings_color_target = NB_SETTINGS_COLOR_PRIMARY;
+        return true;
+    }
+    if (action == NB_SETTINGS_ACTION_SELECT_SECONDARY) {
+        runtime->settings_color_target = NB_SETTINGS_COLOR_SECONDARY;
+        return true;
+    }
+    if (action >= NB_SETTINGS_ACTION_COLOR_FIRST &&
+        action <= NB_SETTINGS_ACTION_COLOR_LAST) {
+        const size_t index =
+            (size_t)(action - NB_SETTINGS_ACTION_COLOR_FIRST);
+        struct nb_color *selected =
+            runtime->settings_color_target == NB_SETTINGS_COLOR_PRIMARY
+                ? &runtime->preferences.backdrop_primary
+                : &runtime->preferences.backdrop_secondary;
+
+        if (!nb_settings_palette_color(index, &color)) {
+            return false;
+        }
+        if (!nb_color_equal(*selected, color)) {
+            *selected = color;
+            changed = true;
+        }
+    } else if (action == NB_SETTINGS_ACTION_TOGGLE_GRADIENT) {
+        runtime->preferences.backdrop_gradient_enabled =
+            !runtime->preferences.backdrop_gradient_enabled;
+        changed = true;
+    } else if (action == NB_SETTINGS_ACTION_CYCLE_GRADIENT_DIRECTION) {
+        runtime->preferences.backdrop_gradient_direction =
+            (enum nb_backdrop_gradient_direction)(
+                (runtime->preferences.backdrop_gradient_direction + 1) % 3);
+        changed = true;
+    } else if (action == NB_SETTINGS_ACTION_TOGGLE_NIXCLOCK_PIN) {
+        runtime->preferences.pinned_applications[
+            NB_PINNED_APPLICATION_NIXCLOCK] =
+            !runtime->preferences.pinned_applications[
+                NB_PINNED_APPLICATION_NIXCLOCK];
+        changed = true;
+        rebuild_launcher_menu(runtime);
+    } else if (action == NB_SETTINGS_ACTION_TOGGLE_SAKURA_PIN) {
+        runtime->preferences.pinned_applications[
+            NB_PINNED_APPLICATION_SAKURA] =
+            !runtime->preferences.pinned_applications[
+                NB_PINNED_APPLICATION_SAKURA];
+        changed = true;
+        rebuild_launcher_menu(runtime);
+    } else if (action == NB_SETTINGS_ACTION_TOGGLE_MIDORI_PIN) {
+        runtime->preferences.pinned_applications[
+            NB_PINNED_APPLICATION_MIDORI] =
+            !runtime->preferences.pinned_applications[
+                NB_PINNED_APPLICATION_MIDORI];
+        changed = true;
+        rebuild_launcher_menu(runtime);
+    } else if (action == NB_SETTINGS_ACTION_TOGGLE_MAXIMIZE) {
+        runtime->preferences.maximize_gadget_visible =
+            !runtime->preferences.maximize_gadget_visible;
+        changed = true;
+        nb_shell_set_window_controls(
+            &runtime->shell,
+            runtime->preferences.maximize_gadget_visible,
+            runtime->preferences.window_control_layout);
+    } else if (action == NB_SETTINGS_ACTION_CYCLE_CONTROL_LAYOUT) {
+        runtime->preferences.window_control_layout =
+            (enum nb_window_control_layout)(
+                (runtime->preferences.window_control_layout + 1) % 3);
+        changed = true;
+        nb_shell_set_window_controls(
+            &runtime->shell,
+            runtime->preferences.maximize_gadget_visible,
+            runtime->preferences.window_control_layout);
+    } else if (action != NB_SETTINGS_ACTION_NONE) {
+        return false;
+    }
+    runtime->pending_preferences_changed =
+        runtime->pending_preferences_changed || changed;
+    return true;
+}
+
 static bool open_nixinfo(struct nb_desktop_runtime *runtime)
 {
     if (!nb_application_host_is_running(&runtime->applications,
@@ -381,6 +608,10 @@ static bool apply_shell_action(struct nb_desktop_runtime *runtime,
             runtime->pending_launch_request = NB_DESKTOP_LAUNCH_MIDORI;
             return true;
         }
+        if (action.menu_command ==
+            NIXBENCH_DESKTOP_COMMAND_APPLICATION_PINS) {
+            return show_settings_window(runtime);
+        }
     }
 
     const enum nb_application_dispatch_result dispatch =
@@ -403,6 +634,9 @@ static bool apply_shell_action(struct nb_desktop_runtime *runtime,
     if (action.type == NB_SHELL_ACTION_WINDOW_CLOSE_REQUESTED) {
         if (action.window == runtime->about_window) {
             return close_about_window(runtime, action.window);
+        }
+        if (action.window == runtime->settings_window) {
+            return close_settings_window(runtime, action.window);
         }
 #if NIXBENCH_HAS_WAYLAND
         if (runtime->wayland != NULL &&
@@ -476,6 +710,9 @@ static bool apply_shell_action(struct nb_desktop_runtime *runtime,
         if (action.menu_command == NIXBENCH_DESKTOP_COMMAND_OPEN_NIXINFO) {
             return open_nixinfo(runtime);
         }
+        if (action.menu_command == NIXBENCH_DESKTOP_COMMAND_SETTINGS) {
+            return show_settings_window(runtime);
+        }
         if (action.menu_command == NIXBENCH_DESKTOP_COMMAND_QUIT) {
             runtime->quit_requested = true;
         } else {
@@ -493,6 +730,17 @@ static bool apply_shell_action(struct nb_desktop_runtime *runtime,
         }
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "Ignored About menu command %u",
+                    (unsigned int)action.menu_command);
+        return true;
+    }
+
+    if (action.menu_source == NIXBENCH_MENU_SOURCE_SETTINGS) {
+        if (action.menu_command == NIXBENCH_SETTINGS_COMMAND_CLOSE &&
+            action.window == runtime->settings_window) {
+            return close_settings_window(runtime, action.window);
+        }
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Ignored Settings menu command %u",
                     (unsigned int)action.menu_command);
         return true;
     }
@@ -672,6 +920,20 @@ static bool process_pointer_event(const struct nb_host_event *event,
                     true);
             }
 #endif
+            runtime->settings_pressed_action = NB_SETTINGS_ACTION_NONE;
+            if (target.window == runtime->settings_window &&
+                target.hit == NB_WINDOW_HIT_CONTENT) {
+                const struct nb_window *settings =
+                    nb_desktop_find_window(&runtime->shell.desktop,
+                                           runtime->settings_window);
+
+                if (settings != NULL) {
+                    runtime->settings_pressed_action =
+                        nb_settings_hit_test(nb_window_content_rect(settings),
+                                             x,
+                                             y);
+                }
+            }
             (void)nb_shell_pointer_down(&runtime->shell,
                                         x,
                                         y,
@@ -710,6 +972,10 @@ static bool process_pointer_event(const struct nb_host_event *event,
             }
 #endif
         } else {
+            const enum nb_settings_action settings_action =
+                runtime->settings_pressed_action;
+
+            runtime->settings_pressed_action = NB_SETTINGS_ACTION_NONE;
 #if NIXBENCH_HAS_WAYLAND
             if (wayland_grabbed) {
                 return nb_wayland_server_pointer_button(
@@ -730,6 +996,21 @@ static bool process_pointer_event(const struct nb_host_event *event,
                                         runtime->viewport);
 
                 if (!apply_shell_action(runtime, action)) {
+                    return false;
+                }
+            }
+            if (settings_action != NB_SETTINGS_ACTION_NONE &&
+                target.window == runtime->settings_window &&
+                target.hit == NB_WINDOW_HIT_CONTENT) {
+                const struct nb_window *settings =
+                    nb_desktop_find_window(&runtime->shell.desktop,
+                                           runtime->settings_window);
+
+                if (settings != NULL &&
+                    nb_settings_hit_test(nb_window_content_rect(settings),
+                                         x,
+                                         y) == settings_action &&
+                    !apply_settings_action(runtime, settings_action)) {
                     return false;
                 }
             }
@@ -941,6 +1222,7 @@ static bool process_key_event(const struct nb_host_event *event,
 static void cancel_pointer_input(struct nb_desktop_runtime *runtime,
                                  uint64_t milliseconds)
 {
+    runtime->settings_pressed_action = NB_SETTINGS_ACTION_NONE;
     nb_shell_pointer_cancel(&runtime->shell);
 #if NIXBENCH_HAS_WAYLAND
     nb_wayland_server_pointer_cancel(runtime->wayland,
@@ -1040,6 +1322,10 @@ struct nb_desktop_runtime *nb_desktop_runtime_create(
     if (options->publish_wayland_socket && !options->enable_wayland) {
         return NULL;
     }
+    if (options->preferences != NULL &&
+        !nb_user_preferences_is_valid(options->preferences)) {
+        return NULL;
+    }
 
     runtime = calloc(1, sizeof(*runtime));
     if (runtime == NULL) {
@@ -1047,13 +1333,21 @@ struct nb_desktop_runtime *nb_desktop_runtime_create(
     }
     runtime->options = *options;
     runtime->about_window = NB_WINDOW_ID_NONE;
+    runtime->settings_window = NB_WINDOW_ID_NONE;
+    runtime->settings_color_target = NB_SETTINGS_COLOR_PRIMARY;
     runtime->nixinfo_application = NB_APPLICATION_ID_NONE;
+    nb_user_preferences_init(&runtime->preferences);
+    if (options->preferences != NULL) {
+        runtime->preferences = *options->preferences;
+    }
     nb_shell_init(&runtime->shell,
                   NIXBENCH_MENU_SOURCE_DESKTOP,
                   &desktop_menu_model);
-    nb_shell_set_menu_overlay(
+    nb_shell_set_window_controls(
         &runtime->shell,
-        options->enable_application_launcher ? &launcher_menu_model : NULL);
+        runtime->preferences.maximize_gadget_visible,
+        runtime->preferences.window_control_layout);
+    rebuild_launcher_menu(runtime);
     if (!nb_application_host_init(&runtime->applications,
                                   &runtime->shell)) {
         free(runtime);
@@ -1210,6 +1504,11 @@ bool nb_desktop_runtime_handle_input(
     update->quit_requested = runtime->quit_requested;
     update->launch_request = runtime->pending_launch_request;
     runtime->pending_launch_request = NB_DESKTOP_LAUNCH_NONE;
+    update->preferences_changed = runtime->pending_preferences_changed;
+    if (update->preferences_changed) {
+        update->preferences = runtime->preferences;
+        runtime->pending_preferences_changed = false;
+    }
     return true;
 }
 
@@ -1309,12 +1608,9 @@ bool nb_desktop_runtime_render(
     }
     renderer = nb_software_canvas_renderer(runtime->canvas);
     if (renderer == NULL ||
-        !SDL_SetRenderDrawColor(renderer,
-                                NIXBENCH_DESKTOP_RED,
-                                NIXBENCH_DESKTOP_GREEN,
-                                NIXBENCH_DESKTOP_BLUE,
-                                SDL_ALPHA_OPAQUE) ||
-        !SDL_RenderClear(renderer) ||
+        !nb_backdrop_render(renderer,
+                            runtime->viewport,
+                            &runtime->preferences) ||
         !nb_shell_render_with_content(renderer,
                                       &runtime->shell,
                                       runtime->viewport,
@@ -1408,5 +1704,16 @@ bool nb_desktop_runtime_active_window_frame(
     }
     *window = id;
     *frame = active->frame;
+    return true;
+}
+
+bool nb_desktop_runtime_get_preferences(
+    const struct nb_desktop_runtime *runtime,
+    struct nb_user_preferences *preferences)
+{
+    if (runtime == NULL || preferences == NULL) {
+        return false;
+    }
+    *preferences = runtime->preferences;
     return true;
 }
