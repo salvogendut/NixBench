@@ -56,7 +56,8 @@ toolkits while NixBench owns window management and composition:
 - A small NixBench shell extension can carry desktop-specific integration such
   as an application's global menu model without replacing its widget toolkit.
   The first GTK slice bridges `GtkApplication` menubars and `app-menu` models,
-  plus classic GTK3 `GtkMenuBar` widget trees.
+  plus classic GTK3 `GtkMenuBar` widget trees and detached application popup
+  menus such as Sakura's.
 - Xaw and other X11-only applications remain candidates for a later, optional
   Xwayland compatibility service.
 - Moving the outer display from SDL/Xorg to NetBSD KMS changes the physical

@@ -71,6 +71,9 @@ struct nb_gtk_menu_bridge {
     guint sync_source;
     guint map_signal;
     gulong map_hook;
+    guint show_signal;
+    gulong show_hook;
+    GPtrArray *popup_menus;
 };
 
 static struct nb_gtk_menu_bridge *global_bridge;
@@ -87,6 +90,8 @@ static struct nb_gtk_menu_window_state *bridge_attach_window(
     struct nb_gtk_menu_bridge *bridge,
     GtkWindow *window);
 static void bridge_schedule_sync(struct nb_gtk_menu_bridge *bridge);
+static void bridge_track_popup_menu(struct nb_gtk_menu_bridge *bridge,
+                                    GtkWidget *widget);
 
 static void command_entry_reset(struct nb_gtk_menu_command_entry *entry)
 {
@@ -836,6 +841,63 @@ static gboolean widget_menu_has_items(GtkWidget *widget)
     return found;
 }
 
+static size_t widget_menu_score(GtkWidget *widget)
+{
+    GList *children;
+    GList *iter;
+    size_t score = 0;
+
+    if (widget == NULL || !GTK_IS_MENU_SHELL(widget)) {
+        return 0;
+    }
+    children = gtk_container_get_children(GTK_CONTAINER(widget));
+    for (iter = children; iter != NULL; iter = iter->next) {
+        GtkWidget *item = GTK_IS_WIDGET(iter->data)
+                              ? GTK_WIDGET(iter->data)
+                              : NULL;
+        GtkWidget *submenu;
+
+        if (item == NULL || !gtk_widget_get_visible(item) ||
+            GTK_IS_SEPARATOR_MENU_ITEM(item) || !GTK_IS_MENU_ITEM(item)) {
+            continue;
+        }
+        submenu = gtk_menu_item_get_submenu(GTK_MENU_ITEM(item));
+        if (submenu != NULL && GTK_IS_MENU_SHELL(submenu)) {
+            score += widget_menu_score(submenu);
+        } else {
+            ++score;
+        }
+    }
+    g_list_free(children);
+    return score;
+}
+
+static GtkWidget *bridge_best_popup_menu(struct nb_gtk_menu_bridge *bridge)
+{
+    GtkWidget *best = NULL;
+    size_t best_score = 0;
+    guint index;
+
+    if (bridge == NULL || bridge->popup_menus == NULL) {
+        return NULL;
+    }
+    for (index = 0; index < bridge->popup_menus->len; ++index) {
+        GtkWidget *menu = g_ptr_array_index(bridge->popup_menus, index);
+        size_t score;
+
+        if (menu == NULL || !GTK_IS_MENU(menu) ||
+            gtk_menu_get_attach_widget(GTK_MENU(menu)) != NULL) {
+            continue;
+        }
+        score = widget_menu_score(menu);
+        if (score > best_score) {
+            best = menu;
+            best_score = score;
+        }
+    }
+    return best;
+}
+
 static gboolean append_widget_item(
     struct nb_gtk_menu_window_state *state,
     GtkWidget *widget,
@@ -931,6 +993,121 @@ static gboolean append_widget_menu_contents(
     return appended;
 }
 
+static gboolean widget_menu_has_direct_items(GtkWidget *menu_shell)
+{
+    GList *children;
+    GList *iter;
+    gboolean found = FALSE;
+
+    children = gtk_container_get_children(GTK_CONTAINER(menu_shell));
+    for (iter = children; iter != NULL && !found; iter = iter->next) {
+        GtkWidget *item = GTK_IS_WIDGET(iter->data)
+                              ? GTK_WIDGET(iter->data)
+                              : NULL;
+
+        if (item != NULL && gtk_widget_get_visible(item) &&
+            GTK_IS_MENU_ITEM(item) && !GTK_IS_SEPARATOR_MENU_ITEM(item) &&
+            gtk_menu_item_get_submenu(GTK_MENU_ITEM(item)) == NULL) {
+            found = TRUE;
+        }
+    }
+    g_list_free(children);
+    return found;
+}
+
+static gboolean append_widget_direct_items(
+    struct nb_gtk_menu_window_state *state,
+    GtkWidget *menu_shell,
+    struct nixbench_application_menu_v1 *menu)
+{
+    GList *children;
+    GList *iter;
+    gboolean appended = FALSE;
+    gboolean separator_pending = FALSE;
+
+    children = gtk_container_get_children(GTK_CONTAINER(menu_shell));
+    for (iter = children; iter != NULL; iter = iter->next) {
+        GtkWidget *item = GTK_IS_WIDGET(iter->data)
+                              ? GTK_WIDGET(iter->data)
+                              : NULL;
+
+        if (item == NULL || !gtk_widget_get_visible(item)) {
+            continue;
+        }
+        if (GTK_IS_SEPARATOR_MENU_ITEM(item)) {
+            separator_pending = appended;
+            continue;
+        }
+        if (!GTK_IS_MENU_ITEM(item) ||
+            gtk_menu_item_get_submenu(GTK_MENU_ITEM(item)) != NULL) {
+            continue;
+        }
+        if (separator_pending) {
+            (void)append_protocol_separator(state, menu);
+            separator_pending = FALSE;
+        }
+        appended |= append_widget_item(state, item, menu);
+    }
+    g_list_free(children);
+    return appended;
+}
+
+static gboolean publish_widget_submenus(
+    struct nb_gtk_menu_window_state *state,
+    GtkWidget *menu_shell,
+    struct nixbench_application_menu_v1 *menu)
+{
+    GList *children;
+    GList *iter;
+    gboolean appended = FALSE;
+
+    children = gtk_container_get_children(GTK_CONTAINER(menu_shell));
+    for (iter = children; iter != NULL; iter = iter->next) {
+        GtkWidget *item = GTK_IS_WIDGET(iter->data)
+                              ? GTK_WIDGET(iter->data)
+                              : NULL;
+        GtkWidget *submenu;
+        const char *label;
+
+        if (item == NULL || !gtk_widget_get_visible(item) ||
+            !GTK_IS_MENU_ITEM(item)) {
+            continue;
+        }
+        submenu = gtk_menu_item_get_submenu(GTK_MENU_ITEM(item));
+        if (submenu == NULL || !GTK_IS_MENU_SHELL(submenu)) {
+            continue;
+        }
+        label = gtk_menu_item_get_label(GTK_MENU_ITEM(item));
+        if (widget_menu_has_direct_items(submenu) &&
+            append_protocol_menu(state, menu, label)) {
+            appended |= append_widget_direct_items(state, submenu, menu);
+        }
+        appended |= publish_widget_submenus(state, submenu, menu);
+    }
+    g_list_free(children);
+    return appended;
+}
+
+static gboolean publish_widget_popup(
+    struct nb_gtk_menu_window_state *state,
+    GtkWidget *popup,
+    struct nixbench_application_menu_v1 *menu)
+{
+    char label[NB_MENU_TEXT_CAPACITY];
+    gboolean appended = FALSE;
+
+    if (popup == NULL || !GTK_IS_MENU(popup)) {
+        return FALSE;
+    }
+    root_menu_label(state, label, sizeof(label));
+    if (widget_menu_has_direct_items(popup) &&
+        append_protocol_menu(state, menu, label)) {
+        appended |= append_widget_direct_items(state, popup, menu);
+    }
+    appended |= publish_widget_submenus(state, popup, menu);
+    return appended;
+}
+
 static gboolean publish_widget_menubar(
     struct nb_gtk_menu_window_state *state,
     GtkWidget *menubar,
@@ -973,9 +1150,11 @@ static gboolean publish_window_menu(struct nb_gtk_menu_window_state *state)
     GMenuModel *model = NULL;
     GtkApplication *application;
     GtkWidget *menubar;
+    GtkWidget *popup;
     struct nixbench_application_menu_v1 *menu;
     gboolean model_is_menubar = FALSE;
     gboolean published;
+    const char *source;
 
     if (state == NULL || state->bridge == NULL || state->window == NULL) {
         return FALSE;
@@ -995,7 +1174,10 @@ static gboolean publish_window_menu(struct nb_gtk_menu_window_state *state)
     menubar = model == NULL
                   ? find_widget_menubar(GTK_WIDGET(state->window))
                   : NULL;
-    if (model == NULL && menubar == NULL) {
+    popup = model == NULL && menubar == NULL
+                ? bridge_best_popup_menu(state->bridge)
+                : NULL;
+    if (model == NULL && menubar == NULL && popup == NULL) {
         window_state_clear_menu(state);
         return FALSE;
     }
@@ -1025,11 +1207,17 @@ static gboolean publish_window_menu(struct nb_gtk_menu_window_state *state)
                                               state);
     window_state_reset_commands(state);
 
-    if (model == NULL) {
+    if (model == NULL && menubar != NULL) {
+        source = "GtkMenuBar";
         published = publish_widget_menubar(state, menubar, menu);
+    } else if (model == NULL) {
+        source = "GtkMenu popup";
+        published = publish_widget_popup(state, popup, menu);
     } else if (model_is_menubar) {
+        source = "GtkApplication menubar";
         published = publish_menubar(state, model, menu);
     } else {
+        source = "GtkApplication app-menu";
         published = publish_flat_menu(state, model, menu);
     }
     if (model != NULL) {
@@ -1042,6 +1230,11 @@ static gboolean publish_window_menu(struct nb_gtk_menu_window_state *state)
     }
 
     nixbench_application_menu_v1_commit(state->menu);
+    g_printerr("NixBench GTK menu bridge: published %zu menu(s) and %zu "
+               "command(s) from %s\n",
+               state->menu_count,
+               state->command_count,
+               source);
     return TRUE;
 }
 
@@ -1092,6 +1285,45 @@ static void bridge_schedule_sync(struct nb_gtk_menu_bridge *bridge)
     }
 }
 
+static void bridge_popup_menu_destroyed(gpointer data, GObject *object)
+{
+    struct nb_gtk_menu_bridge *bridge = data;
+    guint index;
+
+    if (bridge == NULL || bridge->popup_menus == NULL) {
+        return;
+    }
+    for (index = 0; index < bridge->popup_menus->len; ++index) {
+        if (g_ptr_array_index(bridge->popup_menus, index) == object) {
+            g_ptr_array_remove_index_fast(bridge->popup_menus, index);
+            break;
+        }
+    }
+    bridge_schedule_sync(bridge);
+}
+
+static void bridge_track_popup_menu(struct nb_gtk_menu_bridge *bridge,
+                                    GtkWidget *widget)
+{
+    guint index;
+
+    if (bridge == NULL || widget == NULL || !GTK_IS_MENU(widget)) {
+        return;
+    }
+    if (bridge->popup_menus == NULL) {
+        bridge->popup_menus = g_ptr_array_new();
+    }
+    for (index = 0; index < bridge->popup_menus->len; ++index) {
+        if (g_ptr_array_index(bridge->popup_menus, index) == widget) {
+            return;
+        }
+    }
+    g_ptr_array_add(bridge->popup_menus, widget);
+    g_object_weak_ref(G_OBJECT(widget),
+                      bridge_popup_menu_destroyed,
+                      bridge);
+}
+
 static gboolean bridge_on_widget_map(GSignalInvocationHint *hint,
                                      guint parameter_count,
                                      const GValue *parameters,
@@ -1105,11 +1337,26 @@ static gboolean bridge_on_widget_map(GSignalInvocationHint *hint,
         return TRUE;
     }
     object = g_value_get_object(&parameters[0]);
-    if (object != NULL && GTK_IS_WINDOW(object)) {
-        bridge_attach_window(bridge, GTK_WINDOW(object));
+    if (object != NULL) {
+        if (GTK_IS_WINDOW(object)) {
+            bridge_attach_window(bridge, GTK_WINDOW(object));
+        } else if (GTK_IS_MENU(object)) {
+            bridge_track_popup_menu(bridge, GTK_WIDGET(object));
+        }
     }
     bridge_schedule_sync(bridge);
     return TRUE;
+}
+
+static gboolean bridge_on_widget_show(GSignalInvocationHint *hint,
+                                      guint parameter_count,
+                                      const GValue *parameters,
+                                      gpointer data)
+{
+    return bridge_on_widget_map(hint,
+                                parameter_count,
+                                parameters,
+                                data);
 }
 
 static void bridge_on_window_realize(GtkWidget *widget, gpointer data)
@@ -1303,6 +1550,11 @@ static void bridge_destroy(struct nb_gtk_menu_bridge *bridge)
         g_signal_remove_emission_hook(bridge->map_signal, bridge->map_hook);
         bridge->map_hook = 0;
     }
+    if (bridge->show_signal != 0 && bridge->show_hook != 0) {
+        g_signal_remove_emission_hook(bridge->show_signal,
+                                      bridge->show_hook);
+        bridge->show_hook = 0;
+    }
 
     windows = gtk_window_list_toplevels();
     for (iter = windows; iter != NULL; iter = iter->next) {
@@ -1349,6 +1601,19 @@ static void bridge_destroy(struct nb_gtk_menu_bridge *bridge)
         wl_registry_destroy(bridge->registry);
         bridge->registry = NULL;
     }
+    if (bridge->popup_menus != NULL) {
+        guint index;
+
+        for (index = 0; index < bridge->popup_menus->len; ++index) {
+            GObject *menu = g_ptr_array_index(bridge->popup_menus, index);
+
+            g_object_weak_unref(menu,
+                                bridge_popup_menu_destroyed,
+                                bridge);
+        }
+        g_ptr_array_free(bridge->popup_menus, TRUE);
+        bridge->popup_menus = NULL;
+    }
     g_free(bridge);
 }
 
@@ -1363,6 +1628,7 @@ G_MODULE_EXPORT void gtk_module_init(gint *argc, gchar ***argv)
         return;
     }
 
+    g_printerr("NixBench GTK menu bridge: loaded\n");
     global_bridge = bridge_create();
     default_application = g_application_get_default();
     if (default_application != NULL &&
@@ -1379,6 +1645,18 @@ G_MODULE_EXPORT void gtk_module_init(gint *argc, gchar ***argv)
                 global_bridge->map_signal,
                 0,
                 bridge_on_widget_map,
+                global_bridge,
+                NULL);
+        }
+    }
+    global_bridge->show_signal = g_signal_lookup("show", GTK_TYPE_WIDGET);
+    if (global_bridge->show_signal != 0) {
+        g_signal_query(global_bridge->show_signal, &query);
+        if ((query.signal_flags & G_SIGNAL_NO_HOOKS) == 0) {
+            global_bridge->show_hook = g_signal_add_emission_hook(
+                global_bridge->show_signal,
+                0,
+                bridge_on_widget_show,
                 global_bridge,
                 NULL);
         }

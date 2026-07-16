@@ -527,8 +527,9 @@ content. A toplevel may appear before the browser is fully usable. Missing
 full popup pointer routing, outside-click dismissal policy, positioner
 constraint adjustment, pointer-axis scrolling, subsurfaces, clipboard/data
 transfer beyond the discovery skeleton, accelerated buffer sharing, and
-complete coverage of dynamically constructed or deeply nested GTK menus are
-the expected first compatibility boundaries.
+complete coverage of transient, dynamically constructed GTK context menus are
+the expected first compatibility boundaries. Static detached application
+menus, including Sakura's main popup tree, are exported by the bridge.
 
 Set `NIXBENCH_TRACE_WAYLAND=1` when invoking `./tools/run-wsdisplay-session.sh`
 if you need a client-side protocol trace for a failing interaction.
