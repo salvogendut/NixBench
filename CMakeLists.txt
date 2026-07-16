@@ -10,6 +10,14 @@ project(
 include(CTest)
 include(GNUInstallDirs)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+  # NetBSD's runtime linker does not search pkgsrc's LOCALBASE by default.
+  # Installed executables and modules must retain their configured package
+  # library directory, plus external link directories such as /usr/X11R7/lib.
+  set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_FULL_LIBDIR}")
+  set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+endif()
+
 find_package(SDL3 3.2.0 CONFIG REQUIRED COMPONENTS SDL3)
 
 option(
