@@ -1909,6 +1909,12 @@ static void test_wayland_surface_lifecycle(void)
     content = nb_window_content_rect(host_window);
     CHECK(content.width == 2 * INITIAL_WIDTH);
     CHECK(content.height == 2 * INITIAL_HEIGHT);
+    xdg_surface_set_window_geometry(client.xdg_surface,
+                                    8,
+                                    12,
+                                    INITIAL_WIDTH,
+                                    INITIAL_HEIGHT);
+    REQUIRE(pump_barrier(server, display));
 
     CHECK(nb_wayland_server_pointer_motion(server,
                                            window,
@@ -1919,8 +1925,8 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(client.pointer_enter_count == 1);
     CHECK(client.pointer_enter_surface == surface);
     CHECK(client.pointer_serial != 0);
-    CHECK(client.pointer_enter_x == wl_fixed_from_int(140));
-    CHECK(client.pointer_enter_y == wl_fixed_from_int(75));
+    CHECK(client.pointer_enter_x == wl_fixed_from_int(148));
+    CHECK(client.pointer_enter_y == wl_fixed_from_int(87));
 
     {
         const unsigned int previous_motion_count =
@@ -1935,8 +1941,8 @@ static void test_wayland_surface_lifecycle(void)
         CHECK(client.pointer_motion_count == previous_motion_count + 1);
     }
     CHECK(client.pointer_time == UINT32_C(1010));
-    CHECK(client.pointer_x == wl_fixed_from_int(280));
-    CHECK(client.pointer_y == wl_fixed_from_int(150));
+    CHECK(client.pointer_x == wl_fixed_from_int(288));
+    CHECK(client.pointer_y == wl_fixed_from_int(162));
     CHECK(client.pointer_frame_count >= 2);
 
     CHECK(nb_wayland_server_pointer_button(
@@ -1969,8 +1975,8 @@ static void test_wayland_surface_lifecycle(void)
     }
     CHECK(client.pointer_leave_count == 0);
     CHECK(client.pointer_time == UINT32_C(1030));
-    CHECK(client.pointer_x == wl_fixed_from_int(-56));
-    CHECK(client.pointer_y == wl_fixed_from_int(-30));
+    CHECK(client.pointer_x == wl_fixed_from_int(-48));
+    CHECK(client.pointer_y == wl_fixed_from_int(-18));
     CHECK(nb_wayland_server_pointer_grab_window(server) == window);
 
     CHECK(nb_wayland_server_pointer_button(
@@ -1990,21 +1996,6 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(client.pointer_leave_surface == surface);
     CHECK(nb_wayland_server_pointer_grab_window(server) ==
           NB_WINDOW_ID_NONE);
-
-    xdg_surface_set_window_geometry(xdg_surface,
-                                    8,
-                                    12,
-                                    root_width,
-                                    root_height);
-    REQUIRE(pump_barrier(server, display));
-    CHECK(nb_wayland_server_pointer_motion(server,
-                                           window,
-                                           content.x + 280,
-                                           content.y + 150,
-                                           UINT32_C(1041)));
-    REQUIRE(pump_barrier(server, display));
-    CHECK(client.pointer_x == wl_fixed_from_int(148));
-    CHECK(client.pointer_y == wl_fixed_from_int(87));
 
     /* A multi-button grab lasts until every button has been released. */
     CHECK(nb_wayland_server_pointer_motion(server,
