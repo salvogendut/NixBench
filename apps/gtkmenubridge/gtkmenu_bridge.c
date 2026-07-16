@@ -147,10 +147,14 @@ static void window_state_destroy(gpointer data)
         return;
     }
     if (state->window != NULL) {
-        if (state->realize_handler != 0) {
+        if (state->realize_handler != 0 &&
+            g_signal_handler_is_connected(state->window,
+                                          state->realize_handler)) {
             g_signal_handler_disconnect(state->window, state->realize_handler);
         }
-        if (state->destroy_handler != 0) {
+        if (state->destroy_handler != 0 &&
+            g_signal_handler_is_connected(state->window,
+                                          state->destroy_handler)) {
             g_signal_handler_disconnect(state->window, state->destroy_handler);
         }
     }
@@ -1668,6 +1672,7 @@ G_MODULE_EXPORT void gtk_module_init(gint *argc, gchar ***argv)
 {
     GApplication *default_application;
     GSignalQuery query = {0};
+    gpointer widget_class;
 
     (void)argc;
     (void)argv;
@@ -1686,6 +1691,13 @@ G_MODULE_EXPORT void gtk_module_init(gint *argc, gchar ***argv)
                                 GTK_APPLICATION(default_application));
     }
 
+    /*
+     * GTK can initialize loadable modules before GtkWidget's class has been
+     * referenced. Its inherited signals do not exist in the signal registry
+     * until class initialization has run, so g_signal_lookup() would silently
+     * return zero and the bridge would miss every subsequently created menu.
+     */
+    widget_class = g_type_class_ref(GTK_TYPE_WIDGET);
     global_bridge->map_signal = g_signal_lookup("map", GTK_TYPE_WIDGET);
     if (global_bridge->map_signal != 0) {
         g_signal_query(global_bridge->map_signal, &query);
@@ -1709,6 +1721,9 @@ G_MODULE_EXPORT void gtk_module_init(gint *argc, gchar ***argv)
                 global_bridge,
                 NULL);
         }
+    }
+    if (widget_class != NULL) {
+        g_type_class_unref(widget_class);
     }
     if (global_bridge->debug) {
         g_printerr("NixBench GTK menu bridge: hooks map=%u/%lu show=%u/%lu\n",
