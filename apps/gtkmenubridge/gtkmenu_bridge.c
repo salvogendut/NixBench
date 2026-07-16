@@ -94,6 +94,30 @@ static void bridge_schedule_sync(struct nb_gtk_menu_bridge *bridge);
 static void bridge_track_popup_menu(struct nb_gtk_menu_bridge *bridge,
                                     GtkWidget *widget);
 
+static void bridge_discover_popup_menus(struct nb_gtk_menu_bridge *bridge,
+                                        GtkWidget *widget)
+{
+    GList *children;
+    GList *iter;
+
+    if (bridge == NULL || widget == NULL) {
+        return;
+    }
+    if (GTK_IS_MENU(widget)) {
+        bridge_track_popup_menu(bridge, widget);
+    }
+    if (!GTK_IS_CONTAINER(widget)) {
+        return;
+    }
+    children = gtk_container_get_children(GTK_CONTAINER(widget));
+    for (iter = children; iter != NULL; iter = iter->next) {
+        if (GTK_IS_WIDGET(iter->data)) {
+            bridge_discover_popup_menus(bridge, GTK_WIDGET(iter->data));
+        }
+    }
+    g_list_free(children);
+}
+
 static void command_entry_reset(struct nb_gtk_menu_command_entry *entry)
 {
     if (entry == NULL) {
@@ -1294,6 +1318,17 @@ static void bridge_sync_all_windows(struct nb_gtk_menu_bridge *bridge)
                    "popup(s)\n",
                    g_list_length(windows),
                    bridge->popup_menus != NULL ? bridge->popup_menus->len : 0);
+    }
+    /*
+     * Some GTK3 programs construct their detached menus before GTK invokes
+     * gtk_module_init(). Their popup host windows are still present in the
+     * toplevel widget trees, so discover those existing menus before looking
+     * for a source to publish. The signal hooks handle menus created later.
+     */
+    for (iter = windows; iter != NULL; iter = iter->next) {
+        if (GTK_IS_WIDGET(iter->data)) {
+            bridge_discover_popup_menus(bridge, GTK_WIDGET(iter->data));
+        }
     }
     for (iter = windows; iter != NULL; iter = iter->next) {
         if (GTK_IS_WINDOW(iter->data)) {
