@@ -49,15 +49,10 @@ case "$build_dir" in
     /*) ;;
     *) build_dir=$repo_dir/$build_dir ;;
 esac
-gtk_menu_bridge_module=$build_dir/gtk-modules/libnixbench_gtk_menu_bridge.so
-
 GTK_CSD=0
 export GTK_CSD
-if [ "${NIXBENCH_GTK_MENU_BRIDGE:-0}" = 1 ] &&
-   [ -r "$gtk_menu_bridge_module" ]; then
-    GTK_MODULES=$gtk_menu_bridge_module${GTK_MODULES:+:$GTK_MODULES}
-    export GTK_MODULES
-fi
+. "$repo_dir/tools/gtk-menu-bridge-env.sh"
+nixbench_enable_gtk_menu_bridge "$build_dir" "nixbench Sakura probe"
 XDG_CONFIG_HOME=$profile_root/config
 XDG_CACHE_HOME=$profile_root/cache
 XDG_DATA_HOME=$profile_root/data

@@ -27,13 +27,20 @@ enum nb_gtk_menu_action_scope {
     NB_GTK_MENU_ACTION_SCOPE_WINDOW
 };
 
+enum nb_gtk_menu_command_kind {
+    NB_GTK_MENU_COMMAND_ACTION,
+    NB_GTK_MENU_COMMAND_WIDGET
+};
+
 struct nb_gtk_menu_bridge;
 
 struct nb_gtk_menu_command_entry {
     uint32_t command;
+    enum nb_gtk_menu_command_kind kind;
     enum nb_gtk_menu_action_scope scope;
     char action[NB_GTK_MENU_ACTION_CAPACITY];
     GVariant *target;
+    GtkWidget *widget;
 };
 
 struct nb_gtk_menu_window_state {
@@ -44,6 +51,8 @@ struct nb_gtk_menu_window_state {
         commands[NB_GTK_MENU_COMMAND_CAPACITY];
     size_t command_count;
     uint32_t next_command;
+    size_t menu_count;
+    size_t current_item_count;
     gulong realize_handler;
     gulong destroy_handler;
 };
@@ -53,12 +62,31 @@ struct nb_gtk_menu_bridge {
     struct wl_display *display;
     struct wl_registry *registry;
     struct nixbench_application_menu_manager_v1 *menu_manager;
+    gulong window_added_handler;
+    gulong window_removed_handler;
+    gulong menubar_handler;
+    gulong app_menu_handler;
+    gulong action_state_handler;
+    gulong action_enabled_handler;
+    guint sync_source;
+    guint map_signal;
+    gulong map_hook;
 };
 
 static struct nb_gtk_menu_bridge *global_bridge;
 
 static void bridge_on_window_realize(GtkWidget *widget, gpointer data);
 static void bridge_on_window_destroy(GtkWidget *widget, gpointer data);
+static void bridge_on_window_added(GtkApplication *application,
+                                   GtkWindow *window,
+                                   gpointer data);
+static void bridge_on_window_removed(GtkApplication *application,
+                                     GtkWindow *window,
+                                     gpointer data);
+static struct nb_gtk_menu_window_state *bridge_attach_window(
+    struct nb_gtk_menu_bridge *bridge,
+    GtkWindow *window);
+static void bridge_schedule_sync(struct nb_gtk_menu_bridge *bridge);
 
 static void command_entry_reset(struct nb_gtk_menu_command_entry *entry)
 {
@@ -67,6 +95,9 @@ static void command_entry_reset(struct nb_gtk_menu_command_entry *entry)
     }
     if (entry->target != NULL) {
         g_variant_unref(entry->target);
+    }
+    if (entry->widget != NULL) {
+        g_object_unref(entry->widget);
     }
     memset(entry, 0, sizeof(*entry));
 }
@@ -83,6 +114,8 @@ static void window_state_reset_commands(struct nb_gtk_menu_window_state *state)
     }
     state->command_count = 0;
     state->next_command = 1;
+    state->menu_count = 0;
+    state->current_item_count = 0;
 }
 
 static void window_state_clear_menu(struct nb_gtk_menu_window_state *state)
@@ -174,50 +207,119 @@ static gboolean model_has_actionable_items(GMenuModel *model)
     return FALSE;
 }
 
-static gboolean model_has_nested_menus(GMenuModel *model)
+static gboolean copy_menu_text(const char *source,
+                               char *destination,
+                               size_t capacity)
 {
-    gint count;
-    gint index;
+    const char *cursor;
+    size_t used = 0;
 
-    if (model == NULL) {
+    if (source == NULL || destination == NULL || capacity == 0) {
         return FALSE;
     }
-    count = g_menu_model_get_n_items(model);
-    for (index = 0; index < count; ++index) {
-        GMenuModel *submenu =
-            g_menu_model_get_item_link(model, index, G_MENU_LINK_SUBMENU);
-        GMenuModel *section;
+    cursor = source;
+    while (*cursor != '\0') {
+        const char *next;
+        size_t bytes;
 
-        if (submenu != NULL) {
-            g_object_unref(submenu);
-            return TRUE;
+        if (*cursor == '_') {
+            if (cursor[1] != '_') {
+                ++cursor;
+                continue;
+            }
+            ++cursor;
         }
-        section = g_menu_model_get_item_link(model,
-                                             index,
-                                             G_MENU_LINK_SECTION);
-        if (section != NULL) {
-            g_object_unref(section);
-            return TRUE;
+        next = g_utf8_next_char(cursor);
+        bytes = (size_t)(next - cursor);
+        if (used + bytes >= capacity) {
+            break;
         }
+        memcpy(destination + used, cursor, bytes);
+        used += bytes;
+        cursor = next;
     }
-    return FALSE;
+    destination[used] = '\0';
+    g_strstrip(destination);
+    return destination[0] != '\0';
 }
 
-static const char *root_menu_label(GtkApplication *application,
-                                   char *buffer,
-                                   size_t capacity)
+static const char *root_menu_label(
+    const struct nb_gtk_menu_window_state *state,
+    char *buffer,
+    size_t capacity)
 {
-    const char *name;
+    GtkApplication *application;
+    const char *name = NULL;
 
-    name = g_application_get_application_id(G_APPLICATION(application));
+    application = state != NULL && state->window != NULL
+                      ? gtk_window_get_application(state->window)
+                      : NULL;
+    if (application != NULL) {
+        name = g_application_get_application_id(G_APPLICATION(application));
+    }
     if (name == NULL || name[0] == '\0') {
         name = g_get_application_name();
+    }
+    if ((name == NULL || name[0] == '\0') && state != NULL &&
+        state->window != NULL) {
+        name = gtk_window_get_title(state->window);
     }
     if (name == NULL || name[0] == '\0') {
         name = "Application";
     }
-    g_strlcpy(buffer, name, capacity);
+    if (!copy_menu_text(name, buffer, capacity)) {
+        g_strlcpy(buffer, "Application", capacity);
+    }
     return buffer;
+}
+
+static gboolean append_protocol_menu(
+    struct nb_gtk_menu_window_state *state,
+    struct nixbench_application_menu_v1 *menu,
+    const char *label)
+{
+    char text[NB_MENU_TEXT_CAPACITY];
+
+    if (state == NULL || menu == NULL || state->menu_count >= NB_MENU_MAX_MENUS ||
+        !copy_menu_text(label, text, sizeof(text))) {
+        return FALSE;
+    }
+    nixbench_application_menu_v1_append_menu(menu, text);
+    ++state->menu_count;
+    state->current_item_count = 0;
+    return TRUE;
+}
+
+static gboolean append_protocol_item(
+    struct nb_gtk_menu_window_state *state,
+    struct nixbench_application_menu_v1 *menu,
+    const char *label,
+    uint32_t command,
+    uint32_t flags)
+{
+    char text[NB_MENU_TEXT_CAPACITY];
+
+    if (state == NULL || menu == NULL || state->menu_count == 0 ||
+        state->current_item_count >= NB_MENU_MAX_ITEMS ||
+        !copy_menu_text(label, text, sizeof(text))) {
+        return FALSE;
+    }
+    nixbench_application_menu_v1_append_item(menu, text, command, flags);
+    ++state->current_item_count;
+    return TRUE;
+}
+
+static gboolean append_protocol_separator(
+    struct nb_gtk_menu_window_state *state,
+    struct nixbench_application_menu_v1 *menu)
+{
+    if (state == NULL || menu == NULL || state->menu_count == 0 ||
+        state->current_item_count >= NB_MENU_MAX_ITEMS) {
+        return FALSE;
+    }
+    nixbench_application_menu_v1_append_separator(menu);
+    ++state->current_item_count;
+    return TRUE;
 }
 
 static gboolean window_state_has_surface(const struct nb_gtk_menu_window_state *state)
@@ -324,56 +426,40 @@ static gboolean bridge_ensure_manager(struct nb_gtk_menu_bridge *bridge)
     return bridge->menu_manager != NULL;
 }
 
-static struct nb_gtk_menu_window_state *window_state_attach(
-    struct nb_gtk_menu_bridge *bridge,
-    GtkWindow *window)
-{
-    struct nb_gtk_menu_window_state *state;
-
-    if (bridge == NULL || window == NULL) {
-        return NULL;
-    }
-    state = g_object_get_data(G_OBJECT(window), "nixbench-gtk-menu-state");
-    if (state != NULL) {
-        return state;
-    }
-
-    state = g_new0(struct nb_gtk_menu_window_state, 1);
-    state->bridge = bridge;
-    state->window = window;
-    state->next_command = 1;
-    g_object_set_data_full(G_OBJECT(window),
-                           "nixbench-gtk-menu-state",
-                           state,
-                           window_state_destroy);
-    state->realize_handler = g_signal_connect(
-        window,
-        "realize",
-        G_CALLBACK(bridge_on_window_realize),
-        state);
-    state->destroy_handler = g_signal_connect(
-        window,
-        "destroy",
-        G_CALLBACK(bridge_on_window_destroy),
-        state);
-    return state;
-}
-
 static void activate_command(struct nb_gtk_menu_window_state *state,
                              const struct nb_gtk_menu_command_entry *entry)
 {
+    GActionGroup *group;
+
     if (state == NULL || entry == NULL) {
         return;
     }
-    if (entry->scope == NB_GTK_MENU_ACTION_SCOPE_WINDOW) {
-        g_warning("NixBench GTK menu bridge does not yet route window-scoped "
-                  "actions: %s",
+    if (entry->kind == NB_GTK_MENU_COMMAND_WIDGET) {
+        if (entry->widget != NULL &&
+            gtk_widget_get_sensitive(entry->widget)) {
+            gtk_menu_item_activate(GTK_MENU_ITEM(entry->widget));
+        }
+        return;
+    }
+
+    if (entry->scope == NB_GTK_MENU_ACTION_SCOPE_WINDOW &&
+        G_IS_ACTION_GROUP(state->window)) {
+        group = G_ACTION_GROUP(state->window);
+    } else {
+        GtkApplication *application =
+            gtk_window_get_application(state->window);
+
+        group = application != NULL && G_IS_ACTION_GROUP(application)
+                    ? G_ACTION_GROUP(application)
+                    : NULL;
+    }
+    if (group == NULL ||
+        !g_action_group_has_action(group, entry->action)) {
+        g_warning("NixBench GTK menu bridge could not find action %s",
                   entry->action);
         return;
     }
-    g_action_group_activate_action(G_ACTION_GROUP(state->bridge->application),
-                                   entry->action,
-                                   entry->target);
+    g_action_group_activate_action(group, entry->action, entry->target);
 }
 
 static const struct nb_gtk_menu_command_entry *find_command(
@@ -408,11 +494,61 @@ static void menu_command(void *data,
         return;
     }
     activate_command(state, entry);
+    bridge_schedule_sync(state->bridge);
 }
 
 static const struct nixbench_application_menu_v1_listener menu_listener = {
     .command = menu_command
 };
+
+static GActionGroup *window_action_group(
+    const struct nb_gtk_menu_window_state *state,
+    enum nb_gtk_menu_action_scope scope)
+{
+    GtkApplication *application;
+
+    if (state == NULL || state->window == NULL) {
+        return NULL;
+    }
+    if (scope == NB_GTK_MENU_ACTION_SCOPE_WINDOW) {
+        return G_IS_ACTION_GROUP(state->window)
+                   ? G_ACTION_GROUP(state->window)
+                   : NULL;
+    }
+    application = gtk_window_get_application(state->window);
+    return application != NULL && G_IS_ACTION_GROUP(application)
+               ? G_ACTION_GROUP(application)
+               : NULL;
+}
+
+static uint32_t action_item_flags(
+    const struct nb_gtk_menu_window_state *state,
+    enum nb_gtk_menu_action_scope scope,
+    const char *action,
+    GVariant *target)
+{
+    GActionGroup *group = window_action_group(state, scope);
+    GVariant *action_state;
+    uint32_t flags = 0;
+
+    if (group == NULL || !g_action_group_has_action(group, action)) {
+        return 0;
+    }
+    if (g_action_group_get_action_enabled(group, action)) {
+        flags |= NIXBENCH_APPLICATION_MENU_V1_ITEM_FLAGS_ENABLED;
+    }
+    action_state = g_action_group_get_action_state(group, action);
+    if (action_state != NULL) {
+        if ((target != NULL && g_variant_equal(action_state, target)) ||
+            (target == NULL &&
+             g_variant_is_of_type(action_state, G_VARIANT_TYPE_BOOLEAN) &&
+             g_variant_get_boolean(action_state))) {
+            flags |= NIXBENCH_APPLICATION_MENU_V1_ITEM_FLAGS_CHECKED;
+        }
+        g_variant_unref(action_state);
+    }
+    return flags;
+}
 
 static gboolean append_menu_item(struct nb_gtk_menu_window_state *state,
                                  GMenuModel *model,
@@ -466,6 +602,7 @@ static gboolean append_menu_item(struct nb_gtk_menu_window_state *state,
     entry = &state->commands[state->command_count];
     memset(entry, 0, sizeof(*entry));
     entry->command = state->next_command++;
+    entry->kind = NB_GTK_MENU_COMMAND_ACTION;
     if (g_str_has_prefix(action_text, "win.")) {
         entry->scope = NB_GTK_MENU_ACTION_SCOPE_WINDOW;
         action_text += 4;
@@ -480,11 +617,27 @@ static gboolean append_menu_item(struct nb_gtk_menu_window_state *state,
         entry->target = g_variant_ref(target);
     }
 
-    nixbench_application_menu_v1_append_item(
-        menu,
-        label_text,
-        entry->command,
-        NIXBENCH_APPLICATION_MENU_V1_ITEM_FLAGS_ENABLED);
+    if (!append_protocol_item(
+            state,
+            menu,
+            label_text,
+            entry->command,
+            action_item_flags(state,
+                              entry->scope,
+                              entry->action,
+                              target))) {
+        command_entry_reset(entry);
+        if (label != NULL) {
+            g_variant_unref(label);
+        }
+        if (action != NULL) {
+            g_variant_unref(action);
+        }
+        if (target != NULL) {
+            g_variant_unref(target);
+        }
+        return FALSE;
+    }
 
     if (label != NULL) {
         g_variant_unref(label);
@@ -523,8 +676,8 @@ static gboolean append_menu_contents(struct nb_gtk_menu_window_state *state,
         if (child != NULL) {
             if (model_has_actionable_items(child)) {
                 if (appended && !last_was_separator) {
-                    nixbench_application_menu_v1_append_separator(menu);
-                    last_was_separator = TRUE;
+                    last_was_separator =
+                        append_protocol_separator(state, menu);
                 }
                 if (append_menu_contents(state, child, menu)) {
                     appended = TRUE;
@@ -551,8 +704,10 @@ static gboolean publish_flat_menu(struct nb_gtk_menu_window_state *state,
 {
     char label[NB_MENU_TEXT_CAPACITY];
 
-    root_menu_label(state->bridge->application, label, sizeof(label));
-    nixbench_application_menu_v1_append_menu(menu, label);
+    root_menu_label(state, label, sizeof(label));
+    if (!append_protocol_menu(state, menu, label)) {
+        return FALSE;
+    }
     return append_menu_contents(state, model, menu);
 }
 
@@ -589,17 +744,18 @@ static gboolean publish_menubar(struct nb_gtk_menu_window_state *state,
             label_text != NULL && label_text[0] != '\0') {
             GMenuModel *child = submenu != NULL ? submenu : section;
 
-            nixbench_application_menu_v1_append_menu(menu, label_text);
-            appended |= append_menu_contents(state, child, menu);
+            if (model_has_actionable_items(child) &&
+                append_protocol_menu(state, menu, label_text)) {
+                appended |= append_menu_contents(state, child, menu);
+            }
         } else if (submenu == NULL && section == NULL &&
                    model_has_actionable_items(model)) {
             char fallback_label[NB_MENU_TEXT_CAPACITY];
 
-            root_menu_label(state->bridge->application,
-                            fallback_label,
-                            sizeof(fallback_label));
-            nixbench_application_menu_v1_append_menu(menu, fallback_label);
-            appended |= append_menu_contents(state, model, menu);
+            root_menu_label(state, fallback_label, sizeof(fallback_label));
+            if (append_protocol_menu(state, menu, fallback_label)) {
+                appended |= append_menu_contents(state, model, menu);
+            }
             if (label != NULL) {
                 g_variant_unref(label);
             }
@@ -625,11 +781,200 @@ static gboolean publish_menubar(struct nb_gtk_menu_window_state *state,
     return appended;
 }
 
+static GtkWidget *find_widget_menubar(GtkWidget *widget)
+{
+    GList *children;
+    GList *iter;
+    GtkWidget *result = NULL;
+
+    if (widget == NULL) {
+        return NULL;
+    }
+    if (GTK_IS_MENU_BAR(widget)) {
+        return widget;
+    }
+    if (!GTK_IS_CONTAINER(widget)) {
+        return NULL;
+    }
+
+    children = gtk_container_get_children(GTK_CONTAINER(widget));
+    for (iter = children; iter != NULL && result == NULL; iter = iter->next) {
+        if (GTK_IS_WIDGET(iter->data)) {
+            result = find_widget_menubar(GTK_WIDGET(iter->data));
+        }
+    }
+    g_list_free(children);
+    return result;
+}
+
+static gboolean widget_menu_has_items(GtkWidget *widget)
+{
+    GList *children;
+    GList *iter;
+    gboolean found = FALSE;
+
+    if (widget == NULL || !GTK_IS_MENU_SHELL(widget)) {
+        return FALSE;
+    }
+    children = gtk_container_get_children(GTK_CONTAINER(widget));
+    for (iter = children; iter != NULL && !found; iter = iter->next) {
+        GtkWidget *item = GTK_IS_WIDGET(iter->data)
+                              ? GTK_WIDGET(iter->data)
+                              : NULL;
+        GtkWidget *submenu;
+
+        if (item == NULL || !gtk_widget_get_visible(item) ||
+            GTK_IS_SEPARATOR_MENU_ITEM(item) || !GTK_IS_MENU_ITEM(item)) {
+            continue;
+        }
+        submenu = gtk_menu_item_get_submenu(GTK_MENU_ITEM(item));
+        found = submenu != NULL && GTK_IS_MENU_SHELL(submenu)
+                    ? widget_menu_has_items(submenu)
+                    : TRUE;
+    }
+    g_list_free(children);
+    return found;
+}
+
+static gboolean append_widget_item(
+    struct nb_gtk_menu_window_state *state,
+    GtkWidget *widget,
+    struct nixbench_application_menu_v1 *menu)
+{
+    struct nb_gtk_menu_command_entry *entry;
+    const char *label;
+    uint32_t flags = 0;
+
+    if (state == NULL || widget == NULL || !GTK_IS_MENU_ITEM(widget) ||
+        state->command_count >= NB_GTK_MENU_COMMAND_CAPACITY) {
+        return FALSE;
+    }
+    label = gtk_menu_item_get_label(GTK_MENU_ITEM(widget));
+    if (label == NULL || label[0] == '\0') {
+        return FALSE;
+    }
+    if (gtk_widget_get_sensitive(widget)) {
+        flags |= NIXBENCH_APPLICATION_MENU_V1_ITEM_FLAGS_ENABLED;
+    }
+    if (GTK_IS_CHECK_MENU_ITEM(widget) &&
+        gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(widget))) {
+        flags |= NIXBENCH_APPLICATION_MENU_V1_ITEM_FLAGS_CHECKED;
+    }
+
+    entry = &state->commands[state->command_count];
+    memset(entry, 0, sizeof(*entry));
+    entry->command = state->next_command++;
+    entry->kind = NB_GTK_MENU_COMMAND_WIDGET;
+    entry->widget = g_object_ref(widget);
+    if (!append_protocol_item(state,
+                              menu,
+                              label,
+                              entry->command,
+                              flags)) {
+        command_entry_reset(entry);
+        return FALSE;
+    }
+    ++state->command_count;
+    return TRUE;
+}
+
+static gboolean append_widget_menu_contents(
+    struct nb_gtk_menu_window_state *state,
+    GtkWidget *menu_shell,
+    struct nixbench_application_menu_v1 *menu)
+{
+    GList *children;
+    GList *iter;
+    gboolean appended = FALSE;
+    gboolean separator_pending = FALSE;
+
+    children = gtk_container_get_children(GTK_CONTAINER(menu_shell));
+    for (iter = children; iter != NULL; iter = iter->next) {
+        GtkWidget *item = GTK_IS_WIDGET(iter->data)
+                              ? GTK_WIDGET(iter->data)
+                              : NULL;
+        GtkWidget *submenu;
+        gboolean child_appended;
+
+        if (item == NULL || !gtk_widget_get_visible(item)) {
+            continue;
+        }
+        if (GTK_IS_SEPARATOR_MENU_ITEM(item)) {
+            separator_pending = appended;
+            continue;
+        }
+        if (!GTK_IS_MENU_ITEM(item)) {
+            continue;
+        }
+
+        submenu = gtk_menu_item_get_submenu(GTK_MENU_ITEM(item));
+        if (submenu != NULL && GTK_IS_MENU_SHELL(submenu)) {
+            if (!widget_menu_has_items(submenu)) {
+                continue;
+            }
+            if (separator_pending) {
+                (void)append_protocol_separator(state, menu);
+                separator_pending = FALSE;
+            }
+            child_appended =
+                append_widget_menu_contents(state, submenu, menu);
+        } else {
+            if (separator_pending) {
+                (void)append_protocol_separator(state, menu);
+                separator_pending = FALSE;
+            }
+            child_appended = append_widget_item(state, item, menu);
+        }
+        appended |= child_appended;
+    }
+    g_list_free(children);
+    return appended;
+}
+
+static gboolean publish_widget_menubar(
+    struct nb_gtk_menu_window_state *state,
+    GtkWidget *menubar,
+    struct nixbench_application_menu_v1 *menu)
+{
+    GList *children;
+    GList *iter;
+    gboolean appended = FALSE;
+
+    if (menubar == NULL || !GTK_IS_MENU_BAR(menubar)) {
+        return FALSE;
+    }
+    children = gtk_container_get_children(GTK_CONTAINER(menubar));
+    for (iter = children; iter != NULL; iter = iter->next) {
+        GtkWidget *item = GTK_IS_WIDGET(iter->data)
+                              ? GTK_WIDGET(iter->data)
+                              : NULL;
+        GtkWidget *submenu;
+        const char *label;
+
+        if (item == NULL || !gtk_widget_get_visible(item) ||
+            !GTK_IS_MENU_ITEM(item)) {
+            continue;
+        }
+        submenu = gtk_menu_item_get_submenu(GTK_MENU_ITEM(item));
+        label = gtk_menu_item_get_label(GTK_MENU_ITEM(item));
+        if (submenu == NULL || !GTK_IS_MENU_SHELL(submenu) ||
+            !widget_menu_has_items(submenu) ||
+            !append_protocol_menu(state, menu, label)) {
+            continue;
+        }
+        appended |= append_widget_menu_contents(state, submenu, menu);
+    }
+    g_list_free(children);
+    return appended;
+}
+
 static gboolean publish_window_menu(struct nb_gtk_menu_window_state *state)
 {
     GMenuModel *model = NULL;
+    GtkApplication *application;
+    GtkWidget *menubar;
     struct nixbench_application_menu_v1 *menu;
-    gboolean has_nested;
+    gboolean model_is_menubar = FALSE;
     gboolean published;
 
     if (state == NULL || state->bridge == NULL || state->window == NULL) {
@@ -639,20 +984,28 @@ static gboolean publish_window_menu(struct nb_gtk_menu_window_state *state)
         return FALSE;
     }
 
-    g_object_get(state->bridge->application, "menubar", &model, NULL);
-    if (model == NULL) {
-        g_object_get(state->bridge->application, "app-menu", &model, NULL);
+    application = gtk_window_get_application(state->window);
+    if (application != NULL) {
+        g_object_get(application, "menubar", &model, NULL);
+        model_is_menubar = model != NULL;
+        if (model == NULL) {
+            g_object_get(application, "app-menu", &model, NULL);
+        }
     }
-    if (model == NULL) {
+    menubar = model == NULL
+                  ? find_widget_menubar(GTK_WIDGET(state->window))
+                  : NULL;
+    if (model == NULL && menubar == NULL) {
         window_state_clear_menu(state);
         return FALSE;
     }
     if (!window_state_has_surface(state)) {
-        g_object_unref(model);
+        if (model != NULL) {
+            g_object_unref(model);
+        }
         return FALSE;
     }
 
-    has_nested = model_has_nested_menus(model);
     if (state->menu != NULL) {
         window_state_clear_menu(state);
     }
@@ -661,7 +1014,9 @@ static gboolean publish_window_menu(struct nb_gtk_menu_window_state *state)
         state->bridge->menu_manager,
         window_state_surface(state));
     if (menu == NULL) {
-        g_object_unref(model);
+        if (model != NULL) {
+            g_object_unref(model);
+        }
         return FALSE;
     }
     state->menu = menu;
@@ -670,12 +1025,16 @@ static gboolean publish_window_menu(struct nb_gtk_menu_window_state *state)
                                               state);
     window_state_reset_commands(state);
 
-    if (has_nested) {
+    if (model == NULL) {
+        published = publish_widget_menubar(state, menubar, menu);
+    } else if (model_is_menubar) {
         published = publish_menubar(state, model, menu);
     } else {
         published = publish_flat_menu(state, model, menu);
     }
-    g_object_unref(model);
+    if (model != NULL) {
+        g_object_unref(model);
+    }
 
     if (!published || state->command_count == 0) {
         window_state_clear_menu(state);
@@ -701,22 +1060,64 @@ static void bridge_sync_all_windows(struct nb_gtk_menu_bridge *bridge)
     GList *windows;
     GList *iter;
 
-    if (bridge == NULL || bridge->application == NULL) {
+    if (bridge == NULL) {
         return;
     }
-    windows = gtk_application_get_windows(bridge->application);
+    windows = gtk_window_list_toplevels();
     for (iter = windows; iter != NULL; iter = iter->next) {
         if (GTK_IS_WINDOW(iter->data)) {
+            bridge_attach_window(bridge, GTK_WINDOW(iter->data));
             bridge_sync_window(GTK_WINDOW(iter->data));
         }
     }
+    g_list_free(windows);
+}
+
+static gboolean bridge_sync_idle(gpointer data)
+{
+    struct nb_gtk_menu_bridge *bridge = data;
+
+    if (bridge == NULL) {
+        return G_SOURCE_REMOVE;
+    }
+    bridge->sync_source = 0;
+    bridge_sync_all_windows(bridge);
+    return G_SOURCE_REMOVE;
+}
+
+static void bridge_schedule_sync(struct nb_gtk_menu_bridge *bridge)
+{
+    if (bridge != NULL && bridge->sync_source == 0) {
+        bridge->sync_source = g_idle_add(bridge_sync_idle, bridge);
+    }
+}
+
+static gboolean bridge_on_widget_map(GSignalInvocationHint *hint,
+                                     guint parameter_count,
+                                     const GValue *parameters,
+                                     gpointer data)
+{
+    struct nb_gtk_menu_bridge *bridge = data;
+    GObject *object;
+
+    (void)hint;
+    if (bridge == NULL || parameter_count == 0 || parameters == NULL) {
+        return TRUE;
+    }
+    object = g_value_get_object(&parameters[0]);
+    if (object != NULL && GTK_IS_WINDOW(object)) {
+        bridge_attach_window(bridge, GTK_WINDOW(object));
+    }
+    bridge_schedule_sync(bridge);
+    return TRUE;
 }
 
 static void bridge_on_window_realize(GtkWidget *widget, gpointer data)
 {
-    (void)data;
+    struct nb_gtk_menu_window_state *state = data;
+
     if (GTK_IS_WINDOW(widget)) {
-        bridge_sync_window(GTK_WINDOW(widget));
+        bridge_schedule_sync(state != NULL ? state->bridge : NULL);
     }
 }
 
@@ -738,7 +1139,7 @@ static void bridge_on_menu_model_changed(GObject *object,
 
     (void)object;
     (void)pspec;
-    bridge_sync_all_windows(bridge);
+    bridge_schedule_sync(bridge);
 }
 
 static void bridge_on_action_state_changed(GActionGroup *group,
@@ -751,7 +1152,7 @@ static void bridge_on_action_state_changed(GActionGroup *group,
     (void)group;
     (void)action_name;
     (void)state;
-    bridge_sync_all_windows(bridge);
+    bridge_schedule_sync(bridge);
 }
 
 static void bridge_on_action_enabled_changed(GActionGroup *group,
@@ -764,7 +1165,53 @@ static void bridge_on_action_enabled_changed(GActionGroup *group,
     (void)group;
     (void)action_name;
     (void)enabled;
-    bridge_sync_all_windows(bridge);
+    bridge_schedule_sync(bridge);
+}
+
+static void bridge_bind_application(struct nb_gtk_menu_bridge *bridge,
+                                    GtkApplication *application)
+{
+    if (bridge == NULL || application == NULL ||
+        bridge->application == application) {
+        return;
+    }
+    if (bridge->application != NULL) {
+        g_warning("NixBench GTK menu bridge encountered multiple "
+                  "GtkApplication objects");
+        return;
+    }
+
+    bridge->application = g_object_ref(application);
+    bridge->window_added_handler = g_signal_connect(
+        application,
+        "window-added",
+        G_CALLBACK(bridge_on_window_added),
+        bridge);
+    bridge->window_removed_handler = g_signal_connect(
+        application,
+        "window-removed",
+        G_CALLBACK(bridge_on_window_removed),
+        bridge);
+    bridge->menubar_handler = g_signal_connect(
+        application,
+        "notify::menubar",
+        G_CALLBACK(bridge_on_menu_model_changed),
+        bridge);
+    bridge->app_menu_handler = g_signal_connect(
+        application,
+        "notify::app-menu",
+        G_CALLBACK(bridge_on_menu_model_changed),
+        bridge);
+    bridge->action_state_handler = g_signal_connect(
+        application,
+        "action-state-changed",
+        G_CALLBACK(bridge_on_action_state_changed),
+        bridge);
+    bridge->action_enabled_handler = g_signal_connect(
+        application,
+        "action-enabled-changed",
+        G_CALLBACK(bridge_on_action_enabled_changed),
+        bridge);
 }
 
 static struct nb_gtk_menu_window_state *bridge_attach_window(
@@ -776,6 +1223,7 @@ static struct nb_gtk_menu_window_state *bridge_attach_window(
     if (bridge == NULL || window == NULL) {
         return NULL;
     }
+    bridge_bind_application(bridge, gtk_window_get_application(window));
     state = g_object_get_data(G_OBJECT(window), "nixbench-gtk-menu-state");
     if (state != NULL) {
         return state;
@@ -801,25 +1249,9 @@ static struct nb_gtk_menu_window_state *bridge_attach_window(
         state);
 
     if (gtk_widget_get_realized(GTK_WIDGET(window))) {
-        bridge_sync_window(window);
+        bridge_schedule_sync(bridge);
     }
     return state;
-}
-
-static void bridge_attach_existing_windows(struct nb_gtk_menu_bridge *bridge)
-{
-    GList *windows;
-    GList *iter;
-
-    if (bridge == NULL || bridge->application == NULL) {
-        return;
-    }
-    windows = gtk_application_get_windows(bridge->application);
-    for (iter = windows; iter != NULL; iter = iter->next) {
-        if (GTK_IS_WINDOW(iter->data)) {
-            bridge_attach_window(bridge, GTK_WINDOW(iter->data));
-        }
-    }
 }
 
 static void bridge_on_window_added(GtkApplication *application,
@@ -830,6 +1262,7 @@ static void bridge_on_window_added(GtkApplication *application,
 
     (void)application;
     bridge_attach_window(bridge, window);
+    bridge_schedule_sync(bridge);
 }
 
 static void bridge_on_window_removed(GtkApplication *application,
@@ -849,19 +1282,64 @@ static void bridge_on_window_removed(GtkApplication *application,
     }
 }
 
-static struct nb_gtk_menu_bridge *bridge_create(GtkApplication *application)
+static struct nb_gtk_menu_bridge *bridge_create(void)
 {
-    struct nb_gtk_menu_bridge *bridge;
-
-    bridge = g_new0(struct nb_gtk_menu_bridge, 1);
-    bridge->application = application;
-    return bridge;
+    return g_new0(struct nb_gtk_menu_bridge, 1);
 }
 
 static void bridge_destroy(struct nb_gtk_menu_bridge *bridge)
 {
+    GList *windows;
+    GList *iter;
+
     if (bridge == NULL) {
         return;
+    }
+    if (bridge->sync_source != 0) {
+        g_source_remove(bridge->sync_source);
+        bridge->sync_source = 0;
+    }
+    if (bridge->map_signal != 0 && bridge->map_hook != 0) {
+        g_signal_remove_emission_hook(bridge->map_signal, bridge->map_hook);
+        bridge->map_hook = 0;
+    }
+
+    windows = gtk_window_list_toplevels();
+    for (iter = windows; iter != NULL; iter = iter->next) {
+        struct nb_gtk_menu_window_state *state;
+
+        if (!GTK_IS_WINDOW(iter->data)) {
+            continue;
+        }
+        state = g_object_get_data(G_OBJECT(iter->data),
+                                  "nixbench-gtk-menu-state");
+        if (state != NULL && state->bridge == bridge) {
+            g_object_set_data(G_OBJECT(iter->data),
+                              "nixbench-gtk-menu-state",
+                              NULL);
+        }
+    }
+    g_list_free(windows);
+
+    if (bridge->application != NULL) {
+        const gulong handlers[] = {
+            bridge->window_added_handler,
+            bridge->window_removed_handler,
+            bridge->menubar_handler,
+            bridge->app_menu_handler,
+            bridge->action_state_handler,
+            bridge->action_enabled_handler
+        };
+        size_t index;
+
+        for (index = 0; index < G_N_ELEMENTS(handlers); ++index) {
+            if (handlers[index] != 0) {
+                g_signal_handler_disconnect(bridge->application,
+                                            handlers[index]);
+            }
+        }
+        g_object_unref(bridge->application);
+        bridge->application = NULL;
     }
     if (bridge->menu_manager != NULL) {
         nixbench_application_menu_manager_v1_destroy(bridge->menu_manager);
@@ -871,33 +1349,13 @@ static void bridge_destroy(struct nb_gtk_menu_bridge *bridge)
         wl_registry_destroy(bridge->registry);
         bridge->registry = NULL;
     }
-    if (bridge->application != NULL) {
-        g_signal_handlers_disconnect_by_func(bridge->application,
-                                             bridge_on_window_added,
-                                             bridge);
-        g_signal_handlers_disconnect_by_func(bridge->application,
-                                             bridge_on_window_removed,
-                                             bridge);
-        g_signal_handlers_disconnect_by_func(bridge->application,
-                                             bridge_on_menu_model_changed,
-                                             bridge);
-        g_signal_handlers_disconnect_by_func(bridge->application,
-                                             bridge_on_action_state_changed,
-                                             bridge);
-        g_signal_handlers_disconnect_by_func(bridge->application,
-                                             bridge_on_action_enabled_changed,
-                                             bridge);
-        g_object_unref(bridge->application);
-        bridge->application = NULL;
-    }
     g_free(bridge);
 }
 
 G_MODULE_EXPORT void gtk_module_init(gint *argc, gchar ***argv)
 {
     GApplication *default_application;
-    GtkApplication *application;
-    GList *windows;
+    GSignalQuery query = {0};
 
     (void)argc;
     (void)argv;
@@ -905,42 +1363,27 @@ G_MODULE_EXPORT void gtk_module_init(gint *argc, gchar ***argv)
         return;
     }
 
+    global_bridge = bridge_create();
     default_application = g_application_get_default();
-    if (default_application == NULL ||
-        !GTK_IS_APPLICATION(default_application)) {
-        return;
+    if (default_application != NULL &&
+        GTK_IS_APPLICATION(default_application)) {
+        bridge_bind_application(global_bridge,
+                                GTK_APPLICATION(default_application));
     }
 
-    application = GTK_APPLICATION(g_object_ref(default_application));
-    global_bridge = bridge_create(application);
-    g_signal_connect(application,
-                     "window-added",
-                     G_CALLBACK(bridge_on_window_added),
-                     global_bridge);
-    g_signal_connect(application,
-                     "window-removed",
-                     G_CALLBACK(bridge_on_window_removed),
-                     global_bridge);
-    g_signal_connect(application,
-                     "notify::menubar",
-                     G_CALLBACK(bridge_on_menu_model_changed),
-                     global_bridge);
-    g_signal_connect(application,
-                     "notify::app-menu",
-                     G_CALLBACK(bridge_on_menu_model_changed),
-                     global_bridge);
-    g_signal_connect(application,
-                     "action-state-changed",
-                     G_CALLBACK(bridge_on_action_state_changed),
-                     global_bridge);
-    g_signal_connect(application,
-                     "action-enabled-changed",
-                     G_CALLBACK(bridge_on_action_enabled_changed),
-                     global_bridge);
-
-    bridge_attach_existing_windows(global_bridge);
-    (void)bridge_ensure_manager(global_bridge);
-    bridge_sync_all_windows(global_bridge);
+    global_bridge->map_signal = g_signal_lookup("map", GTK_TYPE_WIDGET);
+    if (global_bridge->map_signal != 0) {
+        g_signal_query(global_bridge->map_signal, &query);
+        if ((query.signal_flags & G_SIGNAL_NO_HOOKS) == 0) {
+            global_bridge->map_hook = g_signal_add_emission_hook(
+                global_bridge->map_signal,
+                0,
+                bridge_on_widget_map,
+                global_bridge,
+                NULL);
+        }
+    }
+    bridge_schedule_sync(global_bridge);
 }
 
 G_MODULE_EXPORT void gtk_module_exit(void)

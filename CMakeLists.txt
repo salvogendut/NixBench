@@ -1036,7 +1036,6 @@ if(NIXBENCH_GTK_MENU_BRIDGE_AVAILABLE)
     nixbench_gtk_menu_bridge
     PROPERTIES
       LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/gtk-modules"
-      PREFIX ""
   )
   nixbench_configure_c_target(nixbench_gtk_menu_bridge)
   install(
@@ -1577,6 +1576,23 @@ if(BUILD_TESTING)
         sh -n
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-sakura-probe.sh"
     )
+    add_test(
+      NAME nixbench.gtk-menu-bridge-env.syntax
+      COMMAND
+        sh -n
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/gtk-menu-bridge-env.sh"
+    )
+    if(NIXBENCH_GTK_MENU_BRIDGE_AVAILABLE)
+      add_test(
+        NAME nixbench.gtk-menu-bridge-env
+        COMMAND
+          sh
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/gtk_menu_bridge_env_test.sh"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/gtk-menu-bridge-env.sh"
+          "$<TARGET_FILE:nixbench_gtk_menu_bridge>"
+          "${CMAKE_CURRENT_BINARY_DIR}"
+      )
+    endif()
     if(NIXBENCH_X11_AVAILABLE)
       add_test(
         NAME nixbench.xwayland-probe.syntax
