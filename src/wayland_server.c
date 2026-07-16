@@ -1783,6 +1783,7 @@ static void send_initial_configure(struct nb_wayland_surface *surface)
 {
     int width;
     int height;
+    uint32_t serial;
 
     if (surface->xdg_surface_resource == NULL) {
         return;
@@ -1798,6 +1799,11 @@ static void send_initial_configure(struct nb_wayland_surface *surface)
             surface->popup_y,
             surface->popup_positioner.width,
             surface->popup_positioner.height);
+        serial = wl_display_next_serial(surface->server->display);
+        surface->configure_serial = serial;
+        surface->configure_sent = true;
+        surface->configured = false;
+        xdg_surface_send_configure(surface->xdg_surface_resource, serial);
     } else {
         return;
     }
@@ -4553,7 +4559,7 @@ struct nb_wayland_server *nb_wayland_server_create(
     server->decoration_manager_global = wl_global_create(
         server->display,
         &zxdg_decoration_manager_v1_interface,
-        2,
+        1,
         server,
         bind_decoration_manager);
 #endif
