@@ -1505,6 +1505,7 @@ if(BUILD_TESTING)
         COMMAND
           nixbench_host_privsep_client_tests
           $<TARGET_FILE:nixbench_session_test_application>
+          $<TARGET_FILE:nixbench_host_privsep_client_tests>
       )
     else()
       add_test(

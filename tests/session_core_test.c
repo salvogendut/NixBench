@@ -634,6 +634,7 @@ static bool wait_for_application_ready(const char *path)
 
 static void test_session_core_with_fake_helper(
     const char *application_path,
+    const char *core_program_path,
     enum session_core_shutdown_trigger trigger,
     bool verify_application_cleanup,
     enum application_exit_diagnostic expected_diagnostic)
@@ -751,7 +752,7 @@ static void test_session_core_with_fake_helper(
             sockets[0],
             application_path,
             verify_application_cleanup ? runtime_directory : NULL,
-            application_path);
+            core_program_path);
         if (trigger == SESSION_CORE_SHUTDOWN_BY_SIGTERM) {
             struct sigaction restored_action;
 
@@ -877,7 +878,8 @@ static void test_session_core_with_fake_helper(
     }
 }
 
-static void test_session_core_rejects_unlaunchable_application(void)
+static void test_session_core_rejects_unlaunchable_application(
+    const char *core_program_path)
 {
     char missing_path[] = "/tmp/nixbench-missing-application-XXXXXX";
     int temporary;
@@ -916,7 +918,7 @@ static void test_session_core_rejects_unlaunchable_application(void)
         const int result = nb_session_core_run(sockets[0],
                                                missing_path,
                                                NULL,
-                                               missing_path);
+                                               core_program_path);
 
         _exit(result);
     }
@@ -943,6 +945,8 @@ int main(int argc, char *argv[])
 {
 #if NIXBENCH_TEST_SESSION_CORE
     const char *application_path = argc > 1 ? argv[1] : "/usr/bin/true";
+    const char *core_program_path =
+        argc > 2 ? argv[2] : (argv[0][0] == '/' ? argv[0] : application_path);
     const bool verify_application_cleanup = argc > 1;
     char signal_application[] =
         "/tmp/nixbench-session-signal-app-XXXXXX";
@@ -958,11 +962,13 @@ int main(int argc, char *argv[])
 #if NIXBENCH_TEST_SESSION_CORE
     test_session_core_with_fake_helper(
         application_path,
+        core_program_path,
         SESSION_CORE_SHUTDOWN_BY_ESCAPE,
         verify_application_cleanup,
         APPLICATION_EXIT_DIAGNOSTIC_CODE_ZERO);
     test_session_core_with_fake_helper(
         application_path,
+        core_program_path,
         SESSION_CORE_SHUTDOWN_BY_SIGTERM,
         verify_application_cleanup,
         APPLICATION_EXIT_DIAGNOSTIC_CODE_ZERO);
@@ -970,12 +976,13 @@ int main(int argc, char *argv[])
     if (access(signal_application, X_OK) == 0) {
         test_session_core_with_fake_helper(
             signal_application,
+            core_program_path,
             SESSION_CORE_SHUTDOWN_BY_ESCAPE,
             false,
             APPLICATION_EXIT_DIAGNOSTIC_SIGNAL_TERM);
         CHECK(unlink(signal_application) == 0);
     }
-    test_session_core_rejects_unlaunchable_application();
+    test_session_core_rejects_unlaunchable_application(core_program_path);
 #endif
 
     if (failures != 0) {
