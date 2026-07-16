@@ -395,17 +395,16 @@ bool nb_window_toggle_maximized(struct nb_window *window, struct nb_rect bounds)
     if (window->frame.height > bounds.height) {
         window->frame.height = bounds.height;
     }
-    return nb_window_clamp_to(window, bounds);
+    (void)nb_window_clamp_to(window, bounds);
+    return true;
 }
 
 bool nb_window_clamp_to(struct nb_window *window, struct nb_rect bounds)
 {
     const int old_x = window->frame.x;
     const int old_y = window->frame.y;
-    const int maximum_x = bounds.x + maximum(0, bounds.width -
-                                                 window->frame.width);
-    const int maximum_y = bounds.y + maximum(0, bounds.height -
-                                                 window->frame.height);
+    const int old_width = window->frame.width;
+    const int old_height = window->frame.height;
 
     if (window->maximized) {
         if (window->frame.x != bounds.x || window->frame.y != bounds.y ||
@@ -417,8 +416,22 @@ bool nb_window_clamp_to(struct nb_window *window, struct nb_rect bounds)
         return false;
     }
 
+    if (window->frame.width > bounds.width) {
+        window->frame.width = bounds.width;
+    }
+    if (window->frame.height > bounds.height) {
+        window->frame.height = bounds.height;
+    }
+
+    const int maximum_x = bounds.x + maximum(0, bounds.width -
+                                                 window->frame.width);
+    const int maximum_y = bounds.y + maximum(0, bounds.height -
+                                                 window->frame.height);
+
     window->frame.x = maximum(bounds.x, minimum(window->frame.x, maximum_x));
     window->frame.y = maximum(bounds.y, minimum(window->frame.y, maximum_y));
 
-    return old_x != window->frame.x || old_y != window->frame.y;
+    return old_x != window->frame.x || old_y != window->frame.y ||
+           old_width != window->frame.width ||
+           old_height != window->frame.height;
 }

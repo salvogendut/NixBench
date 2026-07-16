@@ -208,8 +208,8 @@ static void test_drag_cancel_and_resize(void)
     CHECK(current_window == initial_window);
     CHECK(clamped.x == 0);
     CHECK(clamped.y == NB_MENU_BAR_HEIGHT);
-    CHECK(clamped.width == moved.width);
-    CHECK(clamped.height == moved.height);
+    CHECK(clamped.width == resized.logical_width);
+    CHECK(clamped.height == resized.logical_height - NB_MENU_BAR_HEIGHT);
     CHECK(nb_desktop_runtime_window_count(runtime) == 1);
 
     CHECK(nb_desktop_runtime_render(runtime, "12:34", 3, &frame));

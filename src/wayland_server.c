@@ -1782,7 +1782,15 @@ static void map_surface(struct nb_wayland_surface *surface)
                   surface->active_application_menu_snapshot].model
             : surface->server->menu_model);
     if (surface->window != NB_WINDOW_ID_NONE) {
+        const struct nb_rect viewport = {
+            0,
+            0,
+            surface->server->output_width,
+            surface->server->output_height
+        };
+
         ++surface->server->next_window_position;
+        (void)nb_shell_clamp_windows(surface->server->shell, viewport);
         surface_send_output_membership(surface, true);
         surface->server->redraw_pending = true;
     }
