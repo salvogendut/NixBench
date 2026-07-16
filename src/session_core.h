@@ -6,6 +6,7 @@ enum {
 };
 
 /* Run the ordinary-user desktop core on one inherited helper connection.
+ * A NULL initial_application_path starts with an empty desktop.
  * A NULL runtime_directory_path creates an internally owned test directory;
  * production supplies the directory owned by the cleanup sentinel. */
 int nb_session_core_run(int protocol_descriptor,

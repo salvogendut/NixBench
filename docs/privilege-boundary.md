@@ -20,8 +20,8 @@ captures and persists the original console state, watches a root device worker,
 and performs final restoration independently. The device worker owns the fixed
 `wsdisplay` and wscons devices, VT lifecycle, frame presentation, and core
 heartbeat. `nixbench-session-core` runs as the invoking ordinary user, publishes
-a private Wayland display, and launches NixClock by default or one selected
-initial application. Its bounded process table can subsequently launch
+a private Wayland display, and starts with no client or one selected initial
+application. Its bounded process table can subsequently launch
 NixClock, Sakura, and Midori from the desktop's **Applications** menu; this
 happens entirely after the credential drop and adds no privileged protocol
 operation. A separately dropped sibling of the same
@@ -203,8 +203,8 @@ binaries and five process roles:
   sentinel;
 - its sibling `nixbench-session-core` publishes the private Wayland display;
   and
-- the core launches the selected ordinary-user initial client (`nixclock` by
-  default).
+- the core starts without a client or launches one selected ordinary-user
+  initial application.
 
 Device-free tests exercise recovery-record and supervisor policy, protocol
 state, credential selection, standard-descriptor reservation, descriptor
@@ -219,8 +219,8 @@ session available to terminate the printed supervisor PID or run:
 sudo /var/run/nixbench-wsdisplay-session --recover
 ```
 
-For a startup compatibility probe, the operator can replace default NixClock
-with one absolute executable path. Arguments are not accepted yet:
+For a startup compatibility probe, the operator can supply one absolute
+executable path. Arguments are not accepted yet:
 
 ```sh
 NIXBENCH_APPLICATION=/usr/pkg/bin/midori ./tools/run-wsdisplay-session.sh

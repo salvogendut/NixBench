@@ -1061,7 +1061,7 @@ if(NIXBENCH_BUILD_WSDISPLAY_SESSION)
     message(
       FATAL_ERROR
       "The wsdisplay session requires Wayland client development files and "
-      "NIXBENCH_BUILD_APPLICATIONS=ON so NixClock can be launched"
+      "NIXBENCH_BUILD_APPLICATIONS=ON for its application launcher"
     )
   endif()
 endif()
@@ -1079,6 +1079,12 @@ if(
   target_link_libraries(
     nixbench_session_core
     PRIVATE nixbench_desktop_runtime nixbench_host_privsep_client
+  )
+  target_compile_definitions(
+    nixbench_session_core
+    PRIVATE
+      "NB_SESSION_INSTALLED_NIXCLOCK_PATH=\"${CMAKE_INSTALL_FULL_BINDIR}/nixclock\""
+      "NB_SESSION_INSTALLED_GTK_MODULE_PATH=\"${CMAKE_INSTALL_FULL_LIBDIR}/gtk-3.0/modules/${CMAKE_SHARED_MODULE_PREFIX}nixbench_gtk_menu_bridge${CMAKE_SHARED_MODULE_SUFFIX}\""
   )
   nixbench_configure_c_target(nixbench_session_core)
 endif()
@@ -1146,9 +1152,22 @@ if(NIXBENCH_BUILD_WSDISPLAY_SESSION)
   )
   nixbench_configure_c_target(nixbench-wsdisplay-session)
 
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/nixbench-session.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/nixbench-session"
+    @ONLY
+  )
   install(
     TARGETS nixbench-session-core nixbench-wsdisplay-session
-    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+    RUNTIME DESTINATION "${CMAKE_INSTALL_LIBEXECDIR}/nixbench"
+  )
+  install(
+    PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/nixbench-session"
+    DESTINATION "${CMAKE_INSTALL_BINDIR}"
+  )
+  install(
+    PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-wsdisplay-session.sh"
+    DESTINATION "${CMAKE_INSTALL_LIBEXECDIR}/nixbench"
   )
 endif()
 
@@ -1562,6 +1581,14 @@ if(BUILD_TESTING)
     add_test(
       NAME nixbench.wsdisplay.session-help
       COMMAND nixbench-wsdisplay-session --help
+    )
+    add_test(
+      NAME nixbench.session-launcher.syntax
+      COMMAND sh -n "${CMAKE_CURRENT_BINARY_DIR}/nixbench-session"
+    )
+    add_test(
+      NAME nixbench.session-launcher.help
+      COMMAND sh "${CMAKE_CURRENT_BINARY_DIR}/nixbench-session" --help
     )
   endif()
   if(UNIX)

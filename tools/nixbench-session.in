@@ -1,0 +1,61 @@
+#!/bin/sh
+
+set -eu
+
+case "${1-}" in
+    --help)
+        cat <<EOF
+Usage: nixbench-session
+
+Start the standalone NixBench desktop on the active NetBSD wsdisplay console.
+Run it over SSH while the physical console is visible. The desktop starts
+empty; launch applications from the global Applications menu.
+
+Environment:
+  NIXBENCH_APPLICATION      Absolute executable to open at startup
+  NIXBENCH_GTK_MENU_BRIDGE  Export GTK3 application menus (default: 1)
+  NIXBENCH_VT_AWAY          One-based VT used by the lifecycle test
+EOF
+        exit 0
+        ;;
+    '') ;;
+    *)
+        echo "nixbench-session: usage: nixbench-session [--help]" >&2
+        exit 2
+        ;;
+esac
+
+program=$0
+case "$program" in
+    */*) ;;
+    *)
+        program=$(command -v "$program") || {
+            echo "nixbench-session: could not locate installed command" >&2
+            exit 1
+        }
+        ;;
+esac
+while [ -L "$program" ]; do
+    directory=$(CDPATH= cd "$(dirname "$program")" && pwd)
+    target=$(readlink "$program") || exit 1
+    case "$target" in
+        /*) program=$target ;;
+        *) program=$directory/$target ;;
+    esac
+done
+bindir=$(CDPATH= cd "$(dirname "$program")" && pwd)
+prefix=$(CDPATH= cd "$bindir/.." && pwd)
+libexecdir='@CMAKE_INSTALL_LIBEXECDIR@'
+case "$libexecdir" in
+    /*) ;;
+    *) libexecdir=$prefix/$libexecdir ;;
+esac
+
+NIXBENCH_INSTALLED_MODE=1
+NIXBENCH_SESSION_HELPER=$libexecdir/nixbench/nixbench-wsdisplay-session
+NIXBENCH_SESSION_CORE=$libexecdir/nixbench/nixbench-session-core
+NIXBENCH_GTK_MENU_BRIDGE=${NIXBENCH_GTK_MENU_BRIDGE:-1}
+export NIXBENCH_INSTALLED_MODE NIXBENCH_SESSION_HELPER
+export NIXBENCH_SESSION_CORE NIXBENCH_GTK_MENU_BRIDGE
+
+exec "$libexecdir/nixbench/run-wsdisplay-session.sh"

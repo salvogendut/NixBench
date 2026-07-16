@@ -9,8 +9,8 @@ are replaceable platform adapters, not part of application or shell policy.
 > hosted window. The older `nixbench-wsdisplay-smoke` command remains an
 > all-root hardware-research harness. A separate, opt-in
 > `nixbench-wsdisplay-session` milestone now splits root console ownership from
-> an ordinary-user desktop and private Wayland server, with NixClock as the
-> default client or one operator-selected initial application. Its
+> an ordinary-user desktop and private Wayland server. It starts with an empty
+> desktop unless the operator selects one initial application. Its
 > device-free integration tests, physical takeover/normal-exit trial, and
 > VT 1 -> 2 -> 1 cycle and supervised SIGTERM recovery gate pass, but it has
 > now also passed both physical core-failure gates. The remaining failure-
@@ -439,8 +439,7 @@ executables whose session uses five process roles:
 - an ordinary-user `nixbench-session-core` runtime sentinel;
 - its ordinary-user `nixbench-session-core` sibling, which publishes the
   private Wayland display; and
-- the unprivileged selected initial client launched by that core (`nixclock`
-  by default).
+- zero or more unprivileged application clients launched by that core.
 
 Before any privileged state or device open, the launcher ensures descriptors
 0, 1, and 2 are occupied by valid standard streams. Privileged descriptors
@@ -469,9 +468,10 @@ entry point is:
 ./tools/run-wsdisplay-session.sh
 ```
 
-NixClock is the default initial client. An existing application can instead
-be selected for a startup compatibility probe with one absolute executable
-path; application arguments are not supported yet:
+The session starts with an empty desktop; NixClock, Sakura, and Midori are
+available from **Applications**. An existing application can be selected for a
+startup compatibility probe with one absolute executable path; application
+arguments are not supported yet:
 
 ```sh
 NIXBENCH_APPLICATION=/usr/pkg/bin/midori ./tools/run-wsdisplay-session.sh

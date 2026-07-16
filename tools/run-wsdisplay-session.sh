@@ -3,7 +3,19 @@
 set -eu
 
 state_path=/var/run/nixbench-wsdisplay-session.state
-staged_session=/var/run/nixbench-wsdisplay-session
+installed_mode=${NIXBENCH_INSTALLED_MODE:-0}
+case "$installed_mode" in
+    0|1) ;;
+    *)
+        echo "nixbench standalone session: invalid installed mode" >&2
+        exit 1
+        ;;
+esac
+if [ "$installed_mode" -eq 1 ]; then
+    staged_session=${NIXBENCH_SESSION_HELPER:-}
+else
+    staged_session=/var/run/nixbench-wsdisplay-session
+fi
 
 fail()
 {
@@ -84,20 +96,33 @@ while [ -L "$script_path" ]; do
 done
 
 script_dir=$(CDPATH= cd "$(dirname "$script_path")" && pwd)
-repo_dir=$(CDPATH= cd "$script_dir/.." && pwd)
-build_dir=${NIXBENCH_BUILD_DIR:-$repo_dir/build}
-case "$build_dir" in
-    /*) ;;
-    *) build_dir=$repo_dir/$build_dir ;;
-esac
-built_session=$build_dir/nixbench-wsdisplay-session
-core=$build_dir/nixbench-session-core
+if [ "$installed_mode" -eq 1 ]; then
+    core=${NIXBENCH_SESSION_CORE:-}
+    if [ -z "$staged_session" ] || [ -z "$core" ]; then
+        fail "installed helper and core paths were not configured"
+    fi
+    if [ ! -f "$staged_session" ] || [ ! -x "$staged_session" ] ||
+       [ ! -f "$core" ] || [ ! -x "$core" ]; then
+        fail "installed helper or core is missing or not executable"
+    fi
+else
+    repo_dir=$(CDPATH= cd "$script_dir/.." && pwd)
+    build_dir=${NIXBENCH_BUILD_DIR:-$repo_dir/build}
+    case "$build_dir" in
+        /*) ;;
+        *) build_dir=$repo_dir/$build_dir ;;
+    esac
+    built_session=$build_dir/nixbench-wsdisplay-session
+    core=$build_dir/nixbench-session-core
+fi
 
 [ "$(uname -s)" = NetBSD ] || fail "this session is NetBSD-only"
 [ -n "${SSH_CONNECTION:-}" ] ||
     fail "run this script over SSH while watching the physical console"
-command -v cmake >/dev/null 2>&1 || fail "cmake is not installed"
-command -v ctest >/dev/null 2>&1 || fail "ctest is not installed"
+if [ "$installed_mode" -eq 0 ]; then
+    command -v cmake >/dev/null 2>&1 || fail "cmake is not installed"
+    command -v ctest >/dev/null 2>&1 || fail "ctest is not installed"
+fi
 
 echo "==> Checking passwordless recovery access"
 sudo -n /usr/bin/true ||
@@ -114,22 +139,24 @@ EOF
     exit 1
 fi
 
-echo "==> Configuring the privilege-separated session ($build_type)"
-cmake -S "$repo_dir" -B "$build_dir" \
-    -DCMAKE_BUILD_TYPE="$build_type" \
-    -DNIXBENCH_WAYLAND=ON \
-    -DNIXBENCH_BUILD_APPLICATIONS=ON \
-    -DNIXBENCH_BUILD_WSDISPLAY_SESSION=ON
+if [ "$installed_mode" -eq 0 ]; then
+    echo "==> Configuring the privilege-separated session ($build_type)"
+    cmake -S "$repo_dir" -B "$build_dir" \
+        -DCMAKE_BUILD_TYPE="$build_type" \
+        -DNIXBENCH_WAYLAND=ON \
+        -DNIXBENCH_BUILD_APPLICATIONS=ON \
+        -DNIXBENCH_BUILD_WSDISPLAY_SESSION=ON
 
-echo "==> Building NixBench"
-cmake --build "$build_dir" --parallel "$jobs"
+    echo "==> Building NixBench"
+    cmake --build "$build_dir" --parallel "$jobs"
 
-echo "==> Running the non-destructive test suite"
-ctest --test-dir "$build_dir" --output-on-failure
+    echo "==> Running the non-destructive test suite"
+    ctest --test-dir "$build_dir" --output-on-failure
 
-echo "==> Staging the privileged launcher as a root-owned executable"
-sudo -n /usr/bin/install -o root -g wheel -m 0555 \
-    "$built_session" "$staged_session"
+    echo "==> Staging the privileged launcher as a root-owned executable"
+    sudo -n /usr/bin/install -o root -g wheel -m 0555 \
+        "$built_session" "$staged_session"
+fi
 
 echo "==> Query-only console preflight"
 sudo -n "$staged_session" --preflight
@@ -176,8 +203,8 @@ wsdisplay console.
 
 The root recovery parent and device helper retain only wsdisplay, wscons, VT,
 frame presentation, heartbeat, and restoration duties. The NixBench desktop,
-its private Wayland server, and initial application run as your ordinary sudo
-user. They receive no framebuffer, keyboard, mouse, recovery, or VT descriptor.
+its private Wayland server, and applications run as your ordinary sudo user.
+They receive no framebuffer, keyboard, mouse, recovery, or VT descriptor.
 EOF
 
 if [ -n "$application" ]; then
@@ -212,9 +239,8 @@ EOF
     fi
 else
     cat <<EOF
-NixClock will open automatically. Its menus are installed into the global bar:
-use NixClock -> Quit to close the clock, and Settings -> Show seconds to toggle
-the seconds hand.
+NixBench will start with an empty desktop. Use the Applications menu in the
+global bar to launch NixClock, Sakura Terminal, or Midori Web Browser.
 EOF
 fi
 
@@ -264,12 +290,25 @@ a core crash, a different supervisor signal, or incomplete recovery fails this
 trial.
 EOF
 else
-    cat <<EOF
+    if [ -n "$application" ]; then
+        cat <<EOF
 After closing the initial application, click the empty desktop to return focus
 to the shell. Then use NixBench -> Quit, or press Escape, to end the session.
 
 For the VT lifecycle gate, once the desktop is visible use the second SSH
 session to switch away and back (these are one-based VT numbers):
+EOF
+    else
+        cat <<EOF
+Use NixBench -> Quit, or press Escape while the desktop owns keyboard focus,
+to end the session.
+
+For the VT lifecycle gate, once the desktop is visible use the second SSH
+session to switch away and back (these are one-based VT numbers):
+EOF
+    fi
+
+    cat <<EOF
 
   sudo -n /usr/sbin/wsconscfg -s $away_vt
   sudo -n /usr/sbin/wsconscfg -s $original_vt
@@ -304,7 +343,7 @@ fi
 if [ -n "$application" ]; then
     echo "==> Starting NixBench and $application"
 else
-    echo "==> Starting NixBench and NixClock"
+    echo "==> Starting NixBench with an empty desktop"
 fi
 
 run_privileged_session()

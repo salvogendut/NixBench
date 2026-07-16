@@ -562,43 +562,9 @@ static bool set_nonblocking(int descriptor)
            fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0;
 }
 
-static bool derive_sibling(const char *path,
-                           const char *name,
-                           char destination[NB_WSDISPLAY_SESSION_PATH_CAPACITY])
-{
-    const char *slash = strrchr(path, '/');
-    int length;
-
-    if (!absolute_path_is_valid(path) || slash == NULL ||
-        name == NULL || name[0] == '\0') {
-        return false;
-    }
-    if (slash == path) {
-        length = snprintf(destination,
-                          NB_WSDISPLAY_SESSION_PATH_CAPACITY,
-                          "/%s",
-                          name);
-    } else {
-        const size_t directory_length = (size_t)(slash - path);
-
-        if (directory_length > (size_t)INT_MAX) {
-            return false;
-        }
-        length = snprintf(destination,
-                          NB_WSDISPLAY_SESSION_PATH_CAPACITY,
-                          "%.*s/%s",
-                          (int)directory_length,
-                          path,
-                          name);
-    }
-    return length > 0 &&
-           (size_t)length < NB_WSDISPLAY_SESSION_PATH_CAPACITY;
-}
-
 static bool resolve_program_paths(
     const struct nb_wsdisplay_session_options *options,
-    char core[NB_WSDISPLAY_SESSION_PATH_CAPACITY],
-    char default_application[NB_WSDISPLAY_SESSION_PATH_CAPACITY])
+    char core[NB_WSDISPLAY_SESSION_PATH_CAPACITY])
 {
     char program[NB_WSDISPLAY_SESSION_PATH_CAPACITY];
     char candidate[NB_WSDISPLAY_SESSION_PATH_CAPACITY];
@@ -617,16 +583,6 @@ static bool resolve_program_paths(
         fprintf(stderr,
                 "Could not resolve the session core: %s\n",
                 errno != 0 ? strerror(errno) : error);
-        return false;
-    }
-    if (options->application_path == NULL &&
-        (!derive_sibling(core, "nixclock", candidate) ||
-         realpath(candidate, default_application) == NULL ||
-         stat(default_application, &status) != 0 ||
-         !S_ISREG(status.st_mode))) {
-        fprintf(stderr,
-                "Could not resolve the default NixClock application: %s\n",
-                strerror(errno));
         return false;
     }
     return true;
@@ -1255,16 +1211,8 @@ static int run_device_worker(
         "3",
         NULL
     };
-    char *core_argv[] = {
-        (char *)core_path,
-        "--ipc-fd",
-        "3",
-        "--launch",
-        (char *)application_path,
-        "--runtime-dir",
-        runtime_path,
-        NULL
-    };
+    char *core_argv[8];
+    size_t core_argc = 0;
     bool signals_blocked = false;
     bool success = false;
     bool orderly = false;
@@ -1286,6 +1234,16 @@ static int run_device_worker(
     memset(&worker, 0, sizeof(worker));
     worker.socket_fd = -1;
     worker.fault_fd = fault_fd;
+    core_argv[core_argc++] = (char *)core_path;
+    core_argv[core_argc++] = "--ipc-fd";
+    core_argv[core_argc++] = "3";
+    if (application_path != NULL) {
+        core_argv[core_argc++] = "--launch";
+        core_argv[core_argc++] = (char *)application_path;
+    }
+    core_argv[core_argc++] = "--runtime-dir";
+    core_argv[core_argc++] = runtime_path;
+    core_argv[core_argc] = NULL;
     nb_wsdisplay_session_frame_state_init(&worker.frame);
     if (!block_worker_termination(&previous_mask)) {
         goto cleanup;
@@ -2230,7 +2188,6 @@ int nb_wsdisplay_session_run(
     char credential_error[NB_SESSION_CREDENTIALS_ERROR_CAPACITY];
     char recovery_error[NB_WSDISPLAY_RECOVERY_ERROR_CAPACITY];
     char core_path[NB_WSDISPLAY_SESSION_PATH_CAPACITY];
-    char default_application_path[NB_WSDISPLAY_SESSION_PATH_CAPACITY];
     const char *application_path;
     int session_lock_fd;
     int result = 1;
@@ -2310,17 +2267,13 @@ int nb_wsdisplay_session_run(
         !options->acknowledge_console_takeover ||
         !nb_session_credentials_resolve_sudo(&credentials,
                                              credential_error) ||
-        !resolve_program_paths(options,
-                               core_path,
-                               default_application_path)) {
+        !resolve_program_paths(options, core_path)) {
         if (credential_error[0] != '\0') {
             fprintf(stderr, "%s\n", credential_error);
         }
         goto release_lock;
     }
-    application_path = options->application_path != NULL
-                           ? options->application_path
-                           : default_application_path;
+    application_path = options->application_path;
     if (!nb_wsdisplay_recovery_store(&recovery_options,
                                      &state,
                                      recovery_error)) {
@@ -2329,12 +2282,15 @@ int nb_wsdisplay_session_run(
     }
     printf("Taking over %s for a privilege-separated NixBench session.\n"
            "Recovery state: %s\n"
-           "Core: %s\n"
-           "Initial application: %s\n",
+           "Core: %s\n",
            state.screen_device,
            recovery_path,
-           core_path,
-           application_path);
+           core_path);
+    if (application_path != NULL) {
+        printf("Initial application: %s\n", application_path);
+    } else {
+        puts("Initial application: none (desktop starts empty)");
+    }
     printf("Supervisor PID: %ld (second-SSH cancellation: sudo kill -TERM "
            "%ld)\n",
            (long)getpid(),

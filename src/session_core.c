@@ -18,6 +18,14 @@
 #include <time.h>
 #include <unistd.h>
 
+#ifndef NB_SESSION_INSTALLED_NIXCLOCK_PATH
+#define NB_SESSION_INSTALLED_NIXCLOCK_PATH ""
+#endif
+
+#ifndef NB_SESSION_INSTALLED_GTK_MODULE_PATH
+#define NB_SESSION_INSTALLED_GTK_MODULE_PATH ""
+#endif
+
 #include "desktop_runtime.h"
 #include "host.h"
 #include "host_privsep_client.h"
@@ -257,6 +265,25 @@ static bool join_program_path(const struct nb_session_core *core,
     return length >= 0 && (size_t)length < path_size;
 }
 
+static bool resolve_program_file(const struct nb_session_core *core,
+                                 const char *sibling,
+                                 const char *installed,
+                                 int access_mode,
+                                 char *path,
+                                 size_t path_size)
+{
+    if (join_program_path(core, sibling, path, path_size) &&
+        access(path, access_mode) == 0) {
+        return true;
+    }
+    if (installed == NULL || installed[0] != '/' ||
+        strlen(installed) >= path_size) {
+        return false;
+    }
+    (void)snprintf(path, path_size, "%s", installed);
+    return access(path, access_mode) == 0;
+}
+
 static bool prepare_application_environment(struct nb_session_core *core)
 {
     char module_path[PATH_MAX] = {0};
@@ -278,11 +305,13 @@ static bool prepare_application_environment(struct nb_session_core *core)
     if (bridge == NULL || strcmp(bridge, "1") != 0) {
         return true;
     }
-    if (!join_program_path(core,
-                           "gtk-modules/libnixbench_gtk_menu_bridge.so",
-                           module_path,
-                           sizeof(module_path)) ||
-        access(module_path, R_OK) != 0 ||
+    if (!resolve_program_file(
+            core,
+            "gtk-modules/libnixbench_gtk_menu_bridge.so",
+            NB_SESSION_INSTALLED_GTK_MODULE_PATH,
+            R_OK,
+            module_path,
+            sizeof(module_path)) ||
         setenv("GTK3_MODULES", module_path, 1) != 0) {
         fprintf(stderr,
                 "Could not enable the requested GTK menu bridge at %s: %s\n",
@@ -736,7 +765,12 @@ static bool apply_runtime_update(
         break;
     case NB_DESKTOP_LAUNCH_NIXCLOCK:
         name = "NixClock";
-        if (!join_program_path(core, "nixclock", path, sizeof(path))) {
+        if (!resolve_program_file(core,
+                                  "nixclock",
+                                  NB_SESSION_INSTALLED_NIXCLOCK_PATH,
+                                  X_OK,
+                                  path,
+                                  sizeof(path))) {
             fputs("Could not resolve the NixClock launcher path\n", stderr);
             return true;
         }
@@ -1042,7 +1076,7 @@ int nb_session_core_run(int protocol_descriptor,
               stderr);
         goto cleanup;
     }
-    if (initial_application_path == NULL ||
+    if (initial_application_path != NULL &&
         initial_application_path[0] != '/') {
         fputs("The initial NixBench application path must be absolute\n",
               stderr);
@@ -1076,11 +1110,12 @@ int nb_session_core_run(int protocol_descriptor,
         goto cleanup;
     }
     if (!prepare_application_environment(&core) ||
-        !launch_application(&core,
-                            initial_application_path,
-                            true,
-                            false,
-                            &initial_application_pid)) {
+        (initial_application_path != NULL &&
+         !launch_application(&core,
+                             initial_application_path,
+                             true,
+                             false,
+                             &initial_application_pid))) {
         goto cleanup;
     }
     if (!nb_desktop_runtime_set_pointer(
@@ -1097,10 +1132,15 @@ int nb_session_core_run(int protocol_descriptor,
         goto cleanup;
     }
     printf("Standalone NixBench Wayland display: "
-           "XDG_RUNTIME_DIR=%s WAYLAND_DISPLAY=%s application-pid=%ld\n",
+           "XDG_RUNTIME_DIR=%s WAYLAND_DISPLAY=%s",
            core.runtime_directory.path,
-           core.runtime_directory.display_name,
-           (long)initial_application_pid);
+           core.runtime_directory.display_name);
+    if (initial_application_pid > 0) {
+        printf(" application-pid=%ld", (long)initial_application_pid);
+    } else {
+        printf(" initial-application=none");
+    }
+    putchar('\n');
     (void)fflush(stdout);
 
     if (!present_desktop(&core)) {

@@ -562,6 +562,35 @@ static bool application_exit_diagnostic_matches(
                    (size_t)suffix_length) == 0;
 }
 
+static bool application_exit_diagnostic_is_absent(int descriptor)
+{
+    static const char diagnostic[] = "Initial application pid ";
+    char output[4096];
+    size_t used = 0;
+
+    for (;;) {
+        ssize_t count;
+
+        if (used + 1 == sizeof(output)) {
+            return false;
+        }
+        do {
+            count = read(descriptor,
+                         output + used,
+                         sizeof(output) - used - 1);
+        } while (count < 0 && errno == EINTR);
+        if (count > 0) {
+            used += (size_t)count;
+        } else if (count == 0) {
+            break;
+        } else {
+            return false;
+        }
+    }
+    output[used] = '\0';
+    return strstr(output, diagnostic) == NULL;
+}
+
 static bool create_signal_application(char *path)
 {
     static const char contents[] = "#!/bin/sh\nkill -TERM $$\n";
@@ -866,8 +895,12 @@ static void test_session_core_with_fake_helper(
     (void)close(sockets[1]);
     CHECK(WIFEXITED(child_status));
     CHECK(WEXITSTATUS(child_status) == 0);
-    CHECK(application_exit_diagnostic_matches(standard_error_pipe[0],
-                                              expected_diagnostic));
+    if (application_path != NULL) {
+        CHECK(application_exit_diagnostic_matches(standard_error_pipe[0],
+                                                  expected_diagnostic));
+    } else {
+        CHECK(application_exit_diagnostic_is_absent(standard_error_pipe[0]));
+    }
     (void)close(standard_error_pipe[0]);
     standard_error_pipe[0] = -1;
     if (verify_application_cleanup) {
@@ -965,6 +998,12 @@ int main(int argc, char *argv[])
         core_program_path,
         SESSION_CORE_SHUTDOWN_BY_ESCAPE,
         verify_application_cleanup,
+        APPLICATION_EXIT_DIAGNOSTIC_CODE_ZERO);
+    test_session_core_with_fake_helper(
+        NULL,
+        core_program_path,
+        SESSION_CORE_SHUTDOWN_BY_ESCAPE,
+        false,
         APPLICATION_EXIT_DIAGNOSTIC_CODE_ZERO);
     test_session_core_with_fake_helper(
         application_path,

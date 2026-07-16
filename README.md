@@ -162,9 +162,9 @@ restoration authority. Trusted children irreversibly change to the invoking
 sudo account before executing `nixbench-session-core`. An ordinary-user
 runtime sentinel owns cleanup of the private runtime directory; its sibling
 core creates the desktop, publishes the Wayland display there, and launches
-NixClock by default or one operator-selected initial application. Its
-ordinary-user process manager also services the global **Applications** menu,
-which can start additional NixClock, Sakura Terminal, and Midori Web Browser
+no application by default, or one operator-selected initial application. Its
+ordinary-user process manager services the global **Applications** menu,
+which can start NixClock, Sakura Terminal, and Midori Web Browser
 processes without involving the privileged helper. The core
 receives only a bounded anonymous protocol endpoint; the selected application
 does not receive that endpoint, and neither ordinary-user process receives a
@@ -389,8 +389,7 @@ builds:
 - `nixbench-wsdisplay-session`, the root recovery supervisor and device-helper
   launcher;
 - `nixbench-session-core`, its internal ordinary-user desktop process; and
-- `nixclock`, the default initial native application launched on the core's
-  private Wayland display.
+- `nixclock`, a native application available from the desktop launcher.
 
 `nixbench-wsdisplay-smoke` is the older, explicitly opt-in root hardware
 harness and is not built by default. Enable it separately with
@@ -456,21 +455,47 @@ The script requires passwordless `sudo` for recovery, configures
 `NIXBENCH_BUILD_WSDISPLAY_SESSION=ON`, builds, runs the non-destructive tests,
 stages the device launcher as the root-owned, non-writable
 `/var/run/nixbench-wsdisplay-session`, and performs a query-only preflight with
-that copy. The ordinary-user core and default NixClock remain in the build tree
+that copy. The ordinary-user core and applications remain in the build tree
 and are never executed until after the credential drop. The script changes no
 display state until the operator types `START-NIXBENCH`. The session has no
 automatic deadline: exit from the desktop menu, press Escape while no Wayland
 client owns keyboard focus, or use the printed supervisor `SIGTERM` command
 from the retained second SSH session.
 
-Use the global **Applications** menu to start additional NixClock, Sakura
-Terminal, or Midori Web Browser instances. NixClock is resolved next to the
-ordinary-user session core; the GTK entries currently use
+The desktop starts empty. Use the global **Applications** menu to start
+NixClock, Sakura Terminal, or Midori Web Browser instances. NixClock is
+resolved from the build tree or installed prefix; the GTK entries currently use
 `/usr/pkg/bin/sakura` and `/usr/pkg/bin/midori`. To export GTK application
 menus into the bar as well, start the session with
 `NIXBENCH_GTK_MENU_BRIDGE=1`.
 
-Set one absolute executable path to replace NixClock for a startup
+For a package-style NetBSD installation, configure the standard pkgsrc prefix,
+build, test, and install as root:
+
+```sh
+cmake -S . -B build-installed \
+  -DCMAKE_INSTALL_PREFIX=/usr/pkg \
+  -DNIXBENCH_WAYLAND=ON \
+  -DNIXBENCH_BUILD_APPLICATIONS=ON \
+  -DNIXBENCH_BUILD_WSDISPLAY_SESSION=ON
+cmake --build build-installed
+ctest --test-dir build-installed --output-on-failure
+sudo cmake --install build-installed
+```
+
+This installs the user-facing `nixbench-session` command in `/usr/pkg/bin`,
+the private session helper and core in `/usr/pkg/libexec/nixbench`, and the GTK
+bridge in `/usr/pkg/lib/gtk-3.0/modules`. Run the installed session with:
+
+```sh
+nixbench-session
+```
+
+This follows pkgsrc's standard `${LOCALBASE}` layout; `/usr/pkg` is the
+default prefix. The source-tree script remains the build-and-test development
+harness.
+
+Set one absolute executable path to open an application at startup for a
 compatibility probe. Arguments are not supported yet:
 
 ```sh
@@ -580,8 +605,8 @@ the framebuffer, and converts canonical frames. Two sibling children receive
 separate private anonymous socket endpoints after irreversible
 `setgid()`/`setuid()` transitions to the sudo account. The runtime sentinel
 creates and retains descriptor-based ownership of the private runtime
-directory. The core publishes its Wayland socket there and launches NixClock
-by default, or the selected initial application, with the matching
+directory. The core publishes its Wayland socket there and starts empty, or
+launches the selected initial application, with the matching
 `XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY`. It explicitly fixes
 `EGL_PLATFORM=wayland` so NetBSD libEGL does not select its X11 default in the
 standalone session. Once the core and application process group are gone, the

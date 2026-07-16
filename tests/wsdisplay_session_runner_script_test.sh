@@ -48,7 +48,7 @@ case "${0##*/}" in
                     printf '%s\n' "${NB_RESTORED_VT:-1}"
                 fi
                 ;;
-            *"/var/run/nixbench-wsdisplay-session --acknowledge-console-takeover"*)
+            *"nixbench-wsdisplay-session --acknowledge-console-takeover"*)
                 exit "${NB_LAUNCH_STATUS:-0}"
                 ;;
         esac
@@ -149,6 +149,47 @@ if grep -F -- '--require-core-' "$normal_log" >/dev/null; then
 fi
 if grep -F -- '--application' "$normal_log" >/dev/null; then
     echo "default standalone session selected a custom application" >&2
+    exit 1
+fi
+grep -F -- 'NixBench will start with an empty desktop' \
+    "$normal_output" >/dev/null
+grep -F -- 'Starting NixBench with an empty desktop' \
+    "$normal_output" >/dev/null
+if grep -F -- 'NixClock will open automatically' \
+    "$normal_output" >/dev/null; then
+    echo "default standalone session still described NixClock autostart" >&2
+    exit 1
+fi
+
+installed_directory=$temporary/installed/libexec/nixbench
+mkdir -p "$installed_directory"
+installed_helper=$installed_directory/nixbench-wsdisplay-session
+installed_core=$installed_directory/nixbench-session-core
+touch "$installed_helper" "$installed_core"
+chmod +x "$installed_helper" "$installed_core"
+installed_log=$temporary/installed.log
+installed_output=$temporary/installed.out
+printf '%s\n' START-NIXBENCH |
+    env PATH="$temporary/bin:/usr/bin:/bin" \
+        SSH_CONNECTION='test test test test' \
+        NIXBENCH_INSTALLED_MODE=1 \
+        NIXBENCH_SESSION_HELPER="$installed_helper" \
+        NIXBENCH_SESSION_CORE="$installed_core" \
+        NIXBENCH_GTK_MENU_BRIDGE=1 \
+        NB_LAUNCH_STATUS=0 \
+        NB_ABSENCE_STATUS=0 \
+        NB_INITIAL_VT=1 \
+        NB_RESTORED_VT=1 \
+        NB_VT_COUNT_FILE="$installed_log.vt-count" \
+        NB_TEST_LOG="$installed_log" \
+        "$runner" >"$installed_output" 2>&1
+grep -F -- "$installed_helper --acknowledge-console-takeover" \
+    "$installed_log" >/dev/null
+grep -F -- 'NIXBENCH_GTK_MENU_BRIDGE=1' "$installed_log" >/dev/null
+if grep -F -- '/usr/bin/install' "$installed_log" >/dev/null ||
+   grep -F -- 'Configuring the privilege-separated session' \
+       "$installed_output" >/dev/null; then
+    echo "installed launcher rebuilt or restaged the session helper" >&2
     exit 1
 fi
 
