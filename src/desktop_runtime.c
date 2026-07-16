@@ -554,12 +554,10 @@ static bool process_pointer_event(const struct nb_host_event *event,
         y = event->data.pointer_motion.y;
         remember_pointer(runtime, x, y);
         if (nb_shell_wants_pointer_motion(&runtime->shell)) {
-            if (!nb_shell_pointer_move(&runtime->shell,
-                                       x,
-                                       y,
-                                       runtime->viewport)) {
-                return false;
-            }
+            (void)nb_shell_pointer_move(&runtime->shell,
+                                        x,
+                                        y,
+                                        runtime->viewport);
         }
         target = nb_shell_pointer_target_at(&runtime->shell,
                                             x,

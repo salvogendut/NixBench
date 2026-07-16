@@ -1742,6 +1742,10 @@ static void map_surface(struct nb_wayland_surface *surface)
         (int)(surface->server->next_window_position %
               (unsigned int)NB_WAYLAND_CASCADE_COUNT) *
         NB_WAYLAND_CASCADE;
+    int geometry_x;
+    int geometry_y;
+    int geometry_width;
+    int geometry_height;
     struct nb_rect frame;
     const char *title;
 
@@ -1750,10 +1754,15 @@ static void map_surface(struct nb_wayland_surface *surface)
         return;
     }
 
+    surface_window_geometry(surface,
+                            &geometry_x,
+                            &geometry_y,
+                            &geometry_width,
+                            &geometry_height);
     frame.x = NB_WAYLAND_INITIAL_X + cascade;
     frame.y = NB_WAYLAND_INITIAL_Y + cascade;
-    frame.width = surface->width + (2 * NB_WINDOW_BORDER_WIDTH);
-    frame.height = surface->height + (2 * NB_WINDOW_BORDER_WIDTH) +
+    frame.width = geometry_width + (2 * NB_WINDOW_BORDER_WIDTH);
+    frame.height = geometry_height + (2 * NB_WINDOW_BORDER_WIDTH) +
                    NB_WINDOW_TITLE_HEIGHT + NB_WINDOW_FOOTER_HEIGHT;
     title = surface->title[0] != '\0'
                 ? surface->title
