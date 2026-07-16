@@ -847,6 +847,93 @@ static GtkWidget *find_widget_menubar(GtkWidget *widget)
     return result;
 }
 
+static size_t menu_model_action_score(GMenuModel *model)
+{
+    size_t score = 0;
+    gint count;
+    gint index;
+
+    if (model == NULL) {
+        return 0;
+    }
+    count = g_menu_model_get_n_items(model);
+    for (index = 0; index < count; ++index) {
+        GMenuModel *submenu =
+            g_menu_model_get_item_link(model, index, G_MENU_LINK_SUBMENU);
+        GMenuModel *section =
+            g_menu_model_get_item_link(model, index, G_MENU_LINK_SECTION);
+        GVariant *action = g_menu_model_get_item_attribute_value(
+            model,
+            index,
+            G_MENU_ATTRIBUTE_ACTION,
+            NULL);
+
+        if (action != NULL) {
+            ++score;
+            g_variant_unref(action);
+        }
+        if (submenu != NULL) {
+            score += menu_model_action_score(submenu);
+            g_object_unref(submenu);
+        }
+        if (section != NULL) {
+            score += menu_model_action_score(section);
+            g_object_unref(section);
+        }
+    }
+    return score;
+}
+
+static void find_widget_menu_model(GtkWidget *widget,
+                                   GMenuModel **best_model,
+                                   size_t *best_score)
+{
+    GList *children;
+    GList *iter;
+
+    if (widget == NULL || best_model == NULL || best_score == NULL) {
+        return;
+    }
+    if (GTK_IS_MENU_BUTTON(widget) && gtk_widget_get_visible(widget)) {
+        GMenuModel *model =
+            gtk_menu_button_get_menu_model(GTK_MENU_BUTTON(widget));
+        const size_t score = menu_model_action_score(model);
+
+        if (model != NULL && score > *best_score) {
+            if (*best_model != NULL) {
+                g_object_unref(*best_model);
+            }
+            *best_model = g_object_ref(model);
+            *best_score = score;
+        }
+    }
+    if (!GTK_IS_CONTAINER(widget)) {
+        return;
+    }
+    children = gtk_container_get_children(GTK_CONTAINER(widget));
+    for (iter = children; iter != NULL; iter = iter->next) {
+        if (GTK_IS_WIDGET(iter->data)) {
+            find_widget_menu_model(GTK_WIDGET(iter->data),
+                                   best_model,
+                                   best_score);
+        }
+    }
+    g_list_free(children);
+}
+
+static GMenuModel *find_best_widget_menu_model(GtkWidget *widget,
+                                                size_t *score)
+{
+    GMenuModel *model = NULL;
+    size_t model_score = 0;
+
+    find_widget_menu_model(widget, &model, &model_score);
+    if (score != NULL) {
+        *score = model_score;
+    }
+    return model;
+}
+
 static gboolean widget_menu_has_items(GtkWidget *widget)
 {
     GList *children;
@@ -1195,6 +1282,7 @@ static gboolean publish_window_menu(struct nb_gtk_menu_window_state *state)
     GtkWidget *popup;
     struct nixbench_application_menu_v1 *menu;
     gboolean model_is_menubar = FALSE;
+    gboolean model_is_menu_button = FALSE;
     gboolean published;
     const char *source;
 
@@ -1220,6 +1308,20 @@ static gboolean publish_window_menu(struct nb_gtk_menu_window_state *state)
     menubar = model == NULL
                   ? find_widget_menubar(GTK_WIDGET(state->window))
                   : NULL;
+    if (model == NULL && menubar == NULL) {
+        size_t score = 0;
+
+        model = find_best_widget_menu_model(GTK_WIDGET(state->window),
+                                            &score);
+        model_is_menu_button = model != NULL;
+        if (state->bridge->debug) {
+            g_printerr("NixBench GTK menu bridge: menu-button model=%p "
+                       "score=%zu for window %p\n",
+                       (void *)model,
+                       score,
+                       (void *)state->window);
+        }
+    }
     popup = model == NULL && menubar == NULL
                 ? bridge_best_popup_menu(state->bridge)
                 : NULL;
@@ -1272,6 +1374,9 @@ static gboolean publish_window_menu(struct nb_gtk_menu_window_state *state)
     } else if (model_is_menubar) {
         source = "GtkApplication menubar";
         published = publish_menubar(state, model, menu);
+    } else if (model_is_menu_button) {
+        source = "GtkMenuButton model";
+        published = publish_flat_menu(state, model, menu);
     } else {
         source = "GtkApplication app-menu";
         published = publish_flat_menu(state, model, menu);
