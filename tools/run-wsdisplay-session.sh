@@ -188,6 +188,14 @@ After the fixed page appears, test the PC-XT keyboard path with Ctrl-L. Type:
 Use Backspace or the arrow keys to edit it, then press Return. Midori should
 replace the page with the text "nixbench-keyboard" without using the network.
 EOF
+    elif [ "${application##*/}" = run-sakura-probe.sh ]; then
+        cat <<EOF
+Sakura should open as a terminal prompt. Type a simple command such as:
+
+  printf 'nixbench-sakura\\n'
+
+and press Return to verify keyboard input and text rendering.
+EOF
     fi
 else
     cat <<EOF

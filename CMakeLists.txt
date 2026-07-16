@@ -1402,6 +1402,12 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-midori-content-probe.sh"
     )
     add_test(
+      NAME nixbench.sakura-probe.syntax
+      COMMAND
+        sh -n
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-sakura-probe.sh"
+    )
+    add_test(
       NAME nixbench.midori-gdb-runner.syntax
       COMMAND sh -n "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-midori-gdb.sh"
     )
