@@ -18,10 +18,22 @@ if [ ! -f "$midori" ] || [ ! -x "$midori" ]; then
     exit 127
 fi
 
+profile_root=$(mktemp -d "${TMPDIR:-/tmp}/nixbench-midori-profile.XXXXXX")
+cleanup() {
+    rm -rf "$profile_root"
+}
+trap cleanup EXIT INT TERM HUP
+
 WEBKIT_DISABLE_COMPOSITING_MODE=1
 export WEBKIT_DISABLE_COMPOSITING_MODE
 GTK_CSD=0
 export GTK_CSD
+XDG_CONFIG_HOME=$profile_root/config
+XDG_CACHE_HOME=$profile_root/cache
+XDG_DATA_HOME=$profile_root/data
+XDG_STATE_HOME=$profile_root/state
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+export XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME
 
 if [ "${NIXBENCH_TRACE_WAYLAND:-0}" = 1 ]; then
     WAYLAND_DEBUG=client
@@ -30,7 +42,7 @@ if [ "${NIXBENCH_TRACE_WAYLAND:-0}" = 1 ]; then
 fi
 
 echo "NixBench Midori diagnostic: software compositing under ordinary-user GDB" >&2
-exec "$gdb" --quiet --nx --batch \
+if "$gdb" --quiet --nx --batch \
     -ex 'set pagination off' \
     -ex 'set confirm off' \
     -ex 'set startup-with-shell off' \
@@ -45,4 +57,11 @@ exec "$gdb" --quiet --nx --batch \
     -ex 'thread apply all bt 12' \
     -ex 'echo \n===== Loaded shared libraries =====\n' \
     -ex 'info sharedlibrary' \
-    --args "$midori"
+    --args "$midori"; then
+    status=0
+else
+    status=$?
+fi
+cleanup
+trap - EXIT INT TERM HUP
+exit "$status"
