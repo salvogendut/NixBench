@@ -4790,6 +4790,19 @@ bool nb_wayland_server_surface_snapshot(
     snapshot->width = surface->width;
     snapshot->height = surface->height;
     snapshot->stride = surface->width * (int)sizeof(uint32_t);
+    snapshot->geometry_x = surface->window_geometry_set
+                               ? surface->window_geometry_x
+                               : 0;
+    snapshot->geometry_y = surface->window_geometry_set
+                               ? surface->window_geometry_y
+                               : 0;
+    snapshot->geometry_width = surface->window_geometry_set
+                                   ? surface->window_geometry_width
+                                   : surface->width;
+    snapshot->geometry_height = surface->window_geometry_set
+                                    ? surface->window_geometry_height
+                                    : surface->height;
+    snapshot->geometry_set = surface->window_geometry_set;
     snapshot->revision = surface->revision;
     return true;
 }

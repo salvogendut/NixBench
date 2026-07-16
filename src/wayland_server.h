@@ -38,6 +38,11 @@ struct nb_wayland_surface_snapshot {
     int width;
     int height;
     int stride;
+    int geometry_x;
+    int geometry_y;
+    int geometry_width;
+    int geometry_height;
+    bool geometry_set;
     uint64_t revision;
 };
 

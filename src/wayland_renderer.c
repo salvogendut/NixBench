@@ -32,12 +32,18 @@ bool nb_wayland_render_content(SDL_Renderer *renderer,
         return false;
     }
 
-    render_width = snapshot.width < content_rect.width
-                       ? snapshot.width
-                       : content_rect.width;
-    render_height = snapshot.height < content_rect.height
-                        ? snapshot.height
-                        : content_rect.height;
+    if (snapshot.geometry_set && snapshot.geometry_width > 0 &&
+        snapshot.geometry_height > 0) {
+        render_width = snapshot.geometry_width;
+        render_height = snapshot.geometry_height;
+    } else {
+        render_width = snapshot.width < content_rect.width
+                           ? snapshot.width
+                           : content_rect.width;
+        render_height = snapshot.height < content_rect.height
+                            ? snapshot.height
+                            : content_rect.height;
+    }
     if (render_width <= 0 || render_height <= 0) {
         SDL_DestroyTexture(texture);
         return false;
@@ -46,8 +52,8 @@ bool nb_wayland_render_content(SDL_Renderer *renderer,
     destination.y = (float)content_rect.y;
     destination.w = (float)render_width;
     destination.h = (float)render_height;
-    source.x = 0.0f;
-    source.y = 0.0f;
+    source.x = snapshot.geometry_set ? (float)snapshot.geometry_x : 0.0f;
+    source.y = snapshot.geometry_set ? (float)snapshot.geometry_y : 0.0f;
     source.w = (float)render_width;
     source.h = (float)render_height;
 

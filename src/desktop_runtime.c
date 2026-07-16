@@ -560,11 +560,6 @@ static bool process_pointer_event(const struct nb_host_event *event,
                                        runtime->viewport)) {
                 return false;
             }
-#if NIXBENCH_HAS_WAYLAND
-            if (!maybe_resize_wayland_window(runtime)) {
-                return false;
-            }
-#endif
         }
         target = nb_shell_pointer_target_at(&runtime->shell,
                                             x,
