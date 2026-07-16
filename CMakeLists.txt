@@ -547,6 +547,17 @@ target_link_libraries(
 nixbench_configure_c_target(nixbench_software_canvas)
 
 add_library(
+  nixbench_preferences STATIC
+  src/preferences.c
+  src/user_config.c
+)
+target_include_directories(
+  nixbench_preferences
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+nixbench_configure_c_target(nixbench_preferences)
+
+add_library(
   nixbench_renderers STATIC
   src/desktop_renderer.c
   src/menu_renderer.c
@@ -587,7 +598,7 @@ target_include_directories(
 )
 target_link_libraries(
   nixbench_desktop_runtime
-  PUBLIC nixbench_host
+  PUBLIC nixbench_host nixbench_preferences
   PRIVATE
     SDL3::SDL3
     nixbench_model
@@ -1086,7 +1097,10 @@ if(
   )
   target_link_libraries(
     nixbench_session_core
-    PRIVATE nixbench_desktop_runtime nixbench_host_privsep_client
+    PRIVATE
+      nixbench_desktop_runtime
+      nixbench_host_privsep_client
+      nixbench_preferences
   )
   target_compile_definitions(
     nixbench_session_core
@@ -1362,6 +1376,13 @@ if(BUILD_TESTING)
     PRIVATE SDL3::SDL3 nixbench_software_canvas
   )
   nixbench_configure_c_target(nixbench_software_canvas_tests)
+
+  add_executable(nixbench_user_config_tests tests/user_config_test.c)
+  target_link_libraries(
+    nixbench_user_config_tests
+    PRIVATE nixbench_preferences
+  )
+  nixbench_configure_c_target(nixbench_user_config_tests)
 
   add_executable(
     nixbench_framebuffer_format_tests
@@ -1707,6 +1728,7 @@ if(BUILD_TESTING)
     COMMAND nixbench-backend-probe
   )
   add_test(NAME nixbench.window.model COMMAND nixbench_window_tests)
+  add_test(NAME nixbench.user-config COMMAND nixbench_user_config_tests)
   add_test(NAME nixbench.menu.model COMMAND nixbench_menu_tests)
   add_test(NAME nixbench.shell.model COMMAND nixbench_shell_tests)
   add_test(NAME nixbench.application.model COMMAND nixbench_application_tests)
