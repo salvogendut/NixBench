@@ -825,6 +825,25 @@ if(NIXBENCH_WAYLAND_DEMO_AVAILABLE)
   nixbench_configure_c_target(nixbench-wayland-demo)
 endif()
 
+set(NIXBENCH_X11_AVAILABLE FALSE)
+if(NIXBENCH_BUILD_APPLICATIONS)
+  find_path(
+    NIXBENCH_X11_INCLUDE_DIR
+    NAMES X11/Xlib.h
+    PATHS /usr/X11R7
+    PATH_SUFFIXES include
+  )
+  find_library(
+    NIXBENCH_X11_LIBRARY
+    NAMES X11
+    PATHS /usr/X11R7
+    PATH_SUFFIXES lib
+  )
+  if(NIXBENCH_X11_INCLUDE_DIR AND NIXBENCH_X11_LIBRARY)
+    set(NIXBENCH_X11_AVAILABLE TRUE)
+  endif()
+endif()
+
 set(NIXBENCH_NIXCLOCK_AVAILABLE FALSE)
 if(
   NIXBENCH_WAYLAND_ENABLED
@@ -873,6 +892,27 @@ if(NIXBENCH_NIXCLOCK_AVAILABLE)
   )
   nixbench_configure_c_target(nixclock)
   install(TARGETS nixclock RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+endif()
+
+if(NIXBENCH_X11_AVAILABLE)
+  add_executable(
+    nixbench_x11_probe
+    apps/x11probe/x11probe.c
+  )
+  target_include_directories(
+    nixbench_x11_probe
+    PRIVATE "${NIXBENCH_X11_INCLUDE_DIR}"
+  )
+  target_link_libraries(
+    nixbench_x11_probe
+    PRIVATE "${NIXBENCH_X11_LIBRARY}"
+  )
+  target_compile_definitions(
+    nixbench_x11_probe
+    PRIVATE NIXBENCH_X11_PROBE_VERSION="${PROJECT_VERSION}"
+  )
+  nixbench_configure_c_target(nixbench_x11_probe)
+  install(TARGETS nixbench_x11_probe RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 endif()
 
 if(NIXBENCH_BUILD_WSDISPLAY_SESSION)
@@ -1407,6 +1447,14 @@ if(BUILD_TESTING)
         sh -n
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-sakura-probe.sh"
     )
+    if(NIXBENCH_X11_AVAILABLE)
+      add_test(
+        NAME nixbench.xwayland-probe.syntax
+        COMMAND
+          sh -n
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-xwayland-probe.sh"
+      )
+    endif()
     add_test(
       NAME nixbench.midori-gdb-runner.syntax
       COMMAND sh -n "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-midori-gdb.sh"
@@ -1494,6 +1542,17 @@ if(BUILD_TESTING)
              COMMAND nixclock --definitely-not-an-option)
     set_tests_properties(
       nixbench.nixclock.unknown-option
+      PROPERTIES WILL_FAIL TRUE
+    )
+  endif()
+
+  if(NIXBENCH_X11_AVAILABLE)
+    add_test(NAME nixbench.x11probe.help COMMAND nixbench_x11_probe --help)
+    add_test(NAME nixbench.x11probe.version COMMAND nixbench_x11_probe --version)
+    add_test(NAME nixbench.x11probe.unknown-option
+             COMMAND nixbench_x11_probe --definitely-not-an-option)
+    set_tests_properties(
+      nixbench.x11probe.unknown-option
       PROPERTIES WILL_FAIL TRUE
     )
   endif()

@@ -196,6 +196,12 @@ Sakura should open as a terminal prompt. Type a simple command such as:
 
 and press Return to verify keyboard input and text rendering.
 EOF
+    elif [ "${application##*/}" = run-xwayland-probe.sh ]; then
+        cat <<EOF
+This probe starts Xwayland inside the NixBench Wayland session and then
+opens a native X11 client. If the window appears, press keys to verify input
+and use Escape or q to close it.
+EOF
     fi
 else
     cat <<EOF
