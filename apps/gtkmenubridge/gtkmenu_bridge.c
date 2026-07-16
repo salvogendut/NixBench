@@ -74,6 +74,7 @@ struct nb_gtk_menu_bridge {
     guint show_signal;
     gulong show_hook;
     GPtrArray *popup_menus;
+    gboolean debug;
 };
 
 static struct nb_gtk_menu_bridge *global_bridge;
@@ -426,7 +427,13 @@ static gboolean bridge_ensure_manager(struct nb_gtk_menu_bridge *bridge)
         }
     }
     if (wl_display_roundtrip(bridge->display) < 0) {
+        if (bridge->debug) {
+            g_printerr("NixBench GTK menu bridge: registry roundtrip failed\n");
+        }
         return FALSE;
+    }
+    if (bridge->debug && bridge->menu_manager == NULL) {
+        g_printerr("NixBench GTK menu bridge: menu protocol is unavailable\n");
     }
     return bridge->menu_manager != NULL;
 }
@@ -895,6 +902,13 @@ static GtkWidget *bridge_best_popup_menu(struct nb_gtk_menu_bridge *bridge)
             best_score = score;
         }
     }
+    if (bridge->debug) {
+        g_printerr("NixBench GTK menu bridge: popup candidates=%u best=%p "
+                   "score=%zu\n",
+                   bridge->popup_menus != NULL ? bridge->popup_menus->len : 0,
+                   (void *)best,
+                   best_score);
+    }
     return best;
 }
 
@@ -1160,6 +1174,10 @@ static gboolean publish_window_menu(struct nb_gtk_menu_window_state *state)
         return FALSE;
     }
     if (!bridge_ensure_manager(state->bridge)) {
+        if (state != NULL && state->bridge != NULL && state->bridge->debug) {
+            g_printerr("NixBench GTK menu bridge: cannot publish without "
+                       "menu manager\n");
+        }
         return FALSE;
     }
 
@@ -1178,10 +1196,20 @@ static gboolean publish_window_menu(struct nb_gtk_menu_window_state *state)
                 ? bridge_best_popup_menu(state->bridge)
                 : NULL;
     if (model == NULL && menubar == NULL && popup == NULL) {
+        if (state->bridge->debug) {
+            g_printerr("NixBench GTK menu bridge: no menu source for window "
+                       "%p\n",
+                       (void *)state->window);
+        }
         window_state_clear_menu(state);
         return FALSE;
     }
     if (!window_state_has_surface(state)) {
+        if (state->bridge->debug) {
+            g_printerr("NixBench GTK menu bridge: window %p has no Wayland "
+                       "surface yet\n",
+                       (void *)state->window);
+        }
         if (model != NULL) {
             g_object_unref(model);
         }
@@ -1257,6 +1285,12 @@ static void bridge_sync_all_windows(struct nb_gtk_menu_bridge *bridge)
         return;
     }
     windows = gtk_window_list_toplevels();
+    if (bridge->debug) {
+        g_printerr("NixBench GTK menu bridge: syncing %u toplevel(s), %u "
+                   "popup(s)\n",
+                   g_list_length(windows),
+                   bridge->popup_menus != NULL ? bridge->popup_menus->len : 0);
+    }
     for (iter = windows; iter != NULL; iter = iter->next) {
         if (GTK_IS_WINDOW(iter->data)) {
             bridge_attach_window(bridge, GTK_WINDOW(iter->data));
@@ -1319,6 +1353,13 @@ static void bridge_track_popup_menu(struct nb_gtk_menu_bridge *bridge,
         }
     }
     g_ptr_array_add(bridge->popup_menus, widget);
+    if (bridge->debug) {
+        g_printerr("NixBench GTK menu bridge: tracked popup %p attach=%p "
+                   "score=%zu\n",
+                   (void *)widget,
+                   (void *)gtk_menu_get_attach_widget(GTK_MENU(widget)),
+                   widget_menu_score(widget));
+    }
     g_object_weak_ref(G_OBJECT(widget),
                       bridge_popup_menu_destroyed,
                       bridge);
@@ -1338,6 +1379,12 @@ static gboolean bridge_on_widget_map(GSignalInvocationHint *hint,
     }
     object = g_value_get_object(&parameters[0]);
     if (object != NULL) {
+        if (bridge->debug &&
+            (GTK_IS_WINDOW(object) || GTK_IS_MENU(object))) {
+            g_printerr("NixBench GTK menu bridge: widget signal for %s %p\n",
+                       G_OBJECT_TYPE_NAME(object),
+                       (void *)object);
+        }
         if (GTK_IS_WINDOW(object)) {
             bridge_attach_window(bridge, GTK_WINDOW(object));
         } else if (GTK_IS_MENU(object)) {
@@ -1630,6 +1677,8 @@ G_MODULE_EXPORT void gtk_module_init(gint *argc, gchar ***argv)
 
     g_printerr("NixBench GTK menu bridge: loaded\n");
     global_bridge = bridge_create();
+    global_bridge->debug =
+        g_strcmp0(g_getenv("NIXBENCH_GTK_MENU_BRIDGE_DEBUG"), "1") == 0;
     default_application = g_application_get_default();
     if (default_application != NULL &&
         GTK_IS_APPLICATION(default_application)) {
@@ -1660,6 +1709,13 @@ G_MODULE_EXPORT void gtk_module_init(gint *argc, gchar ***argv)
                 global_bridge,
                 NULL);
         }
+    }
+    if (global_bridge->debug) {
+        g_printerr("NixBench GTK menu bridge: hooks map=%u/%lu show=%u/%lu\n",
+                   global_bridge->map_signal,
+                   global_bridge->map_hook,
+                   global_bridge->show_signal,
+                   global_bridge->show_hook);
     }
     bridge_schedule_sync(global_bridge);
 }
