@@ -283,16 +283,20 @@ static const char *root_menu_label(
     size_t capacity)
 {
     GtkApplication *application;
+    const char *application_id = NULL;
     const char *name = NULL;
+    char *separator;
 
     application = state != NULL && state->window != NULL
                       ? gtk_window_get_application(state->window)
                       : NULL;
+    name = g_get_application_name();
     if (application != NULL) {
-        name = g_application_get_application_id(G_APPLICATION(application));
+        application_id =
+            g_application_get_application_id(G_APPLICATION(application));
     }
     if (name == NULL || name[0] == '\0') {
-        name = g_get_application_name();
+        name = application_id;
     }
     if ((name == NULL || name[0] == '\0') && state != NULL &&
         state->window != NULL) {
@@ -303,6 +307,21 @@ static const char *root_menu_label(
     }
     if (!copy_menu_text(name, buffer, capacity)) {
         g_strlcpy(buffer, "Application", capacity);
+    }
+
+    /*
+     * Some GTK applications expose their reverse-DNS application ID as the
+     * process name too.  Keep that implementation detail out of the desktop
+     * menu when GTK has not supplied a separate human-readable name.
+     */
+    if (application_id != NULL && strcmp(buffer, application_id) == 0) {
+        separator = strrchr(buffer, '.');
+        if (separator != NULL && separator[1] != '\0') {
+            memmove(buffer, separator + 1, strlen(separator + 1) + 1);
+        }
+    }
+    if (g_ascii_islower((guchar)buffer[0])) {
+        buffer[0] = (char)g_ascii_toupper(buffer[0]);
     }
     return buffer;
 }
