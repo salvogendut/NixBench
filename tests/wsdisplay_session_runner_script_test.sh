@@ -169,20 +169,19 @@ touch "$installed_helper" "$installed_core"
 chmod +x "$installed_helper" "$installed_core"
 installed_log=$temporary/installed.log
 installed_output=$temporary/installed.out
-printf '%s\n' START-NIXBENCH |
-    env PATH="$temporary/bin:/usr/bin:/bin" \
-        SSH_CONNECTION='test test test test' \
-        NIXBENCH_INSTALLED_MODE=1 \
-        NIXBENCH_SESSION_HELPER="$installed_helper" \
-        NIXBENCH_SESSION_CORE="$installed_core" \
-        NIXBENCH_GTK_MENU_BRIDGE=1 \
-        NB_LAUNCH_STATUS=0 \
-        NB_ABSENCE_STATUS=0 \
-        NB_INITIAL_VT=1 \
-        NB_RESTORED_VT=1 \
-        NB_VT_COUNT_FILE="$installed_log.vt-count" \
-        NB_TEST_LOG="$installed_log" \
-        "$runner" >"$installed_output" 2>&1
+env PATH="$temporary/bin:/usr/bin:/bin" \
+    SSH_CONNECTION='test test test test' \
+    NIXBENCH_INSTALLED_MODE=1 \
+    NIXBENCH_SESSION_HELPER="$installed_helper" \
+    NIXBENCH_SESSION_CORE="$installed_core" \
+    NIXBENCH_GTK_MENU_BRIDGE=1 \
+    NB_LAUNCH_STATUS=0 \
+    NB_ABSENCE_STATUS=0 \
+    NB_INITIAL_VT=1 \
+    NB_RESTORED_VT=1 \
+    NB_VT_COUNT_FILE="$installed_log.vt-count" \
+    NB_TEST_LOG="$installed_log" \
+    "$runner" >"$installed_output" 2>&1
 grep -F -- "$installed_helper --acknowledge-console-takeover" \
     "$installed_log" >/dev/null
 grep -F -- 'NIXBENCH_GTK_MENU_BRIDGE=1' "$installed_log" >/dev/null
@@ -190,6 +189,10 @@ if grep -F -- '/usr/bin/install' "$installed_log" >/dev/null ||
    grep -F -- 'Configuring the privilege-separated session' \
        "$installed_output" >/dev/null; then
     echo "installed launcher rebuilt or restaged the session helper" >&2
+    exit 1
+fi
+if grep -F -- 'Type START-NIXBENCH' "$installed_output" >/dev/null; then
+    echo "installed launcher requested redundant takeover confirmation" >&2
     exit 1
 fi
 

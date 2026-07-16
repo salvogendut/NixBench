@@ -334,10 +334,12 @@ the core and helper have exited and the saved console state has been restored
 and independently verified.
 EOF
 
-printf "Type START-NIXBENCH to continue: "
-answer=
-if ! IFS= read -r answer || [ "$answer" != "START-NIXBENCH" ]; then
-    fail "cancelled without changing display state"
+if [ "$installed_mode" -eq 0 ]; then
+    printf "Type START-NIXBENCH to continue: "
+    answer=
+    if ! IFS= read -r answer || [ "$answer" != "START-NIXBENCH" ]; then
+        fail "cancelled without changing display state"
+    fi
 fi
 
 if [ -n "$application" ]; then

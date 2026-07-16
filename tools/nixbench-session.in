@@ -9,7 +9,8 @@ Usage: nixbench-session
 
 Start the standalone NixBench desktop on the active NetBSD wsdisplay console.
 Run it over SSH while the physical console is visible. The desktop starts
-empty; launch applications from the global Applications menu.
+empty and takes over after preflight without an additional confirmation;
+launch applications from the global Applications menu.
 
 Environment:
   NIXBENCH_APPLICATION      Absolute executable to open at startup
