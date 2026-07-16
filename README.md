@@ -505,7 +505,9 @@ accelerated buffers, and generic GTK global-menu integration remain incomplete.
 Set `NIXBENCH_TRACE_WAYLAND=1` when invoking `./tools/run-wsdisplay-session.sh`
 if you need a client-side protocol trace for the first failing interaction.
 Set `NIXBENCH_GTK_MENU_BRIDGE=1` when running the GTK probes if you want them
-to load the optional NixBench GTK menu bridge.
+to load the optional NixBench GTK menu bridge. The probe scripts look for the
+module in the local build tree at `build/gtk-modules/` and add it to
+`GTK_MODULES` when present.
 When rerunning tests after one of those probes, `./tools/run-clean-env.sh`
 clears the `NIXBENCH_*` launch variables first.
 

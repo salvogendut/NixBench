@@ -307,17 +307,21 @@ run_privileged_session()
             if [ -n "$trace_wayland_log" ]; then
                 sudo -n env \
                     NIXBENCH_TRACE_WAYLAND="$trace_wayland" \
+                    NIXBENCH_GTK_MENU_BRIDGE="${NIXBENCH_GTK_MENU_BRIDGE:-}" \
                     NIXBENCH_TRACE_WAYLAND_LOG="$trace_wayland_log" \
                     "$staged_session" --acknowledge-console-takeover \
                     --core "$core" --application "$application" "$@"
             else
                 sudo -n env \
                     NIXBENCH_TRACE_WAYLAND="$trace_wayland" \
+                    NIXBENCH_GTK_MENU_BRIDGE="${NIXBENCH_GTK_MENU_BRIDGE:-}" \
                     "$staged_session" --acknowledge-console-takeover \
                     --core "$core" --application "$application" "$@"
             fi
         else
-            sudo -n "$staged_session" --acknowledge-console-takeover \
+            sudo -n env \
+                NIXBENCH_GTK_MENU_BRIDGE="${NIXBENCH_GTK_MENU_BRIDGE:-}" \
+                "$staged_session" --acknowledge-console-takeover \
                 --core "$core" --application "$application" "$@"
         fi
     else
@@ -325,17 +329,21 @@ run_privileged_session()
             if [ -n "$trace_wayland_log" ]; then
                 sudo -n env \
                     NIXBENCH_TRACE_WAYLAND="$trace_wayland" \
+                    NIXBENCH_GTK_MENU_BRIDGE="${NIXBENCH_GTK_MENU_BRIDGE:-}" \
                     NIXBENCH_TRACE_WAYLAND_LOG="$trace_wayland_log" \
                     "$staged_session" --acknowledge-console-takeover \
                     --core "$core" "$@"
             else
                 sudo -n env \
                     NIXBENCH_TRACE_WAYLAND="$trace_wayland" \
+                    NIXBENCH_GTK_MENU_BRIDGE="${NIXBENCH_GTK_MENU_BRIDGE:-}" \
                     "$staged_session" --acknowledge-console-takeover \
                     --core "$core" "$@"
             fi
         else
-            sudo -n "$staged_session" --acknowledge-console-takeover \
+            sudo -n env \
+                NIXBENCH_GTK_MENU_BRIDGE="${NIXBENCH_GTK_MENU_BRIDGE:-}" \
+                "$staged_session" --acknowledge-console-takeover \
                 --core "$core" "$@"
         fi
     fi

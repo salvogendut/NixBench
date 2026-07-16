@@ -1032,6 +1032,12 @@ if(NIXBENCH_GTK_MENU_BRIDGE_AVAILABLE)
       "${NIXBENCH_WAYLAND_CLIENT_LIBRARY}"
       ${NIXBENCH_GTK3_LIBRARIES}
   )
+  set_target_properties(
+    nixbench_gtk_menu_bridge
+    PROPERTIES
+      LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/gtk-modules"
+      PREFIX ""
+  )
   nixbench_configure_c_target(nixbench_gtk_menu_bridge)
   install(
     TARGETS nixbench_gtk_menu_bridge
