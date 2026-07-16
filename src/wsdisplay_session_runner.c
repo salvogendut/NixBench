@@ -361,8 +361,8 @@ int nb_wsdisplay_session_run(
 
 #include "host_wsdisplay.h"
 #include "privsep_helper.h"
+#include "session_console_shortcuts.h"
 #include "session_credentials.h"
-#include "session_emergency_chord.h"
 #include "session_runtime_sentinel.h"
 #include "session_watchdog.h"
 #include "wscons_input.h"
@@ -597,7 +597,7 @@ struct worker_context {
     int fault_fd;
     pid_t core_pid;
     struct nb_wsdisplay_session_frame_state frame;
-    struct nb_session_emergency_chord emergency_chord;
+    struct nb_session_console_shortcuts console_shortcuts;
     bool emergency_shutdown_requested;
     uint64_t submitted_generation;
     uint64_t release_completions;
@@ -772,6 +772,7 @@ static bool drain_input(struct worker_context *worker)
     }
     for (batch = 0; batch < NB_SESSION_IO_BATCH; ++batch) {
         struct nb_host_event event;
+        struct nb_session_console_shortcut shortcut;
         const enum nb_host_event_status status =
             nb_wscons_input_poll(worker->input, &event);
 
@@ -781,11 +782,37 @@ static bool drain_input(struct worker_context *worker)
         if (status == NB_HOST_EVENT_STATUS_ERROR) {
             return false;
         }
-        if (nb_session_emergency_chord_apply(&worker->emergency_chord,
-                                             &event)) {
+        shortcut = nb_session_console_shortcuts_apply(
+            &worker->console_shortcuts,
+            &event);
+        if (shortcut.type ==
+            NB_SESSION_CONSOLE_SHORTCUT_EMERGENCY_SHUTDOWN) {
             worker->emergency_shutdown_requested = true;
             nb_wscons_input_suspend(worker->input);
             return true;
+        }
+        if (shortcut.type == NB_SESSION_CONSOLE_SHORTCUT_SWITCH_VT) {
+            const enum nb_host_result result =
+                nb_host_wsdisplay_request_vt_switch(worker->host,
+                                                    shortcut.vt_number);
+            const int switch_error = errno;
+
+            if (result == NB_HOST_RESULT_OK) {
+                printf("Console Ctrl+Alt+F%d requested VT %d.\n",
+                       shortcut.vt_number,
+                       shortcut.vt_number);
+                (void)fflush(stdout);
+                return true;
+            }
+            fprintf(stderr,
+                    "Could not switch to VT %d: %s\n",
+                    shortcut.vt_number,
+                    switch_error != 0 ? strerror(switch_error)
+                                      : "request was rejected");
+            continue;
+        }
+        if (shortcut.consumed) {
+            continue;
         }
         if (!nb_privsep_helper_send_input(worker->helper, &event)) {
             return false;
@@ -799,7 +826,7 @@ static bool resume_input_and_helper(struct worker_context *worker)
     struct nb_host_output host_output;
     struct nb_privsep_output output;
 
-    nb_session_emergency_chord_reset(&worker->emergency_chord);
+    nb_session_console_shortcuts_reset(&worker->console_shortcuts);
     if (!nb_host_get_output(worker->host, &host_output) ||
         !convert_output(&host_output, &output) ||
         !nb_wscons_input_set_bounds(worker->input,
@@ -837,7 +864,7 @@ static bool handle_host_event(struct worker_context *worker,
     }
     case NB_HOST_EVENT_CONSOLE_RELEASE_REQUESTED:
         nb_wscons_input_suspend(worker->input);
-        nb_session_emergency_chord_reset(&worker->emergency_chord);
+        nb_session_console_shortcuts_reset(&worker->console_shortcuts);
         nb_wsdisplay_session_frame_abandon(&worker->frame);
         if (nb_host_complete_console_release(worker->host) !=
                 NB_HOST_RESULT_OK ||
@@ -1258,7 +1285,7 @@ static int run_device_worker(
     core_argv[core_argc++] = runtime_path;
     core_argv[core_argc] = NULL;
     nb_wsdisplay_session_frame_state_init(&worker.frame);
-    nb_session_emergency_chord_reset(&worker.emergency_chord);
+    nb_session_console_shortcuts_reset(&worker.console_shortcuts);
     if (!block_worker_termination(&previous_mask)) {
         goto cleanup;
     }

@@ -27,6 +27,19 @@ int main(void)
 {
     struct nb_host_wsdisplay_options options;
 
+    errno = 0;
+    CHECK(nb_host_wsdisplay_request_vt_switch(NULL, 1) ==
+          NB_HOST_RESULT_INVALID_ARGUMENT);
+    CHECK(errno == EINVAL);
+    errno = 0;
+    CHECK(nb_host_wsdisplay_request_vt_switch(NULL, 0) ==
+          NB_HOST_RESULT_INVALID_ARGUMENT);
+    CHECK(errno == EINVAL);
+    errno = 0;
+    CHECK(nb_host_wsdisplay_request_vt_switch(NULL, 13) ==
+          NB_HOST_RESULT_INVALID_ARGUMENT);
+    CHECK(errno == EINVAL);
+
     nb_host_wsdisplay_options_init(NULL);
     CHECK(nb_host_wsdisplay_create(NULL) == NULL);
     check_creation_failure(EINVAL);

@@ -306,7 +306,11 @@ The state file is removed only after restoration is verified and worker reap
 is confirmed. The physical Ctrl+Alt+Backspace chord is recognized in the
 privileged wscons worker before input forwarding. It closes raw input and
 drives bounded core cleanup plus the normal verified restoration path, so it
-remains usable regardless of Wayland focus or core responsiveness.
+remains usable regardless of Wayland focus or core responsiveness. The same
+worker maps Ctrl+Alt+F1 through F12 to fixed one-based `VT_ACTIVATE` requests.
+A successful request still waits for the normal process-mode release signal,
+closes input, restores emulation, and acknowledges release before NetBSD
+switches away; unavailable VTs are rejected without ending the session.
 
 `tools/run-wsdisplay-smoke.sh` configures, builds, tests, performs preflight,
 explicitly selects `--runtime-preview`, and verifies postflight state. It

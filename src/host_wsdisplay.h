@@ -31,6 +31,17 @@ struct nb_host *nb_host_wsdisplay_create(
     const struct nb_host_wsdisplay_options *options);
 
 /*
+ * Request a switch to a one-based USL VT while this wsdisplay host is active.
+ * A successful request is completed asynchronously through the normal
+ * CONSOLE_RELEASE_REQUESTED event and acknowledgement path. The fixed range
+ * matches the privileged Ctrl+Alt+F1 through F12 bindings; a VT may still be
+ * unavailable when it has not been configured by wscons.
+ */
+enum nb_host_result nb_host_wsdisplay_request_vt_switch(
+    struct nb_host *host,
+    int vt_number);
+
+/*
  * Backend-specific integration seam for the standalone event loop. The
  * descriptors are borrowed for this call and used only as wake sources; the
  * caller remains responsible for reading them. Queued wsdisplay events are

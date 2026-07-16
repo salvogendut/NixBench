@@ -225,9 +225,10 @@ if [ "$allow_local" -eq 1 ]; then
 LOCAL CONSOLE LAUNCH: once takeover begins, this terminal is unavailable until
 NixBench exits and restores it. Keep a separate SSH login open when possible;
 without one, there is no independent channel for the printed cancellation or
-manual recovery commands. Ctrl+Alt+Backspace is handled by the privileged
-device worker as an emergency request to terminate the session and restore the
-console, even when an application owns keyboard focus or the desktop is hung.
+manual recovery commands. Ctrl+Alt+F1 through F12 request the corresponding
+configured VT. Ctrl+Alt+Backspace is handled by the privileged device worker
+as an emergency request to terminate the session and restore the console, even
+when an application owns keyboard focus or the desktop is hung.
 EOF
 fi
 
@@ -357,6 +358,8 @@ The session has no automatic deadline. The recovery record is retained until
 the core and helper have exited and the saved console state has been restored
 and independently verified. Ctrl+Alt+Backspace provides an emergency exit from
 the physical console; it is intercepted before input reaches the desktop core.
+Ctrl+Alt+F1 through F12 use the same privileged input path to request normal,
+acknowledged VT switching.
 EOF
 
 if [ "$installed_mode" -eq 0 ]; then

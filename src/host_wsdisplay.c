@@ -90,6 +90,23 @@ struct nb_host *nb_host_wsdisplay_create(
     return NULL;
 }
 
+enum nb_host_result nb_host_wsdisplay_request_vt_switch(
+    struct nb_host *host,
+    int vt_number)
+{
+    (void)host;
+    if (host == NULL || vt_number < 1 || vt_number > 12) {
+        errno = EINVAL;
+        return NB_HOST_RESULT_INVALID_ARGUMENT;
+    }
+#ifdef ENOTSUP
+    errno = ENOTSUP;
+#else
+    errno = ENOSYS;
+#endif
+    return NB_HOST_RESULT_UNSUPPORTED;
+}
+
 enum nb_host_event_status
 nb_host_wsdisplay_wait_event_with_descriptors(
     struct nb_host *host,
@@ -1439,6 +1456,33 @@ static const struct nb_host_backend_operations wsdisplay_operations = {
     .get_last_error = wsdisplay_get_last_error,
     .destroy = wsdisplay_destroy
 };
+
+enum nb_host_result nb_host_wsdisplay_request_vt_switch(
+    struct nb_host *host,
+    int vt_number)
+{
+    struct nb_host_wsdisplay_context *context;
+
+    if (host == NULL || vt_number < 1 || vt_number > 12) {
+        errno = EINVAL;
+        return NB_HOST_RESULT_INVALID_ARGUMENT;
+    }
+    context = nb_host_backend_context(host, &wsdisplay_operations);
+    if (context == NULL) {
+        errno = ENOTSUP;
+        return NB_HOST_RESULT_UNSUPPORTED;
+    }
+    if (context->state != NB_HOST_STATE_ACTIVE) {
+        errno = EBUSY;
+        return context->state == NB_HOST_STATE_SUSPENDED
+                   ? NB_HOST_RESULT_SUSPENDED
+                   : NB_HOST_RESULT_INVALID_STATE;
+    }
+    if (ioctl(context->display_fd, VT_ACTIVATE, vt_number) != 0) {
+        return NB_HOST_RESULT_ERROR;
+    }
+    return NB_HOST_RESULT_OK;
+}
 
 static void copy_context_creation_error(
     const struct nb_host_wsdisplay_context *context)

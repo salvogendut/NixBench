@@ -1116,14 +1116,14 @@ if(UNIX AND (BUILD_TESTING OR NIXBENCH_BUILD_WSDISPLAY_SESSION))
   nixbench_configure_c_target(nixbench_session_watchdog)
 
   add_library(
-    nixbench_session_emergency_chord STATIC
-    src/session_emergency_chord.c
+    nixbench_session_console_shortcuts STATIC
+    src/session_console_shortcuts.c
   )
   target_include_directories(
-    nixbench_session_emergency_chord
+    nixbench_session_console_shortcuts
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
   )
-  nixbench_configure_c_target(nixbench_session_emergency_chord)
+  nixbench_configure_c_target(nixbench_session_console_shortcuts)
 
   add_library(
     nixbench_wsdisplay_session_runner STATIC
@@ -1138,7 +1138,7 @@ if(UNIX AND (BUILD_TESTING OR NIXBENCH_BUILD_WSDISPLAY_SESSION))
     PRIVATE
       nixbench_session_runtime_sentinel
       nixbench_session_watchdog
-      nixbench_session_emergency_chord
+      nixbench_session_console_shortcuts
   )
   if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
     target_link_libraries(
@@ -1281,14 +1281,14 @@ if(BUILD_TESTING)
     nixbench_configure_c_target(nixbench_session_watchdog_tests)
 
     add_executable(
-      nixbench_session_emergency_chord_tests
-      tests/session_emergency_chord_test.c
+      nixbench_session_console_shortcuts_tests
+      tests/session_console_shortcuts_test.c
     )
     target_link_libraries(
-      nixbench_session_emergency_chord_tests
-      PRIVATE nixbench_session_emergency_chord
+      nixbench_session_console_shortcuts_tests
+      PRIVATE nixbench_session_console_shortcuts
     )
-    nixbench_configure_c_target(nixbench_session_emergency_chord_tests)
+    nixbench_configure_c_target(nixbench_session_console_shortcuts_tests)
 
     add_executable(
       nixbench_session_runtime_sentinel_tests
@@ -1546,8 +1546,8 @@ if(BUILD_TESTING)
       COMMAND nixbench_session_watchdog_tests
     )
     add_test(
-      NAME nixbench.session.emergency-chord
-      COMMAND nixbench_session_emergency_chord_tests
+      NAME nixbench.session.console-shortcuts
+      COMMAND nixbench_session_console_shortcuts_tests
     )
     add_test(
       NAME nixbench.session.runtime-sentinel
