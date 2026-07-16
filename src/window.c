@@ -85,6 +85,8 @@ void nb_window_init(struct nb_window *window,
     window->close_pressed = false;
     window->pointer_offset_x = 0;
     window->pointer_offset_y = 0;
+    window->resize_origin_width = 0;
+    window->resize_origin_height = 0;
 }
 
 struct nb_rect nb_window_title_rect(const struct nb_window *window)
@@ -223,6 +225,8 @@ enum nb_window_hit nb_window_pointer_down(struct nb_window *window,
                                          window->frame.width - x);
         window->pointer_offset_y = (int)((int64_t)window->frame.y +
                                          window->frame.height - y);
+        window->resize_origin_width = window->frame.width;
+        window->resize_origin_height = window->frame.height;
     }
 
     return hit;
@@ -292,6 +296,10 @@ enum nb_window_action nb_window_pointer_up(struct nb_window *window,
     if (window->pointer_mode == NB_WINDOW_POINTER_CLOSE &&
         nb_window_hit_test(window, x, y) == NB_WINDOW_HIT_CLOSE) {
         action = NB_WINDOW_ACTION_CLOSE_REQUESTED;
+    } else if (window->pointer_mode == NB_WINDOW_POINTER_RESIZE &&
+               (window->frame.width != window->resize_origin_width ||
+                window->frame.height != window->resize_origin_height)) {
+        action = NB_WINDOW_ACTION_RESIZED;
     }
 
     nb_window_pointer_cancel(window);
@@ -304,6 +312,8 @@ void nb_window_pointer_cancel(struct nb_window *window)
     window->close_pressed = false;
     window->pointer_offset_x = 0;
     window->pointer_offset_y = 0;
+    window->resize_origin_width = 0;
+    window->resize_origin_height = 0;
 }
 
 bool nb_window_clamp_to(struct nb_window *window, struct nb_rect bounds)

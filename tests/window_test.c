@@ -187,7 +187,7 @@ static void test_resizing(void)
     CHECK(window.frame.width == 420);
     CHECK(window.frame.height == 350);
 
-    CHECK(nb_window_pointer_up(&window, 200, 200) == NB_WINDOW_ACTION_NONE);
+    CHECK(nb_window_pointer_up(&window, 200, 200) == NB_WINDOW_ACTION_RESIZED);
     CHECK(window.pointer_mode == NB_WINDOW_POINTER_IDLE);
     CHECK(!nb_window_pointer_move(&window, 300, 300, bounds));
 

@@ -204,6 +204,15 @@ if(NOT NIXBENCH_WAYLAND STREQUAL "OFF")
       share/wayland-protocols/stable/xdg-shell
       wayland-protocols/stable/xdg-shell
   )
+  find_file(
+    NIXBENCH_XDG_DECORATION_XML
+    NAMES xdg-decoration-unstable-v1.xml
+    PATH_SUFFIXES
+      share/wayland-protocols/unstable/xdg-decoration
+      wayland-protocols/unstable/xdg-decoration
+      share/qt6/wayland/protocols/xdg-decoration
+      qt6/wayland/protocols/xdg-decoration
+  )
 
   set(_nixbench_wayland_missing)
   if(NOT NIXBENCH_WAYLAND_SERVER_INCLUDE_DIR)
@@ -242,6 +251,16 @@ if(NOT NIXBENCH_WAYLAND STREQUAL "OFF")
   else()
     set(NIXBENCH_WAYLAND_ENABLED TRUE)
     message(STATUS "Wayland support enabled (${NIXBENCH_XDG_SHELL_XML})")
+  endif()
+  if(NIXBENCH_XDG_DECORATION_XML)
+    set(NIXBENCH_WAYLAND_DECORATION_ENABLED TRUE)
+    message(
+      STATUS
+      "Wayland xdg-decoration support enabled (${NIXBENCH_XDG_DECORATION_XML})"
+    )
+  else()
+    set(NIXBENCH_WAYLAND_DECORATION_ENABLED FALSE)
+    message(STATUS "Wayland xdg-decoration support unavailable")
   endif()
 endif()
 
@@ -294,6 +313,16 @@ if(NIXBENCH_WAYLAND_ENABLED)
     NIXBENCH_APPLICATION_MENU_PRIVATE_CODE
     "${NIXBENCH_WAYLAND_GENERATED_DIR}/nixbench-application-menu-v1-protocol.c"
   )
+  if(NIXBENCH_WAYLAND_DECORATION_ENABLED)
+    set(
+      NIXBENCH_XDG_DECORATION_SERVER_HEADER
+      "${NIXBENCH_WAYLAND_GENERATED_DIR}/xdg-decoration-unstable-v1-server-protocol.h"
+    )
+    set(
+      NIXBENCH_XDG_DECORATION_PRIVATE_CODE
+      "${NIXBENCH_WAYLAND_GENERATED_DIR}/xdg-decoration-unstable-v1-protocol.c"
+    )
+  endif()
 
   add_custom_command(
     OUTPUT
@@ -337,6 +366,26 @@ if(NIXBENCH_WAYLAND_ENABLED)
     VERBATIM
   )
 
+  if(NIXBENCH_WAYLAND_DECORATION_ENABLED)
+    add_custom_command(
+      OUTPUT
+        "${NIXBENCH_XDG_DECORATION_SERVER_HEADER}"
+        "${NIXBENCH_XDG_DECORATION_PRIVATE_CODE}"
+      COMMAND
+        "${NIXBENCH_WAYLAND_SCANNER}" --strict server-header
+        "${NIXBENCH_XDG_DECORATION_XML}"
+        "${NIXBENCH_XDG_DECORATION_SERVER_HEADER}"
+      COMMAND
+        "${NIXBENCH_WAYLAND_SCANNER}" --strict private-code
+        "${NIXBENCH_XDG_DECORATION_XML}"
+        "${NIXBENCH_XDG_DECORATION_PRIVATE_CODE}"
+      DEPENDS
+        "${NIXBENCH_XDG_DECORATION_XML}"
+      COMMENT "Generating the Wayland xdg-decoration bindings"
+      VERBATIM
+    )
+  endif()
+
   add_custom_target(
     nixbench_wayland_protocol
     DEPENDS
@@ -354,6 +403,12 @@ if(NIXBENCH_WAYLAND_ENABLED)
     "${NIXBENCH_XDG_SHELL_PRIVATE_CODE}"
     "${NIXBENCH_APPLICATION_MENU_PRIVATE_CODE}"
   )
+  if(NIXBENCH_WAYLAND_DECORATION_ENABLED)
+    target_sources(
+      nixbench_wayland
+      PRIVATE "${NIXBENCH_XDG_DECORATION_PRIVATE_CODE}"
+    )
+  endif()
   add_dependencies(nixbench_wayland nixbench_wayland_protocol)
   target_include_directories(
     nixbench_wayland
@@ -368,6 +423,17 @@ if(NIXBENCH_WAYLAND_ENABLED)
     PUBLIC "${NIXBENCH_WAYLAND_SERVER_LIBRARY}" m
     PRIVATE "${NIXBENCH_XKBCOMMON_LIBRARY}"
   )
+  if(NIXBENCH_WAYLAND_DECORATION_ENABLED)
+    target_compile_definitions(
+      nixbench_wayland
+      PRIVATE NIXBENCH_HAS_WAYLAND_DECORATION=1
+    )
+  else()
+    target_compile_definitions(
+      nixbench_wayland
+      PRIVATE NIXBENCH_HAS_WAYLAND_DECORATION=0
+    )
+  endif()
   nixbench_configure_c_target(nixbench_wayland)
 endif()
 

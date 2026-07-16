@@ -40,7 +40,8 @@ enum nb_window_pointer_mode {
 
 enum nb_window_action {
     NB_WINDOW_ACTION_NONE,
-    NB_WINDOW_ACTION_CLOSE_REQUESTED
+    NB_WINDOW_ACTION_CLOSE_REQUESTED,
+    NB_WINDOW_ACTION_RESIZED
 };
 
 struct nb_window {
@@ -52,6 +53,8 @@ struct nb_window {
     bool close_pressed;
     int pointer_offset_x;
     int pointer_offset_y;
+    int resize_origin_width;
+    int resize_origin_height;
 };
 
 void nb_window_init(struct nb_window *window,

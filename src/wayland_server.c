@@ -2,6 +2,10 @@
 
 #include "wayland_server.h"
 
+#ifndef NIXBENCH_HAS_WAYLAND_DECORATION
+#define NIXBENCH_HAS_WAYLAND_DECORATION 0
+#endif
+
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -16,6 +20,9 @@
 
 #include "nixbench-application-menu-v1-server-protocol.h"
 #include "xdg-shell-server-protocol.h"
+#if NIXBENCH_HAS_WAYLAND_DECORATION
+#include "xdg-decoration-unstable-v1-server-protocol.h"
+#endif
 
 enum {
     NB_WAYLAND_COMPOSITOR_VERSION = 4,
@@ -111,6 +118,9 @@ struct nb_wayland_surface {
     struct wl_resource *toplevel_resource;
     struct wl_resource *popup_resource;
     struct wl_resource *subsurface_resource;
+#if NIXBENCH_HAS_WAYLAND_DECORATION
+    struct wl_resource *decoration_resource;
+#endif
     struct wl_resource *wm_base_resource;
     struct nb_wayland_surface *popup_parent;
     struct nb_wayland_positioner popup_positioner;
@@ -170,6 +180,9 @@ struct nb_wayland_server {
     struct wl_global *seat_global;
     struct wl_global *data_device_manager_global;
     struct wl_global *subcompositor_global;
+#if NIXBENCH_HAS_WAYLAND_DECORATION
+    struct wl_global *decoration_manager_global;
+#endif
     struct wl_global *xdg_wm_base_global;
     struct wl_global *application_menu_global;
     struct wl_list output_resources;
@@ -214,6 +227,16 @@ static const struct wl_pointer_interface pointer_implementation;
 static const struct wl_keyboard_interface keyboard_implementation;
 static const struct wl_subcompositor_interface subcompositor_implementation;
 static const struct wl_subsurface_interface subsurface_implementation;
+#if NIXBENCH_HAS_WAYLAND_DECORATION
+static const struct zxdg_decoration_manager_v1_interface
+    decoration_manager_implementation;
+static const struct zxdg_toplevel_decoration_v1_interface
+    decoration_implementation;
+static void bind_decoration_manager(struct wl_client *client,
+                                    void *data,
+                                    uint32_t version,
+                                    uint32_t id);
+#endif
 static const struct xdg_surface_interface xdg_surface_implementation;
 static const struct xdg_toplevel_interface toplevel_implementation;
 static const struct xdg_popup_interface popup_implementation;
@@ -499,6 +522,72 @@ static void surface_window_geometry(
                   ? surface->window_geometry_height
                   : surface->height;
 }
+
+#if NIXBENCH_HAS_WAYLAND_DECORATION
+static void send_decoration_configure(struct nb_wayland_surface *surface);
+#endif
+
+static void wayland_toplevel_content_size(
+    const struct nb_wayland_server *server,
+    int *width,
+    int *height)
+{
+    const struct nb_rect viewport = {
+        0,
+        0,
+        server != NULL ? server->output_width : 0,
+        server != NULL ? server->output_height : 0
+    };
+    const struct nb_rect work = nb_menu_work_area(viewport);
+
+    *width = work.width - (2 * NB_WINDOW_BORDER_WIDTH);
+    *height = work.height - (2 * NB_WINDOW_BORDER_WIDTH) -
+              NB_WINDOW_TITLE_HEIGHT - NB_WINDOW_FOOTER_HEIGHT;
+    if (*width < NB_WINDOW_MIN_WIDTH) {
+        *width = NB_WINDOW_MIN_WIDTH;
+    }
+    if (*height < NB_WINDOW_MIN_HEIGHT) {
+        *height = NB_WINDOW_MIN_HEIGHT;
+    }
+}
+
+static void send_toplevel_configure(struct nb_wayland_surface *surface,
+                                    int width,
+                                    int height)
+{
+    struct wl_array states;
+    uint32_t serial;
+
+    if (surface == NULL || surface->toplevel_resource == NULL) {
+        return;
+    }
+    wl_array_init(&states);
+    xdg_toplevel_send_configure(surface->toplevel_resource,
+                                width,
+                                height,
+                                &states);
+    wl_array_release(&states);
+#if NIXBENCH_HAS_WAYLAND_DECORATION
+    send_decoration_configure(surface);
+#endif
+    serial = wl_display_next_serial(surface->server->display);
+    surface->configure_serial = serial;
+    surface->configure_sent = true;
+    surface->configured = false;
+    xdg_surface_send_configure(surface->xdg_surface_resource, serial);
+}
+
+#if NIXBENCH_HAS_WAYLAND_DECORATION
+static void send_decoration_configure(struct nb_wayland_surface *surface)
+{
+    if (surface == NULL || surface->decoration_resource == NULL) {
+        return;
+    }
+    zxdg_toplevel_decoration_v1_send_configure(
+        surface->decoration_resource,
+        ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+}
+#endif
 
 static bool surface_buffer_origin_in_root(
     const struct nb_wayland_surface *surface,
@@ -1692,23 +1781,15 @@ static void map_surface(struct nb_wayland_surface *surface)
 
 static void send_initial_configure(struct nb_wayland_surface *surface)
 {
-    struct wl_array states;
     int width;
     int height;
-    uint32_t serial;
 
     if (surface->xdg_surface_resource == NULL) {
         return;
     }
     if (surface->toplevel_resource != NULL) {
-        width = NB_WAYLAND_INITIAL_CONTENT_WIDTH;
-        height = NB_WAYLAND_INITIAL_CONTENT_HEIGHT;
-        wl_array_init(&states);
-        xdg_toplevel_send_configure(surface->toplevel_resource,
-                                    width,
-                                    height,
-                                    &states);
-        wl_array_release(&states);
+        wayland_toplevel_content_size(surface->server, &width, &height);
+        send_toplevel_configure(surface, width, height);
     } else if (surface->popup_resource != NULL &&
                !surface->popup_dismissed) {
         xdg_popup_send_configure(
@@ -1720,11 +1801,6 @@ static void send_initial_configure(struct nb_wayland_surface *surface)
     } else {
         return;
     }
-    serial = wl_display_next_serial(surface->server->display);
-    surface->configure_serial = serial;
-    surface->configure_sent = true;
-    surface->configured = false;
-    xdg_surface_send_configure(surface->xdg_surface_resource, serial);
 }
 
 static void detach_surface_application_menu(
@@ -3049,6 +3125,11 @@ static void xdg_toplevel_resource_destroyed(struct wl_resource *resource)
     surface->composite_pixels = NULL;
     surface->width = 0;
     surface->height = 0;
+#if NIXBENCH_HAS_WAYLAND_DECORATION
+    if (surface->decoration_resource != NULL) {
+        wl_resource_destroy(surface->decoration_resource);
+    }
+#endif
     surface->configure_sent = false;
     surface->configured = false;
     surface->configure_serial = 0;
@@ -3056,6 +3137,129 @@ static void xdg_toplevel_resource_destroyed(struct wl_resource *resource)
     detach_surface_application_menu(surface);
     maybe_release_surface_slot(surface);
 }
+
+#if NIXBENCH_HAS_WAYLAND_DECORATION
+static void decoration_resource_destroyed(struct wl_resource *resource)
+{
+    struct nb_wayland_surface *surface =
+        wl_resource_get_user_data(resource);
+
+    if (surface == NULL || !surface->occupied) {
+        return;
+    }
+    surface->decoration_resource = NULL;
+}
+
+static void decoration_destroy(struct wl_client *client,
+                              struct wl_resource *resource)
+{
+    (void)client;
+    wl_resource_destroy(resource);
+}
+
+static void decoration_set_mode(struct wl_client *client,
+                                struct wl_resource *resource,
+                                uint32_t mode)
+{
+    struct nb_wayland_surface *surface =
+        wl_resource_get_user_data(resource);
+
+    (void)client;
+    if (mode != ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE &&
+        mode != ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE) {
+        wl_resource_post_error(resource,
+                               ZXDG_TOPLEVEL_DECORATION_V1_ERROR_INVALID_MODE,
+                               "invalid decoration mode");
+        return;
+    }
+    send_decoration_configure(surface);
+}
+
+static void decoration_unset_mode(struct wl_client *client,
+                                  struct wl_resource *resource)
+{
+    (void)client;
+    decoration_set_mode(client,
+                        resource,
+                        ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+}
+
+static const struct zxdg_toplevel_decoration_v1_interface
+    decoration_implementation = {
+        .destroy = decoration_destroy,
+        .set_mode = decoration_set_mode,
+        .unset_mode = decoration_unset_mode
+    };
+
+static void decoration_manager_destroy(struct wl_client *client,
+                                       struct wl_resource *resource)
+{
+    (void)client;
+    wl_resource_destroy(resource);
+}
+
+static void decoration_manager_get_toplevel_decoration(
+    struct wl_client *client,
+    struct wl_resource *resource,
+    uint32_t id,
+    struct wl_resource *toplevel)
+{
+    struct nb_wayland_surface *surface =
+        wl_resource_get_user_data(toplevel);
+
+    (void)resource;
+    if (surface->decoration_resource != NULL) {
+        wl_resource_post_error(
+            toplevel,
+            ZXDG_TOPLEVEL_DECORATION_V1_ERROR_ALREADY_CONSTRUCTED,
+            "xdg_toplevel already has a decoration object");
+        return;
+    }
+    surface->decoration_resource = wl_resource_create(
+        client,
+        &zxdg_toplevel_decoration_v1_interface,
+        wl_resource_get_version(toplevel),
+        id);
+    if (surface->decoration_resource == NULL) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(surface->decoration_resource,
+                                   &decoration_implementation,
+                                   surface,
+                                   decoration_resource_destroyed);
+    send_decoration_configure(surface);
+}
+
+static const struct zxdg_decoration_manager_v1_interface
+    decoration_manager_implementation = {
+        .destroy = decoration_manager_destroy,
+        .get_toplevel_decoration =
+            decoration_manager_get_toplevel_decoration
+    };
+
+static void bind_decoration_manager(struct wl_client *client,
+                                    void *data,
+                                    uint32_t version,
+                                    uint32_t id)
+{
+    struct nb_wayland_server *server = data;
+    struct wl_resource *resource =
+        wl_resource_create(client,
+                           &zxdg_decoration_manager_v1_interface,
+                           version > 2 ? 2 : version,
+                           id);
+
+    if (resource == NULL) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(resource,
+                                   &decoration_manager_implementation,
+                                   server,
+                                   NULL);
+}
+#endif
 
 static bool anchor_is_left(uint32_t anchor)
 {
@@ -3367,6 +3571,11 @@ static void xdg_surface_resource_destroyed(struct wl_resource *resource)
     if (surface == NULL || !surface->occupied) {
         return;
     }
+#if NIXBENCH_HAS_WAYLAND_DECORATION
+    if (surface->decoration_resource != NULL) {
+        wl_resource_destroy(surface->decoration_resource);
+    }
+#endif
     surface->xdg_surface_resource = NULL;
     surface->wm_base_resource = NULL;
     maybe_release_surface_slot(surface);
@@ -3396,6 +3605,11 @@ static void xdg_toplevel_destroy(struct wl_client *client,
 
     (void)client;
     unmap_surface(surface, true);
+#if NIXBENCH_HAS_WAYLAND_DECORATION
+    if (surface->decoration_resource != NULL) {
+        wl_resource_destroy(surface->decoration_resource);
+    }
+#endif
     wl_resource_destroy(resource);
 }
 
@@ -4335,6 +4549,14 @@ struct nb_wayland_server *nb_wayland_server_create(
         NB_WAYLAND_SUBCOMPOSITOR_VERSION,
         server,
         bind_subcompositor);
+#if NIXBENCH_HAS_WAYLAND_DECORATION
+    server->decoration_manager_global = wl_global_create(
+        server->display,
+        &zxdg_decoration_manager_v1_interface,
+        2,
+        server,
+        bind_decoration_manager);
+#endif
     server->seat_global = wl_global_create(server->display,
                                            &wl_seat_interface,
                                            NB_WAYLAND_SEAT_VERSION,
@@ -4923,6 +5145,45 @@ bool nb_wayland_server_request_close(struct nb_wayland_server *server,
     }
     xdg_toplevel_send_close(surface->toplevel_resource);
     wl_display_flush_clients(server->display);
+    return true;
+}
+
+bool nb_wayland_server_window_resized(struct nb_wayland_server *server,
+                                      nb_window_id window)
+{
+    const struct nb_window *host_window;
+    struct nb_wayland_surface *surface;
+    int desired_width;
+    int desired_height;
+
+    if (server == NULL || server->destroying) {
+        return false;
+    }
+    surface = find_surface_by_window(server, window);
+    if (surface == NULL || surface->toplevel_resource == NULL) {
+        return false;
+    }
+    host_window = nb_desktop_find_window(&server->shell->desktop, window);
+    if (host_window == NULL) {
+        return false;
+    }
+    desired_width =
+        host_window->frame.width - (2 * NB_WINDOW_BORDER_WIDTH);
+    desired_height = host_window->frame.height -
+                     (2 * NB_WINDOW_BORDER_WIDTH) -
+                     NB_WINDOW_TITLE_HEIGHT - NB_WINDOW_FOOTER_HEIGHT;
+    if (desired_width < NB_WINDOW_MIN_WIDTH) {
+        desired_width = NB_WINDOW_MIN_WIDTH;
+    }
+    if (desired_height < NB_WINDOW_MIN_HEIGHT) {
+        desired_height = NB_WINDOW_MIN_HEIGHT;
+    }
+    if (desired_width == surface->width && desired_height == surface->height) {
+        return true;
+    }
+    send_toplevel_configure(surface, desired_width, desired_height);
+    wl_display_flush_clients(server->display);
+    server->redraw_pending = true;
     return true;
 }
 

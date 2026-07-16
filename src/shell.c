@@ -359,6 +359,9 @@ struct nb_shell_action nb_shell_pointer_up(struct nb_shell *shell,
         if (desktop_action.type == NB_WINDOW_ACTION_CLOSE_REQUESTED) {
             action.type = NB_SHELL_ACTION_WINDOW_CLOSE_REQUESTED;
             action.window = desktop_action.window;
+        } else if (desktop_action.type == NB_WINDOW_ACTION_RESIZED) {
+            action.type = NB_SHELL_ACTION_WINDOW_RESIZED;
+            action.window = desktop_action.window;
         }
     }
     return action;

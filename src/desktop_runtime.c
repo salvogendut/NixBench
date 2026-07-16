@@ -381,6 +381,22 @@ static bool apply_shell_action(struct nb_desktop_runtime *runtime,
                     (unsigned long long)action.window);
         return true;
     }
+    if (action.type == NB_SHELL_ACTION_WINDOW_RESIZED) {
+#if NIXBENCH_HAS_WAYLAND
+        if (runtime->wayland != NULL &&
+            nb_wayland_server_owns_window(runtime->wayland,
+                                          action.window)) {
+            if (!nb_wayland_server_window_resized(runtime->wayland,
+                                                  action.window)) {
+                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                            "Could not update Wayland client window %llu",
+                            (unsigned long long)action.window);
+                return false;
+            }
+        }
+#endif
+        return true;
+    }
     if (action.type != NB_SHELL_ACTION_MENU_COMMAND) {
         return false;
     }
@@ -508,6 +524,22 @@ static bool update_wayland_pointer(
                                             y,
                                             (uint32_t)milliseconds);
 }
+
+static bool maybe_resize_wayland_window(struct nb_desktop_runtime *runtime)
+{
+    nb_window_id window;
+
+    if (runtime->wayland == NULL ||
+        runtime->shell.pointer_owner != NB_SHELL_POINTER_WINDOW) {
+        return true;
+    }
+    window = runtime->shell.desktop.pointer_window;
+    if (window == NB_WINDOW_ID_NONE ||
+        !nb_wayland_server_owns_window(runtime->wayland, window)) {
+        return true;
+    }
+    return nb_wayland_server_window_resized(runtime->wayland, window);
+}
 #endif
 
 static bool process_pointer_event(const struct nb_host_event *event,
@@ -522,10 +554,17 @@ static bool process_pointer_event(const struct nb_host_event *event,
         y = event->data.pointer_motion.y;
         remember_pointer(runtime, x, y);
         if (nb_shell_wants_pointer_motion(&runtime->shell)) {
-            (void)nb_shell_pointer_move(&runtime->shell,
-                                        x,
-                                        y,
-                                        runtime->viewport);
+            if (!nb_shell_pointer_move(&runtime->shell,
+                                       x,
+                                       y,
+                                       runtime->viewport)) {
+                return false;
+            }
+#if NIXBENCH_HAS_WAYLAND
+            if (!maybe_resize_wayland_window(runtime)) {
+                return false;
+            }
+#endif
         }
         target = nb_shell_pointer_target_at(&runtime->shell,
                                             x,

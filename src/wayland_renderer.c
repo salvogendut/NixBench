@@ -9,12 +9,10 @@ bool nb_wayland_render_content(SDL_Renderer *renderer,
     const struct nb_wayland_server *server = context;
     struct nb_wayland_surface_snapshot snapshot;
     SDL_Texture *texture;
-    const SDL_FRect destination = {
-        (float)content_rect.x,
-        (float)content_rect.y,
-        (float)content_rect.width,
-        (float)content_rect.height
-    };
+    SDL_FRect destination;
+    SDL_FRect source;
+    int render_width;
+    int render_height;
     bool rendered;
 
     (void)window;
@@ -34,6 +32,25 @@ bool nb_wayland_render_content(SDL_Renderer *renderer,
         return false;
     }
 
+    render_width = snapshot.width < content_rect.width
+                       ? snapshot.width
+                       : content_rect.width;
+    render_height = snapshot.height < content_rect.height
+                        ? snapshot.height
+                        : content_rect.height;
+    if (render_width <= 0 || render_height <= 0) {
+        SDL_DestroyTexture(texture);
+        return false;
+    }
+    destination.x = (float)content_rect.x;
+    destination.y = (float)content_rect.y;
+    destination.w = (float)render_width;
+    destination.h = (float)render_height;
+    source.x = 0.0f;
+    source.y = 0.0f;
+    source.w = (float)render_width;
+    source.h = (float)render_height;
+
     rendered = SDL_SetTextureBlendMode(texture,
                                        SDL_BLENDMODE_BLEND) &&
                SDL_UpdateTexture(texture,
@@ -42,7 +59,7 @@ bool nb_wayland_render_content(SDL_Renderer *renderer,
                                  snapshot.stride) &&
                SDL_RenderTexture(renderer,
                                  texture,
-                                 NULL,
+                                 &source,
                                  &destination);
     SDL_DestroyTexture(texture);
     return rendered;

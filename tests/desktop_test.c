@@ -293,8 +293,8 @@ static void test_resize_capture_routing(void)
     CHECK(nb_desktop_window_id_at(&fixture.desktop, 1) == fixture.a);
 
     action = nb_desktop_pointer_up(&fixture.desktop, 600, 500);
-    CHECK(action.type == NB_WINDOW_ACTION_NONE);
-    CHECK(action.window == NB_WINDOW_ID_NONE);
+    CHECK(action.type == NB_WINDOW_ACTION_RESIZED);
+    CHECK(action.window == fixture.a);
     CHECK(!nb_desktop_has_pointer_interaction(&fixture.desktop));
     CHECK(window_a->pointer_mode == NB_WINDOW_POINTER_IDLE);
     check_invariants(&fixture.desktop);

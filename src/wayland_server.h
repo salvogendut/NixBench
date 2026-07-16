@@ -149,6 +149,12 @@ void nb_wayland_server_keyboard_cancel(struct nb_wayland_server *server,
 /* Ask the owning xdg_toplevel to close; the client remains authoritative. */
 bool nb_wayland_server_request_close(struct nb_wayland_server *server,
                                      nb_window_id window);
+/*
+ * Notify the owning xdg_toplevel that its host frame changed size so the
+ * client can reconfigure itself instead of being stretched.
+ */
+bool nb_wayland_server_window_resized(struct nb_wayland_server *server,
+                                      nb_window_id window);
 
 /* Deliver an enabled command from a surface's committed application menu. */
 bool nb_wayland_server_dispatch_menu_command(
