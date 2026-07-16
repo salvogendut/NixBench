@@ -25,6 +25,8 @@ enum {
     NB_WAYLAND_SUBCOMPOSITOR_VERSION = 1,
     NB_WAYLAND_XDG_SHELL_VERSION = 1,
     NB_WAYLAND_MAX_FRAME_CALLBACKS = 16,
+    NB_WAYLAND_INITIAL_CONTENT_WIDTH = 560,
+    NB_WAYLAND_INITIAL_CONTENT_HEIGHT = 300,
     NB_WAYLAND_INITIAL_X = 120,
     NB_WAYLAND_INITIAL_Y = 78,
     NB_WAYLAND_CASCADE = 28,
@@ -1647,6 +1649,10 @@ static bool copy_shm_buffer(struct nb_wayland_surface *surface,
 
 static void map_surface(struct nb_wayland_surface *surface)
 {
+    const int cascade =
+        (int)(surface->server->next_window_position %
+              (unsigned int)NB_WAYLAND_CASCADE_COUNT) *
+        NB_WAYLAND_CASCADE;
     struct nb_rect frame;
     const char *title;
 
@@ -1655,8 +1661,8 @@ static void map_surface(struct nb_wayland_surface *surface)
         return;
     }
 
-    frame.x = 0;
-    frame.y = NB_MENU_BAR_HEIGHT;
+    frame.x = NB_WAYLAND_INITIAL_X + cascade;
+    frame.y = NB_WAYLAND_INITIAL_Y + cascade;
     frame.width = surface->width + (2 * NB_WINDOW_BORDER_WIDTH);
     frame.height = surface->height + (2 * NB_WINDOW_BORDER_WIDTH) +
                    NB_WINDOW_TITLE_HEIGHT + NB_WINDOW_FOOTER_HEIGHT;
@@ -1695,17 +1701,8 @@ static void send_initial_configure(struct nb_wayland_surface *surface)
         return;
     }
     if (surface->toplevel_resource != NULL) {
-        width = surface->server->output_width -
-                (2 * NB_WINDOW_BORDER_WIDTH);
-        height = surface->server->output_height - NB_MENU_BAR_HEIGHT -
-                 (2 * NB_WINDOW_BORDER_WIDTH) -
-                 NB_WINDOW_TITLE_HEIGHT - NB_WINDOW_FOOTER_HEIGHT;
-        if (width < NB_WINDOW_MIN_WIDTH) {
-            width = NB_WINDOW_MIN_WIDTH;
-        }
-        if (height < NB_WINDOW_MIN_HEIGHT) {
-            height = NB_WINDOW_MIN_HEIGHT;
-        }
+        width = NB_WAYLAND_INITIAL_CONTENT_WIDTH;
+        height = NB_WAYLAND_INITIAL_CONTENT_HEIGHT;
         wl_array_init(&states);
         xdg_toplevel_send_configure(surface->toplevel_resource,
                                     width,
