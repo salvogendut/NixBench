@@ -69,6 +69,9 @@ static nb_window_id allocate_id(struct nb_desktop *desktop)
     return NB_WINDOW_ID_NONE;
 }
 
+static struct nb_window *find_window_mutable(struct nb_desktop *desktop,
+                                             nb_window_id id);
+
 static void set_active_window(struct nb_desktop *desktop, nb_window_id id)
 {
     size_t index;
@@ -219,6 +222,19 @@ bool nb_desktop_activate_window(struct nb_desktop *desktop, nb_window_id id)
 
     set_active_window(desktop, id);
     return true;
+}
+
+bool nb_desktop_toggle_window_maximized(struct nb_desktop *desktop,
+                                        nb_window_id id,
+                                        struct nb_rect bounds)
+{
+    struct nb_window *window = find_window_mutable(desktop, id);
+
+    if (window == NULL) {
+        return false;
+    }
+
+    return nb_window_toggle_maximized(window, bounds);
 }
 
 size_t nb_desktop_window_count(const struct nb_desktop *desktop)

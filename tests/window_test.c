@@ -142,6 +142,57 @@ static void test_clamping(void)
     CHECK(!nb_window_clamp_to(&window, small_bounds));
 }
 
+static void test_maximize_toggle(void)
+{
+    struct nb_window window = make_window();
+    const struct nb_rect bounds = {0, 0, 800, 600};
+    const struct nb_rect title = nb_window_title_rect(&window);
+    const struct nb_rect maximize = nb_window_maximize_rect(&window);
+    const int maximize_x = maximize.x + (maximize.width / 2);
+    const int maximize_y = maximize.y + (maximize.height / 2);
+
+    CHECK(title.width == 314);
+    CHECK(maximize.x == 397);
+    CHECK(maximize.y == 87);
+    CHECK(nb_window_hit_test(&window, maximize_x, maximize_y) ==
+          NB_WINDOW_HIT_MAXIMIZE);
+    CHECK(nb_window_pointer_down(&window, maximize_x, maximize_y) ==
+          NB_WINDOW_HIT_MAXIMIZE);
+    CHECK(window.pointer_mode == NB_WINDOW_POINTER_MAXIMIZE);
+    CHECK(window.maximize_pressed);
+    CHECK(nb_window_pointer_up(&window, maximize_x, maximize_y) ==
+          NB_WINDOW_ACTION_MAXIMIZE_TOGGLED);
+    CHECK(window.pointer_mode == NB_WINDOW_POINTER_IDLE);
+    CHECK(!window.maximize_pressed);
+    CHECK(!window.maximized);
+
+    CHECK(nb_window_toggle_maximized(&window, bounds));
+    CHECK(window.maximized);
+    CHECK(window.frame.x == 0);
+    CHECK(window.frame.y == 0);
+    CHECK(window.frame.width == 800);
+    CHECK(window.frame.height == 600);
+    CHECK(nb_window_hit_test(&window, 790, 590) == NB_WINDOW_HIT_FRAME);
+    {
+        const struct nb_rect maximized_maximize = nb_window_maximize_rect(&window);
+        const int restored_maximize_x =
+            maximized_maximize.x + (maximized_maximize.width / 2);
+        const int restored_maximize_y =
+            maximized_maximize.y + (maximized_maximize.height / 2);
+
+        CHECK(nb_window_hit_test(&window,
+                                 restored_maximize_x,
+                                 restored_maximize_y) ==
+              NB_WINDOW_HIT_MAXIMIZE);
+    }
+    CHECK(nb_window_pointer_down(&window, 150, 10) == NB_WINDOW_HIT_TITLE);
+    CHECK(!window.maximized);
+    CHECK(window.frame.x == 100);
+    CHECK(window.frame.y == 80);
+    CHECK(window.frame.width == 320);
+    CHECK(window.frame.height == 220);
+}
+
 static void test_resizing(void)
 {
     struct nb_window window = make_window();
@@ -287,6 +338,7 @@ int main(void)
     test_title_ownership();
     test_dragging();
     test_clamping();
+    test_maximize_toggle();
     test_resizing();
     test_close_tracking();
     test_cancel_and_repeated_down();

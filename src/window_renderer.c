@@ -99,11 +99,70 @@ static bool render_close_gadget(SDL_Renderer *renderer,
                           (float)(close.y + close.height - 5) + inset);
 }
 
+static bool render_maximize_gadget(SDL_Renderer *renderer,
+                                   const struct nb_window *window)
+{
+    const struct nb_rect maximize = nb_window_maximize_rect(window);
+    const bool pressed =
+        window->pointer_mode == NB_WINDOW_POINTER_MAXIMIZE;
+    const float inset = pressed ? 1.0f : 0.0f;
+    const float left = (float)maximize.x + inset;
+    const float top = (float)maximize.y + inset;
+    const float right = (float)(maximize.x + maximize.width - 1) + inset;
+    const float bottom = (float)(maximize.y + maximize.height - 1) + inset;
+
+    if (!fill_rect(renderer, maximize, frame_color) ||
+        !render_bevel(renderer, maximize, pressed)) {
+        return false;
+    }
+
+    if (maximize.width < 8 || maximize.height < 8) {
+        return true;
+    }
+
+    if (!set_color(renderer, text_color)) {
+        return false;
+    }
+
+    if (window->maximized) {
+        return SDL_RenderLine(renderer, left + 2.0f, top + 2.0f, right - 2.0f,
+                              top + 2.0f) &&
+               SDL_RenderLine(renderer, left + 2.0f, top + 2.0f, left + 2.0f,
+                              bottom - 2.0f) &&
+               SDL_RenderLine(renderer, right - 2.0f, top + 2.0f,
+                              right - 2.0f, bottom - 2.0f) &&
+               SDL_RenderLine(renderer, left + 2.0f, bottom - 2.0f,
+                              right - 2.0f, bottom - 2.0f);
+    }
+
+    return SDL_RenderLine(renderer,
+                          left + 3.0f,
+                          top + 3.0f,
+                          right - 3.0f,
+                          top + 3.0f) &&
+           SDL_RenderLine(renderer,
+                          left + 3.0f,
+                          top + 3.0f,
+                          left + 3.0f,
+                          bottom - 3.0f) &&
+           SDL_RenderLine(renderer,
+                          right - 3.0f,
+                          top + 3.0f,
+                          right - 3.0f,
+                          bottom - 3.0f) &&
+           SDL_RenderLine(renderer,
+                          left + 3.0f,
+                          bottom - 3.0f,
+                          right - 3.0f,
+                          bottom - 3.0f);
+}
+
 static bool render_title(SDL_Renderer *renderer,
                          const struct nb_window *window)
 {
     const struct nb_rect title = nb_window_title_rect(window);
     const struct nb_rect close = nb_window_close_rect(window);
+    const struct nb_rect maximize = nb_window_maximize_rect(window);
     const char *text = window->title;
     const float text_x = (float)(close.x + close.width + 8);
     const float text_y = (float)(title.y + ((title.height - 8) / 2));
@@ -115,16 +174,18 @@ static bool render_title(SDL_Renderer *renderer,
                    title,
                    window->active ? active_title_color : inactive_title_color) ||
         !render_close_gadget(renderer, window) ||
+        !render_maximize_gadget(renderer, window) ||
         !set_color(renderer, title_text_color)) {
         return false;
     }
 
-    if (text[0] == '\0' || text_x + 8.0f >= (float)(title.x + title.width)) {
+    if (text[0] == '\0' ||
+        text_x + 8.0f >= (float)(maximize.x - NB_WINDOW_GADGET_MARGIN)) {
         return true;
     }
 
     maximum_characters =
-        (size_t)(((float)(title.x + title.width) - text_x - 4.0f) / 8.0f);
+        (size_t)(((float)maximize.x - text_x - 4.0f) / 8.0f);
     if (maximum_characters >= sizeof(clipped_text)) {
         maximum_characters = sizeof(clipped_text) - 1;
     }
@@ -205,6 +266,10 @@ static bool render_resize_gadget(SDL_Renderer *renderer,
     const bool pressed =
         window->pointer_mode == NB_WINDOW_POINTER_RESIZE;
     const float inset = pressed ? 1.0f : 0.0f;
+
+    if (window->maximized) {
+        return true;
+    }
 
     if (!fill_rect(renderer, resize, frame_color) ||
         !render_bevel(renderer, resize, pressed)) {

@@ -381,6 +381,32 @@ static bool apply_shell_action(struct nb_desktop_runtime *runtime,
                     (unsigned long long)action.window);
         return true;
     }
+    if (action.type == NB_SHELL_ACTION_WINDOW_MAXIMIZE_TOGGLED) {
+        const struct nb_rect bounds = nb_menu_work_area(runtime->viewport);
+
+        if (!nb_desktop_toggle_window_maximized(&runtime->shell.desktop,
+                                                action.window,
+                                                bounds)) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Could not toggle maximize for window %llu",
+                        (unsigned long long)action.window);
+            return false;
+        }
+#if NIXBENCH_HAS_WAYLAND
+        if (runtime->wayland != NULL &&
+            nb_wayland_server_owns_window(runtime->wayland,
+                                          action.window)) {
+            if (!nb_wayland_server_window_resized(runtime->wayland,
+                                                  action.window)) {
+                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                            "Could not update Wayland client window %llu",
+                            (unsigned long long)action.window);
+                return false;
+            }
+        }
+#endif
+        return true;
+    }
     if (action.type == NB_SHELL_ACTION_WINDOW_RESIZED) {
 #if NIXBENCH_HAS_WAYLAND
         if (runtime->wayland != NULL &&

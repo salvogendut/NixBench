@@ -139,6 +139,24 @@ static void test_active_application_menu(void)
                                       &model_b_updated));
     CHECK(fixture.shell.menu.model == &model_b_updated);
     CHECK(!nb_shell_update_menu_source(&fixture.shell, 99, &model_a));
+
+    {
+        const struct nb_window *window =
+            nb_desktop_find_window(&fixture.shell.desktop, fixture.b);
+        const struct nb_rect maximize = nb_window_maximize_rect(window);
+
+        CHECK(window != NULL);
+        CHECK(nb_shell_pointer_down(&fixture.shell,
+                                    maximize.x + (maximize.width / 2),
+                                    maximize.y + (maximize.height / 2),
+                                    viewport));
+        action = nb_shell_pointer_up(&fixture.shell,
+                                     maximize.x + (maximize.width / 2),
+                                     maximize.y + (maximize.height / 2),
+                                     viewport);
+    }
+    CHECK(action.type == NB_SHELL_ACTION_WINDOW_MAXIMIZE_TOGGLED);
+    CHECK(action.window == fixture.b);
 }
 
 static void test_menu_routing_and_actions(void)

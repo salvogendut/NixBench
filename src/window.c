@@ -83,10 +83,14 @@ void nb_window_init(struct nb_window *window,
     window->active = false;
     window->pointer_mode = NB_WINDOW_POINTER_IDLE;
     window->close_pressed = false;
+    window->maximize_pressed = false;
     window->pointer_offset_x = 0;
     window->pointer_offset_y = 0;
     window->resize_origin_width = 0;
     window->resize_origin_height = 0;
+    window->restore_frame = window->frame;
+    window->restore_frame_valid = false;
+    window->maximized = false;
 }
 
 struct nb_rect nb_window_title_rect(const struct nb_window *window)
@@ -144,7 +148,9 @@ struct nb_rect nb_window_close_rect(const struct nb_window *window)
 {
     const struct nb_rect title = nb_window_title_rect(window);
     const int available_width = maximum(0, title.width -
-                                           (2 * NB_WINDOW_GADGET_MARGIN));
+                                           (3 * NB_WINDOW_GADGET_MARGIN) -
+                                           NB_WINDOW_CLOSE_SIZE -
+                                           NB_WINDOW_MAXIMIZE_SIZE);
     const int available_height = maximum(0, title.height -
                                             (2 * NB_WINDOW_GADGET_MARGIN));
     const int size = minimum(NB_WINDOW_CLOSE_SIZE,
@@ -157,6 +163,28 @@ struct nb_rect nb_window_close_rect(const struct nb_window *window)
     };
 
     return close;
+}
+
+struct nb_rect nb_window_maximize_rect(const struct nb_window *window)
+{
+    const struct nb_rect title = nb_window_title_rect(window);
+    const struct nb_rect close = nb_window_close_rect(window);
+    const int available_width = maximum(0, title.width -
+                                           (3 * NB_WINDOW_GADGET_MARGIN) -
+                                           close.width -
+                                           NB_WINDOW_MAXIMIZE_SIZE);
+    const int available_height = maximum(0, title.height -
+                                            (2 * NB_WINDOW_GADGET_MARGIN));
+    const int size = minimum(NB_WINDOW_MAXIMIZE_SIZE,
+                             minimum(available_width, available_height));
+    struct nb_rect maximize = {
+        title.x + title.width - NB_WINDOW_GADGET_MARGIN - size,
+        title.y + ((title.height - size) / 2),
+        size,
+        size
+    };
+
+    return maximize;
 }
 
 struct nb_rect nb_window_resize_rect(const struct nb_window *window)
@@ -186,7 +214,12 @@ enum nb_window_hit nb_window_hit_test(const struct nb_window *window,
         return NB_WINDOW_HIT_CLOSE;
     }
 
-    if (rect_contains(nb_window_resize_rect(window), x, y)) {
+    if (rect_contains(nb_window_maximize_rect(window), x, y)) {
+        return NB_WINDOW_HIT_MAXIMIZE;
+    }
+
+    if (!window->maximized &&
+        rect_contains(nb_window_resize_rect(window), x, y)) {
         return NB_WINDOW_HIT_RESIZE;
     }
 
@@ -213,12 +246,19 @@ enum nb_window_hit nb_window_pointer_down(struct nb_window *window,
 
     hit = nb_window_hit_test(window, x, y);
     if (hit == NB_WINDOW_HIT_TITLE) {
+        if (window->maximized && window->restore_frame_valid) {
+            window->frame = window->restore_frame;
+            window->maximized = false;
+        }
         window->pointer_mode = NB_WINDOW_POINTER_DRAG;
         window->pointer_offset_x = x - window->frame.x;
         window->pointer_offset_y = y - window->frame.y;
     } else if (hit == NB_WINDOW_HIT_CLOSE) {
         window->pointer_mode = NB_WINDOW_POINTER_CLOSE;
         window->close_pressed = true;
+    } else if (hit == NB_WINDOW_HIT_MAXIMIZE) {
+        window->pointer_mode = NB_WINDOW_POINTER_MAXIMIZE;
+        window->maximize_pressed = true;
     } else if (hit == NB_WINDOW_HIT_RESIZE) {
         window->pointer_mode = NB_WINDOW_POINTER_RESIZE;
         window->pointer_offset_x = (int)((int64_t)window->frame.x +
@@ -253,6 +293,14 @@ bool nb_window_pointer_move(struct nb_window *window,
         window->close_pressed =
             nb_window_hit_test(window, x, y) == NB_WINDOW_HIT_CLOSE;
         return was_pressed != window->close_pressed;
+    }
+
+    if (window->pointer_mode == NB_WINDOW_POINTER_MAXIMIZE) {
+        const bool was_pressed = window->maximize_pressed;
+
+        window->maximize_pressed =
+            nb_window_hit_test(window, x, y) == NB_WINDOW_HIT_MAXIMIZE;
+        return was_pressed != window->maximize_pressed;
     }
 
     if (window->pointer_mode == NB_WINDOW_POINTER_RESIZE) {
@@ -296,6 +344,10 @@ enum nb_window_action nb_window_pointer_up(struct nb_window *window,
     if (window->pointer_mode == NB_WINDOW_POINTER_CLOSE &&
         nb_window_hit_test(window, x, y) == NB_WINDOW_HIT_CLOSE) {
         action = NB_WINDOW_ACTION_CLOSE_REQUESTED;
+    } else if (window->pointer_mode == NB_WINDOW_POINTER_MAXIMIZE &&
+               nb_window_hit_test(window, x, y) ==
+                   NB_WINDOW_HIT_MAXIMIZE) {
+        action = NB_WINDOW_ACTION_MAXIMIZE_TOGGLED;
     } else if (window->pointer_mode == NB_WINDOW_POINTER_RESIZE &&
                (window->frame.width != window->resize_origin_width ||
                 window->frame.height != window->resize_origin_height)) {
@@ -310,10 +362,40 @@ void nb_window_pointer_cancel(struct nb_window *window)
 {
     window->pointer_mode = NB_WINDOW_POINTER_IDLE;
     window->close_pressed = false;
+    window->maximize_pressed = false;
     window->pointer_offset_x = 0;
     window->pointer_offset_y = 0;
     window->resize_origin_width = 0;
     window->resize_origin_height = 0;
+}
+
+bool nb_window_toggle_maximized(struct nb_window *window, struct nb_rect bounds)
+{
+    struct nb_rect restored;
+
+    if (bounds.width <= 0 || bounds.height <= 0) {
+        return false;
+    }
+
+    if (!window->maximized) {
+        window->restore_frame = window->frame;
+        window->restore_frame_valid = true;
+        window->maximized = true;
+        window->frame = bounds;
+        return true;
+    }
+
+    restored = window->restore_frame_valid ? window->restore_frame
+                                           : window->frame;
+    window->maximized = false;
+    window->frame = restored;
+    if (window->frame.width > bounds.width) {
+        window->frame.width = bounds.width;
+    }
+    if (window->frame.height > bounds.height) {
+        window->frame.height = bounds.height;
+    }
+    return nb_window_clamp_to(window, bounds);
 }
 
 bool nb_window_clamp_to(struct nb_window *window, struct nb_rect bounds)
@@ -324,6 +406,16 @@ bool nb_window_clamp_to(struct nb_window *window, struct nb_rect bounds)
                                                  window->frame.width);
     const int maximum_y = bounds.y + maximum(0, bounds.height -
                                                  window->frame.height);
+
+    if (window->maximized) {
+        if (window->frame.x != bounds.x || window->frame.y != bounds.y ||
+            window->frame.width != bounds.width ||
+            window->frame.height != bounds.height) {
+            window->frame = bounds;
+            return true;
+        }
+        return false;
+    }
 
     window->frame.x = maximum(bounds.x, minimum(window->frame.x, maximum_x));
     window->frame.y = maximum(bounds.y, minimum(window->frame.y, maximum_y));

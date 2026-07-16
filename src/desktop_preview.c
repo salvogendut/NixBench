@@ -212,6 +212,13 @@ static void apply_action(struct nb_desktop_preview *preview,
         }
         return;
     }
+    if (action.type == NB_SHELL_ACTION_WINDOW_MAXIMIZE_TOGGLED) {
+        (void)nb_desktop_toggle_window_maximized(&preview->shell.desktop,
+                                                 action.window,
+                                                 nb_menu_work_area(
+                                                     preview->viewport));
+        return;
+    }
     if (action.type != NB_SHELL_ACTION_MENU_COMMAND) {
         return;
     }

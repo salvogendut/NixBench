@@ -300,6 +300,45 @@ static void test_resize_capture_routing(void)
     check_invariants(&fixture.desktop);
 }
 
+static void test_maximize_capture_routing(void)
+{
+    struct fixture fixture = make_fixture();
+    const struct nb_rect bounds = {0, 0, 800, 600};
+    const struct nb_window *window_b =
+        nb_desktop_find_window(&fixture.desktop, fixture.b);
+    const struct nb_rect maximize = nb_window_maximize_rect(window_b);
+    struct nb_desktop_action action;
+    int maximize_x;
+    int maximize_y;
+
+    CHECK(window_b != NULL);
+    maximize_x = maximize.x + (maximize.width / 2);
+    maximize_y = maximize.y + (maximize.height / 2);
+
+    CHECK(nb_desktop_pointer_down(&fixture.desktop, maximize_x, maximize_y) ==
+          NB_WINDOW_HIT_MAXIMIZE);
+    CHECK(window_b->pointer_mode == NB_WINDOW_POINTER_MAXIMIZE);
+    action = nb_desktop_pointer_up(&fixture.desktop, maximize_x, maximize_y);
+    CHECK(action.type == NB_WINDOW_ACTION_MAXIMIZE_TOGGLED);
+    CHECK(action.window == fixture.b);
+    CHECK(nb_desktop_toggle_window_maximized(&fixture.desktop,
+                                             fixture.b,
+                                             bounds));
+    CHECK(window_b->maximized);
+    CHECK(window_b->frame.x == 0);
+    CHECK(window_b->frame.y == 0);
+    CHECK(window_b->frame.width == 800);
+    CHECK(window_b->frame.height == 600);
+    CHECK(nb_desktop_pointer_down(&fixture.desktop, 150, 10) ==
+          NB_WINDOW_HIT_TITLE);
+    CHECK(!window_b->maximized);
+    CHECK(window_b->frame.x == 140);
+    CHECK(window_b->frame.y == 90);
+    CHECK(window_b->frame.width == 300);
+    CHECK(window_b->frame.height == 220);
+    check_invariants(&fixture.desktop);
+}
+
 static void test_active_fallback(void)
 {
     struct fixture fixture = make_fixture();
@@ -484,6 +523,7 @@ int main(void)
     test_drag_capture_routing();
     test_close_request_and_lifecycle();
     test_resize_capture_routing();
+    test_maximize_capture_routing();
     test_active_fallback();
     test_explicit_activation();
     test_clamp_all();
