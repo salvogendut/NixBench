@@ -15,6 +15,9 @@ nixbench_enable_gtk_menu_bridge()
         return 1
     fi
 
+    case ":${GTK3_MODULES:-}:" in
+        *":$nixbench_bridge_module:"*) return 0 ;;
+    esac
     GTK3_MODULES=$nixbench_bridge_module${GTK3_MODULES:+:$GTK3_MODULES}
     export GTK3_MODULES
 }

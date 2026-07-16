@@ -85,7 +85,9 @@ static struct nb_host_event key_event(const char *name,
     return event;
 }
 
-static struct nb_desktop_runtime *create_runtime(bool software_pointer)
+static struct nb_desktop_runtime *create_runtime_with_launcher(
+    bool software_pointer,
+    bool application_launcher)
 {
     struct nb_desktop_runtime_options options;
 
@@ -93,12 +95,18 @@ static struct nb_desktop_runtime *create_runtime(bool software_pointer)
     options.enable_wayland = false;
     options.publish_wayland_socket = false;
     options.software_pointer = software_pointer;
+    options.enable_application_launcher = application_launcher;
     return nb_desktop_runtime_create(&options, &initial_output);
+}
+
+static struct nb_desktop_runtime *create_runtime(bool software_pointer)
+{
+    return create_runtime_with_launcher(software_pointer, false);
 }
 
 static void test_creation_render_and_nixinfo(void)
 {
-    struct nb_desktop_runtime_options options = {true, true, true};
+    struct nb_desktop_runtime_options options = {0};
     struct nb_desktop_runtime *runtime;
     struct nb_host_output output;
     struct nb_host_frame frame;
@@ -111,6 +119,7 @@ static void test_creation_render_and_nixinfo(void)
     CHECK(!options.enable_wayland);
     CHECK(!options.publish_wayland_socket);
     CHECK(!options.software_pointer);
+    CHECK(!options.enable_application_launcher);
 
     runtime = nb_desktop_runtime_create(&options, &initial_output);
     CHECK(runtime != NULL);
@@ -311,6 +320,71 @@ static void test_keyboard_menu_path(void)
     nb_desktop_runtime_destroy(runtime);
 }
 
+static void test_application_launcher_menu(void)
+{
+    struct nb_desktop_runtime *runtime =
+        create_runtime_with_launcher(false, true);
+    struct nb_desktop_runtime_update update;
+    struct nb_host_event event;
+
+    CHECK(runtime != NULL);
+    if (runtime == NULL) {
+        return;
+    }
+
+    event = key_event("FK10", true, 40);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_NONE);
+    event = key_event("RGHT", true, 41);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_NONE);
+    event = key_event("RGHT", true, 42);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RGHT", true, 43);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RTRN", true, 44);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_NIXCLOCK);
+
+    event = key_event("FK10", true, 45);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RTRN", true, 46);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    CHECK(nb_desktop_runtime_window_count(runtime) == 2);
+
+    event = key_event("FK10", true, 47);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RGHT", true, 48);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RGHT", true, 49);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RGHT", true, 50);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("DOWN", true, 51);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RTRN", true, 52);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_SAKURA);
+
+    event = key_event("FK10", true, 53);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RGHT", true, 54);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RGHT", true, 55);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RGHT", true, 56);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("DOWN", true, 57);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("DOWN", true, 58);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RTRN", true, 59);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_MIDORI);
+
+    nb_desktop_runtime_destroy(runtime);
+}
+
 static void test_defensive_api(void)
 {
     struct nb_desktop_runtime_options invalid_options;
@@ -327,6 +401,7 @@ static void test_defensive_api(void)
     invalid_options.enable_wayland = false;
     invalid_options.publish_wayland_socket = true;
     invalid_options.software_pointer = false;
+    invalid_options.enable_application_launcher = false;
     CHECK(nb_desktop_runtime_create(&invalid_options,
                                     &initial_output) == NULL);
     invalid_output.logical_width = 0;
@@ -364,6 +439,7 @@ static void test_defensive_api(void)
     CHECK(nb_desktop_runtime_dispatch(runtime, &update));
     CHECK(!update.redraw);
     CHECK(!update.quit_requested);
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_NONE);
 
     CHECK(!nb_desktop_runtime_render(NULL, "12:34", 1, &frame));
     CHECK(!nb_desktop_runtime_render(runtime, NULL, 1, &frame));
@@ -395,6 +471,7 @@ int main(void)
     test_drag_cancel_and_resize();
     test_software_pointer_and_escape();
     test_keyboard_menu_path();
+    test_application_launcher_menu();
     test_defensive_api();
 
     if (failures != 0) {

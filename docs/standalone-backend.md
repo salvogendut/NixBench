@@ -522,6 +522,14 @@ application receives no console, recovery, or helper descriptor. This is
 privilege separation, not application sandboxing: the client retains the
 invoking user's home-directory and group access.
 
+The ordinary-user core also owns a bounded multi-application process table.
+The global **Applications** menu launches NixClock from beside the core and
+the pkgsrc Sakura and Midori executables directly on the private Wayland
+display. The launcher menu is appended to the focused client's menu model,
+and all tracked clients receive orderly termination before compositor
+teardown. Missing programs and capacity exhaustion are nonfatal menu-launch
+errors; neither condition expands the privileged helper's responsibilities.
+
 The initial Midori run is diagnostic and should use only blank or trusted
 content. A toplevel may appear before the browser is fully usable. Missing
 full popup pointer routing, outside-click dismissal policy, positioner

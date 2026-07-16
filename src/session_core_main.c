@@ -39,7 +39,7 @@ int main(int argc, char *argv[])
         parse_descriptor(argv[2], &descriptor) &&
         descriptor == NB_SESSION_CORE_PROTOCOL_DESCRIPTOR &&
         argv[4][0] == '/' && argv[6][0] == '/') {
-        return nb_session_core_run(descriptor, argv[4], argv[6]);
+        return nb_session_core_run(descriptor, argv[4], argv[6], argv[0]);
     }
     fprintf(stderr, "%s: this is an internal NixBench session process\n",
             argv[0]);

@@ -15,15 +15,24 @@
  */
 struct nb_desktop_runtime;
 
+enum nb_desktop_launch_request {
+    NB_DESKTOP_LAUNCH_NONE = 0,
+    NB_DESKTOP_LAUNCH_NIXCLOCK,
+    NB_DESKTOP_LAUNCH_SAKURA,
+    NB_DESKTOP_LAUNCH_MIDORI
+};
+
 struct nb_desktop_runtime_options {
     bool enable_wayland;
     bool publish_wayland_socket;
     bool software_pointer;
+    bool enable_application_launcher;
 };
 
 struct nb_desktop_runtime_update {
     bool redraw;
     bool quit_requested;
+    enum nb_desktop_launch_request launch_request;
 };
 
 /* Defaults to a host-independent runtime with optional services disabled. */

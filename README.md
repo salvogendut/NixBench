@@ -162,7 +162,10 @@ restoration authority. Trusted children irreversibly change to the invoking
 sudo account before executing `nixbench-session-core`. An ordinary-user
 runtime sentinel owns cleanup of the private runtime directory; its sibling
 core creates the desktop, publishes the Wayland display there, and launches
-NixClock by default or one operator-selected initial application. The core
+NixClock by default or one operator-selected initial application. Its
+ordinary-user process manager also services the global **Applications** menu,
+which can start additional NixClock, Sakura Terminal, and Midori Web Browser
+processes without involving the privileged helper. The core
 receives only a bounded anonymous protocol endpoint; the selected application
 does not receive that endpoint, and neither ordinary-user process receives a
 framebuffer, wscons, recovery, or VT descriptor. The heartbeat, runtime
@@ -201,6 +204,13 @@ and command events, and applies deferred application requests. Menu commands
 retain the exact focused-window context, and Quit NixInfo closes only NixInfo.
 Application-specific drawing uses a clipped content-rendering seam that can
 now be supplied by the experimental Wayland shared-memory surface path.
+
+The standalone session appends an **Applications** menu to the currently
+focused application's menus, so the launcher remains reachable even when a
+client covers the desktop. It currently contains explicit entries for
+NixClock and the pkgsrc Sakura and Midori executables. Every launched process
+inherits the private Wayland display and is tracked for orderly session
+shutdown; a missing executable is reported without ending the desktop.
 
 NixClock is the first real out-of-process application. It creates an
 `xdg_toplevel`, manages release-aware shared-memory buffers and frame callbacks,
@@ -452,6 +462,13 @@ display state until the operator types `START-NIXBENCH`. The session has no
 automatic deadline: exit from the desktop menu, press Escape while no Wayland
 client owns keyboard focus, or use the printed supervisor `SIGTERM` command
 from the retained second SSH session.
+
+Use the global **Applications** menu to start additional NixClock, Sakura
+Terminal, or Midori Web Browser instances. NixClock is resolved next to the
+ordinary-user session core; the GTK entries currently use
+`/usr/pkg/bin/sakura` and `/usr/pkg/bin/midori`. To export GTK application
+menus into the bar as well, start the session with
+`NIXBENCH_GTK_MENU_BRIDGE=1`.
 
 Set one absolute executable path to replace NixClock for a startup
 compatibility probe. Arguments are not supported yet:

@@ -21,7 +21,10 @@ and performs final restoration independently. The device worker owns the fixed
 `wsdisplay` and wscons devices, VT lifecycle, frame presentation, and core
 heartbeat. `nixbench-session-core` runs as the invoking ordinary user, publishes
 a private Wayland display, and launches NixClock by default or one selected
-initial application. A separately dropped sibling of the same
+initial application. Its bounded process table can subsequently launch
+NixClock, Sakura, and Midori from the desktop's **Applications** menu; this
+happens entirely after the credential drop and adds no privileged protocol
+operation. A separately dropped sibling of the same
 internal executable is the ordinary-user runtime sentinel: it owns the private
 runtime directory. On the verified worker path it removes that directory only
 after the complete core/application process group is contained; controller
@@ -230,6 +233,11 @@ built-in offline page after the same credential drop. The ordinary-user core
 sets the private Wayland address, Wayland EGL and GTK backends, NixBench XDG
 desktop/session identity, and UTF-8 locale before launching any selected
 client; none of those values are inherited from `sudo`.
+
+After startup, the core alone handles **Applications** menu requests and
+tracks up to a fixed number of ordinary-user clients for orderly teardown.
+The root supervisor and device worker receive neither executable paths nor
+launch commands for these additional clients.
 
 The script checks that file before `sudo` as the ordinary user. The privileged
 launcher rejects an unbounded, relative, trailing-slash, or control-character

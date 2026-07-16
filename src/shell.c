@@ -1,6 +1,7 @@
 #include "shell.h"
 
 #include <stddef.h>
+#include <string.h>
 
 static struct nb_shell_action no_action(void)
 {
@@ -67,6 +68,42 @@ static bool source_model_is_consistent(
     return true;
 }
 
+static void set_visible_menu_model(struct nb_shell *shell,
+                                   const struct nb_menu_model *base)
+{
+    const struct nb_menu_model *overlay = shell->menu_overlay_model;
+    const struct nb_menu_model *visible = base;
+    size_t base_count;
+    size_t overlay_count;
+    size_t index;
+
+    shell->active_base_menu_model = base;
+    if (base == NULL || overlay == NULL || overlay->menus == NULL ||
+        overlay->menu_count == 0) {
+        nb_menu_set_model(&shell->menu, visible);
+        return;
+    }
+    base_count = base->menu_count < NB_MENU_MAX_MENUS
+                     ? base->menu_count
+                     : NB_MENU_MAX_MENUS;
+    overlay_count = overlay->menu_count;
+    if (overlay_count > NB_MENU_MAX_MENUS - base_count) {
+        overlay_count = NB_MENU_MAX_MENUS - base_count;
+    }
+    for (index = 0; index < base_count; ++index) {
+        shell->composed_menus[index] = base->menus[index];
+    }
+    for (index = 0; index < overlay_count; ++index) {
+        shell->composed_menus[base_count + index] = overlay->menus[index];
+    }
+    if (overlay_count != 0) {
+        shell->composed_menu_model.menus = shell->composed_menus;
+        shell->composed_menu_model.menu_count = base_count + overlay_count;
+        visible = &shell->composed_menu_model;
+    }
+    nb_menu_set_model(&shell->menu, visible);
+}
+
 static void sync_active_menu(struct nb_shell *shell)
 {
     const nb_window_id active =
@@ -82,9 +119,10 @@ static void sync_active_menu(struct nb_shell *shell)
         context_window = active;
     }
 
-    if (source != shell->active_menu_source || shell->menu.model != model ||
+    if (source != shell->active_menu_source ||
+        shell->active_base_menu_model != model ||
         context_window != shell->active_menu_window) {
-        nb_menu_set_model(&shell->menu, model);
+        set_visible_menu_model(shell, model);
         shell->active_menu_source = source;
         shell->active_menu_window = context_window;
         if (shell->pointer_owner == NB_SHELL_POINTER_MENU) {
@@ -108,10 +146,27 @@ void nb_shell_init(struct nb_shell *shell,
     }
     shell->desktop_menu_source = desktop_menu_source;
     shell->desktop_menu_model = desktop_menu_model;
+    shell->menu_overlay_model = NULL;
+    shell->active_base_menu_model = NULL;
+    shell->composed_menu_model.menus = shell->composed_menus;
+    shell->composed_menu_model.menu_count = 0;
     shell->active_menu_source = NB_MENU_SOURCE_NONE;
     shell->active_menu_window = NB_WINDOW_ID_NONE;
     shell->pointer_owner = NB_SHELL_POINTER_NONE;
     sync_active_menu(shell);
+}
+
+void nb_shell_set_menu_overlay(struct nb_shell *shell,
+                               const struct nb_menu_model *menu_overlay_model)
+{
+    if (shell == NULL || shell->menu_overlay_model == menu_overlay_model) {
+        return;
+    }
+    shell->menu_overlay_model = menu_overlay_model;
+    set_visible_menu_model(shell, shell->active_base_menu_model);
+    if (shell->pointer_owner == NB_SHELL_POINTER_MENU) {
+        shell->pointer_owner = NB_SHELL_POINTER_NONE;
+    }
 }
 
 nb_window_id nb_shell_open_window(struct nb_shell *shell,
@@ -203,7 +258,7 @@ bool nb_shell_update_menu_source(struct nb_shell *shell,
     }
 
     if (found && shell->active_menu_source == menu_source) {
-        nb_menu_set_model(&shell->menu, menu_model);
+        set_visible_menu_model(shell, menu_model);
         if (shell->pointer_owner == NB_SHELL_POINTER_MENU) {
             shell->pointer_owner = NB_SHELL_POINTER_NONE;
         }
@@ -232,7 +287,7 @@ bool nb_shell_update_window_menu(struct nb_shell *shell,
     binding->menu_source = menu_source;
     binding->menu_model = menu_model;
     if (nb_desktop_active_window_id(&shell->desktop) == window) {
-        nb_menu_set_model(&shell->menu, menu_model);
+        set_visible_menu_model(shell, menu_model);
         shell->active_menu_source = menu_source;
         shell->active_menu_window = window;
         if (shell->pointer_owner == NB_SHELL_POINTER_MENU) {

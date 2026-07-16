@@ -10,6 +10,7 @@ enum {
  * production supplies the directory owned by the cleanup sentinel. */
 int nb_session_core_run(int protocol_descriptor,
                         const char *initial_application_path,
-                        const char *runtime_directory_path);
+                        const char *runtime_directory_path,
+                        const char *core_program_path);
 
 #endif

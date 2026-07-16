@@ -32,7 +32,8 @@ enum {
     NB_SESSION_CORE_APPLICATION_EXIT_TIMEOUT_MS = 2000,
     NB_SESSION_CORE_APPLICATION_WAIT_SLICE_MS = 20,
     NB_SESSION_CORE_WAYLAND_WAIT_MS = 16,
-    NB_SESSION_CORE_CLOCK_FALLBACK_WAIT_MS = 1000
+    NB_SESSION_CORE_CLOCK_FALLBACK_WAIT_MS = 1000,
+    NB_SESSION_CORE_MAX_APPLICATIONS = 16
 };
 
 #define NB_SESSION_CORE_SHUTDOWN_TOKEN UINT64_C(0x4e4253485554444e)
@@ -44,6 +45,12 @@ struct nb_session_runtime_directory {
     bool owned;
 };
 
+struct nb_session_application {
+    pid_t pid;
+    bool initial;
+    char path[PATH_MAX];
+};
+
 struct nb_session_core {
     struct nb_host *host;
     struct nb_desktop_runtime *desktop;
@@ -51,7 +58,8 @@ struct nb_session_core {
     uint64_t next_frame_serial;
     uint64_t pending_frame_serial;
     uint64_t shutdown_deadline;
-    pid_t application_pid;
+    struct nb_session_application applications[NB_SESSION_CORE_MAX_APPLICATIONS];
+    char program_directory[PATH_MAX];
     char clock_text[NB_SESSION_CORE_CLOCK_CAPACITY];
     bool redraw_needed;
     bool shutdown_pending;
@@ -210,17 +218,51 @@ static bool set_close_on_exec(int descriptor)
            fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC) == 0;
 }
 
-static bool launch_application(struct nb_session_core *core,
-                               const char *path)
+static bool remember_program_directory(struct nb_session_core *core,
+                                       const char *program_path)
 {
-    int exec_pipe[2] = {-1, -1};
-    int exec_error = 0;
-    unsigned char *error_bytes = (unsigned char *)&exec_error;
-    size_t received = 0;
-    pid_t child;
+    const char *separator;
+    size_t length;
 
-    if (path == NULL || path[0] != '/' ||
-        setenv("WAYLAND_DISPLAY",
+    if (program_path == NULL || program_path[0] != '/') {
+        return false;
+    }
+    separator = strrchr(program_path, '/');
+    if (separator == NULL) {
+        return false;
+    }
+    length = separator == program_path ? 1U : (size_t)(separator - program_path);
+    if (length >= sizeof(core->program_directory)) {
+        return false;
+    }
+    (void)memcpy(core->program_directory, program_path, length);
+    core->program_directory[length] = '\0';
+    return true;
+}
+
+static bool join_program_path(const struct nb_session_core *core,
+                              const char *name,
+                              char *path,
+                              size_t path_size)
+{
+    const int length = snprintf(path,
+                                path_size,
+                                "%s%s%s",
+                                core->program_directory,
+                                strcmp(core->program_directory, "/") == 0
+                                    ? ""
+                                    : "/",
+                                name);
+
+    return length >= 0 && (size_t)length < path_size;
+}
+
+static bool prepare_application_environment(struct nb_session_core *core)
+{
+    char module_path[PATH_MAX] = {0};
+    const char *bridge = getenv("NIXBENCH_GTK_MENU_BRIDGE");
+
+    if (setenv("WAYLAND_DISPLAY",
                core->runtime_directory.display_name,
                1) != 0 ||
         setenv("EGL_PLATFORM", "wayland", 1) != 0 ||
@@ -228,9 +270,73 @@ static bool launch_application(struct nb_session_core *core,
         setenv("XDG_SESSION_DESKTOP", "NixBench", 1) != 0 ||
         setenv("XDG_SESSION_TYPE", "wayland", 1) != 0 ||
         setenv("GDK_BACKEND", "wayland", 1) != 0 ||
+        setenv("GTK_CSD", "0", 1) != 0 ||
         setenv("LANG", "C.UTF-8", 1) != 0) {
-        fputs("Could not prepare the initial application environment\n",
-              stderr);
+        fputs("Could not prepare the application environment\n", stderr);
+        return false;
+    }
+    if (bridge == NULL || strcmp(bridge, "1") != 0) {
+        return true;
+    }
+    if (!join_program_path(core,
+                           "gtk-modules/libnixbench_gtk_menu_bridge.so",
+                           module_path,
+                           sizeof(module_path)) ||
+        access(module_path, R_OK) != 0 ||
+        setenv("GTK3_MODULES", module_path, 1) != 0) {
+        fprintf(stderr,
+                "Could not enable the requested GTK menu bridge at %s: %s\n",
+                module_path[0] != '\0' ? module_path : "(invalid path)",
+                strerror(errno != 0 ? errno : EINVAL));
+        return false;
+    }
+    return true;
+}
+
+static struct nb_session_application *free_application_slot(
+    struct nb_session_core *core)
+{
+    size_t index;
+
+    for (index = 0; index < NB_SESSION_CORE_MAX_APPLICATIONS; ++index) {
+        if (core->applications[index].pid <= 0) {
+            return &core->applications[index];
+        }
+    }
+    return NULL;
+}
+
+static bool launch_application(struct nb_session_core *core,
+                               const char *path,
+                               bool initial,
+                               bool software_webkit,
+                               pid_t *launched_pid)
+{
+    struct nb_session_application *slot;
+    int exec_pipe[2] = {-1, -1};
+    int exec_error = 0;
+    unsigned char *error_bytes = (unsigned char *)&exec_error;
+    size_t received = 0;
+    pid_t child;
+
+    if (launched_pid != NULL) {
+        *launched_pid = -1;
+    }
+    slot = free_application_slot(core);
+    if (path == NULL || path[0] != '/' ||
+        strlen(path) >= sizeof(core->applications[0].path)) {
+        fputs("The application path is invalid\n", stderr);
+        return false;
+    }
+    if (slot == NULL) {
+        fputs("The NixBench application limit has been reached\n", stderr);
+        return false;
+    }
+    if (access(path, X_OK) != 0) {
+        fprintf(stderr,
+                "Application is unavailable: %s (%s)\n",
+                path,
+                strerror(errno));
         return false;
     }
     if (pipe(exec_pipe) != 0 ||
@@ -265,8 +371,13 @@ static bool launch_application(struct nb_session_core *core,
         size_t remaining;
 
         (void)close(exec_pipe[0]);
-        execl(path, path, (char *)NULL);
-        exec_error = errno;
+        if (software_webkit &&
+            setenv("WEBKIT_DISABLE_COMPOSITING_MODE", "1", 1) != 0) {
+            exec_error = errno;
+        } else {
+            execl(path, path, (char *)NULL);
+            exec_error = errno;
+        }
         child_error_bytes = (const unsigned char *)&exec_error;
         remaining = sizeof(exec_error);
         while (remaining != 0) {
@@ -319,42 +430,63 @@ static bool launch_application(struct nb_session_core *core,
                              : EIO));
         return false;
     }
-    core->application_pid = child;
+    slot->pid = child;
+    slot->initial = initial;
+    (void)snprintf(slot->path, sizeof(slot->path), "%s", path);
+    if (launched_pid != NULL) {
+        *launched_pid = child;
+    }
     return true;
 }
 
-static void report_application_exit(pid_t application_pid,
-                                    int child_status)
+static void report_application_exit(
+    const struct nb_session_application *application,
+    int child_status)
 {
+    const char *kind =
+        application->initial ? "Initial application" : "Application";
+
     if (WIFEXITED(child_status)) {
         fprintf(stderr,
-                "Initial application pid %ld exited with code %d\n",
-                (long)application_pid,
+                "%s pid %ld exited with code %d\n",
+                kind,
+                (long)application->pid,
                 WEXITSTATUS(child_status));
     } else if (WIFSIGNALED(child_status)) {
         fprintf(stderr,
-                "Initial application pid %ld terminated by signal %d\n",
-                (long)application_pid,
+                "%s pid %ld terminated by signal %d\n",
+                kind,
+                (long)application->pid,
                 WTERMSIG(child_status));
     }
 }
 
-static void reap_application_nonblocking(struct nb_session_core *core)
+static void clear_application(struct nb_session_application *application)
 {
-    int child_status;
-    pid_t result;
+    (void)memset(application, 0, sizeof(*application));
+}
 
-    if (core->application_pid <= 0) {
-        return;
-    }
-    do {
-        result = waitpid(core->application_pid, &child_status, WNOHANG);
-    } while (result < 0 && errno == EINTR);
-    if (result == core->application_pid) {
-        report_application_exit(core->application_pid, child_status);
-        core->application_pid = -1;
-    } else if (result < 0 && errno == ECHILD) {
-        core->application_pid = -1;
+static void reap_applications_nonblocking(struct nb_session_core *core)
+{
+    size_t index;
+
+    for (index = 0; index < NB_SESSION_CORE_MAX_APPLICATIONS; ++index) {
+        struct nb_session_application *application = &core->applications[index];
+        int child_status;
+        pid_t result;
+
+        if (application->pid <= 0) {
+            continue;
+        }
+        do {
+            result = waitpid(application->pid, &child_status, WNOHANG);
+        } while (result < 0 && errno == EINTR);
+        if (result == application->pid) {
+            report_application_exit(application, child_status);
+            clear_application(application);
+        } else if (result < 0 && errno == ECHILD) {
+            clear_application(application);
+        }
     }
 }
 
@@ -368,46 +500,68 @@ static void sleep_milliseconds(unsigned int milliseconds)
     }
 }
 
-static void stop_application(struct nb_session_core *core)
+static bool applications_are_running(const struct nb_session_core *core)
+{
+    size_t index;
+
+    for (index = 0; index < NB_SESSION_CORE_MAX_APPLICATIONS; ++index) {
+        if (core->applications[index].pid > 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void stop_applications(struct nb_session_core *core)
 {
     uint64_t deadline;
+    size_t index;
 
-    reap_application_nonblocking(core);
-    if (core->application_pid <= 0) {
+    reap_applications_nonblocking(core);
+    if (!applications_are_running(core)) {
         return;
     }
-    if (kill(core->application_pid, SIGTERM) != 0 && errno != ESRCH) {
-        fprintf(stderr,
-                "Could not terminate the initial application: %s\n",
-                strerror(errno));
+    for (index = 0; index < NB_SESSION_CORE_MAX_APPLICATIONS; ++index) {
+        const pid_t pid = core->applications[index].pid;
+
+        if (pid > 0 && kill(pid, SIGTERM) != 0 && errno != ESRCH) {
+            fprintf(stderr,
+                    "Could not terminate application pid %ld: %s\n",
+                    (long)pid,
+                    strerror(errno));
+        }
     }
     deadline = add_milliseconds(
         nb_host_monotonic_milliseconds(core->host),
         NB_SESSION_CORE_APPLICATION_EXIT_TIMEOUT_MS);
-    while (core->application_pid > 0 &&
+    while (applications_are_running(core) &&
            nb_host_monotonic_milliseconds(core->host) < deadline) {
-        reap_application_nonblocking(core);
-        if (core->application_pid > 0) {
+        reap_applications_nonblocking(core);
+        if (applications_are_running(core)) {
             sleep_milliseconds(NB_SESSION_CORE_APPLICATION_WAIT_SLICE_MS);
         }
     }
-    if (core->application_pid > 0) {
-        const pid_t application_pid = core->application_pid;
+    for (index = 0; index < NB_SESSION_CORE_MAX_APPLICATIONS; ++index) {
+        struct nb_session_application *application = &core->applications[index];
         int child_status;
         pid_t result;
 
-        if (kill(core->application_pid, SIGKILL) != 0 && errno != ESRCH) {
+        if (application->pid <= 0) {
+            continue;
+        }
+        if (kill(application->pid, SIGKILL) != 0 && errno != ESRCH) {
             fprintf(stderr,
-                    "Could not kill the initial application: %s\n",
+                    "Could not kill application pid %ld: %s\n",
+                    (long)application->pid,
                     strerror(errno));
         }
         do {
-            result = waitpid(application_pid, &child_status, 0);
+            result = waitpid(application->pid, &child_status, 0);
         } while (result < 0 && errno == EINTR);
-        if (result == application_pid) {
-            report_application_exit(application_pid, child_status);
+        if (result == application->pid) {
+            report_application_exit(application, child_status);
         }
-        core->application_pid = -1;
+        clear_application(application);
     }
 }
 
@@ -572,7 +726,50 @@ static bool apply_runtime_update(
     struct nb_session_core *core,
     const struct nb_desktop_runtime_update *update)
 {
+    char path[PATH_MAX];
+    const char *name = NULL;
+    bool software_webkit = false;
+
     core->redraw_needed = core->redraw_needed || update->redraw;
+    switch (update->launch_request) {
+    case NB_DESKTOP_LAUNCH_NONE:
+        break;
+    case NB_DESKTOP_LAUNCH_NIXCLOCK:
+        name = "NixClock";
+        if (!join_program_path(core, "nixclock", path, sizeof(path))) {
+            fputs("Could not resolve the NixClock launcher path\n", stderr);
+            return true;
+        }
+        break;
+    case NB_DESKTOP_LAUNCH_SAKURA:
+        name = "Sakura Terminal";
+        (void)snprintf(path, sizeof(path), "%s", "/usr/pkg/bin/sakura");
+        break;
+    case NB_DESKTOP_LAUNCH_MIDORI:
+        name = "Midori Web Browser";
+        software_webkit = true;
+        (void)snprintf(path, sizeof(path), "%s", "/usr/pkg/bin/midori");
+        break;
+    default:
+        fputs("Desktop requested an unknown application\n", stderr);
+        return false;
+    }
+    if (name != NULL) {
+        pid_t pid;
+
+        if (launch_application(core,
+                               path,
+                               false,
+                               software_webkit,
+                               &pid)) {
+            fprintf(stderr,
+                    "Launched %s as application pid %ld\n",
+                    name,
+                    (long)pid);
+        } else {
+            fprintf(stderr, "Could not launch %s\n", name);
+        }
+    }
     if (update->quit_requested ||
         nb_desktop_runtime_quit_requested(core->desktop)) {
         return begin_shutdown(core);
@@ -792,7 +989,8 @@ static bool core_identity_is_unprivileged(void)
 
 int nb_session_core_run(int protocol_descriptor,
                         const char *initial_application_path,
-                        const char *runtime_directory_path)
+                        const char *runtime_directory_path,
+                        const char *core_program_path)
 {
     struct nb_session_core core;
     struct nb_desktop_runtime_options desktop_options;
@@ -801,12 +999,12 @@ int nb_session_core_run(int protocol_descriptor,
     struct sigaction previous_sigterm_action;
     struct sigaction sigterm_action;
     const char *display_name;
+    pid_t initial_application_pid = -1;
     bool sigterm_action_installed = false;
     int status = 1;
 
     memset(&core, 0, sizeof(core));
     core.next_frame_serial = 1;
-    core.application_pid = -1;
     core.redraw_needed = true;
     core.running = true;
     format_clock(core.clock_text);
@@ -850,6 +1048,10 @@ int nb_session_core_run(int protocol_descriptor,
               stderr);
         goto cleanup;
     }
+    if (!remember_program_directory(&core, core_program_path)) {
+        fputs("The session core executable path must be absolute\n", stderr);
+        goto cleanup;
+    }
     if (!wait_for_ready(&core, &output) ||
         !use_runtime_directory(&core.runtime_directory,
                                runtime_directory_path)) {
@@ -860,6 +1062,7 @@ int nb_session_core_run(int protocol_descriptor,
     desktop_options.enable_wayland = true;
     desktop_options.publish_wayland_socket = true;
     desktop_options.software_pointer = true;
+    desktop_options.enable_application_launcher = true;
     core.desktop = nb_desktop_runtime_create(&desktop_options, &output);
     if (core.desktop == NULL) {
         fputs("Could not create the standalone desktop runtime\n", stderr);
@@ -872,7 +1075,12 @@ int nb_session_core_run(int protocol_descriptor,
               stderr);
         goto cleanup;
     }
-    if (!launch_application(&core, initial_application_path)) {
+    if (!prepare_application_environment(&core) ||
+        !launch_application(&core,
+                            initial_application_path,
+                            true,
+                            false,
+                            &initial_application_pid)) {
         goto cleanup;
     }
     if (!nb_desktop_runtime_set_pointer(
@@ -892,7 +1100,7 @@ int nb_session_core_run(int protocol_descriptor,
            "XDG_RUNTIME_DIR=%s WAYLAND_DISPLAY=%s application-pid=%ld\n",
            core.runtime_directory.path,
            core.runtime_directory.display_name,
-           (long)core.application_pid);
+           (long)initial_application_pid);
     (void)fflush(stdout);
 
     if (!present_desktop(&core)) {
@@ -905,7 +1113,7 @@ int nb_session_core_run(int protocol_descriptor,
                                event_wait_timeout(&core),
                                &event);
 
-        reap_application_nonblocking(&core);
+        reap_applications_nonblocking(&core);
 
         if (session_core_sigterm_requested) {
             session_core_sigterm_requested = 0;
@@ -958,7 +1166,7 @@ cleanup:
     /* Keep the private Wayland display alive while the tracked client exits.
      * Destroying the compositor first turns an orderly session shutdown into
      * a misleading client-side connection error. */
-    stop_application(&core);
+    stop_applications(&core);
     nb_desktop_runtime_destroy(core.desktop);
     core.desktop = NULL;
     if (!destroy_runtime_directory(&core.runtime_directory)) {

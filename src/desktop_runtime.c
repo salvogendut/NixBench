@@ -44,6 +44,10 @@ enum {
     NIXBENCH_DESKTOP_COMMAND_QUIT
 };
 
+#define NIXBENCH_DESKTOP_COMMAND_LAUNCH_NIXCLOCK UINT32_C(0xfffffff0)
+#define NIXBENCH_DESKTOP_COMMAND_LAUNCH_SAKURA UINT32_C(0xfffffff1)
+#define NIXBENCH_DESKTOP_COMMAND_LAUNCH_MIDORI UINT32_C(0xfffffff2)
+
 enum {
     NIXBENCH_ABOUT_COMMAND_CLOSE = 1
 };
@@ -70,6 +74,25 @@ static const struct nb_menu_spec desktop_menus[] = {
 static const struct nb_menu_model desktop_menu_model = {
     desktop_menus,
     sizeof(desktop_menus) / sizeof(desktop_menus[0])
+};
+
+static const struct nb_menu_item_spec launcher_items[] = {
+    {"NixClock", NIXBENCH_DESKTOP_COMMAND_LAUNCH_NIXCLOCK,
+     NB_MENU_ITEM_COMMAND, true, false},
+    {"Sakura Terminal", NIXBENCH_DESKTOP_COMMAND_LAUNCH_SAKURA,
+     NB_MENU_ITEM_COMMAND, true, false},
+    {"Midori Web Browser", NIXBENCH_DESKTOP_COMMAND_LAUNCH_MIDORI,
+     NB_MENU_ITEM_COMMAND, true, false}
+};
+
+static const struct nb_menu_spec launcher_menus[] = {
+    {"Applications", launcher_items,
+     sizeof(launcher_items) / sizeof(launcher_items[0])}
+};
+
+static const struct nb_menu_model launcher_menu_model = {
+    launcher_menus,
+    sizeof(launcher_menus) / sizeof(launcher_menus[0])
 };
 
 static const struct nb_menu_item_spec about_items[] = {
@@ -124,6 +147,7 @@ struct nb_desktop_runtime {
     int pointer_y;
     bool pointer_visible;
     bool quit_requested;
+    enum nb_desktop_launch_request pending_launch_request;
 };
 
 static void clear_update(struct nb_desktop_runtime_update *update)
@@ -341,12 +365,30 @@ static bool open_nixinfo(struct nb_desktop_runtime *runtime)
 static bool apply_shell_action(struct nb_desktop_runtime *runtime,
                                struct nb_shell_action action)
 {
+    if (action.type == NB_SHELL_ACTION_MENU_COMMAND) {
+        if (action.menu_command ==
+            NIXBENCH_DESKTOP_COMMAND_LAUNCH_NIXCLOCK) {
+            runtime->pending_launch_request = NB_DESKTOP_LAUNCH_NIXCLOCK;
+            return true;
+        }
+        if (action.menu_command ==
+            NIXBENCH_DESKTOP_COMMAND_LAUNCH_SAKURA) {
+            runtime->pending_launch_request = NB_DESKTOP_LAUNCH_SAKURA;
+            return true;
+        }
+        if (action.menu_command ==
+            NIXBENCH_DESKTOP_COMMAND_LAUNCH_MIDORI) {
+            runtime->pending_launch_request = NB_DESKTOP_LAUNCH_MIDORI;
+            return true;
+        }
+    }
+
     const enum nb_application_dispatch_result dispatch =
         nb_application_host_dispatch_shell_action(&runtime->applications,
                                                    action);
 
     if (dispatch == NB_APPLICATION_DISPATCH_HANDLED) {
-        return true;
+        return sync_application_focus(runtime);
     }
     if (dispatch == NB_APPLICATION_DISPATCH_ERROR) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -1009,6 +1051,9 @@ struct nb_desktop_runtime *nb_desktop_runtime_create(
     nb_shell_init(&runtime->shell,
                   NIXBENCH_MENU_SOURCE_DESKTOP,
                   &desktop_menu_model);
+    nb_shell_set_menu_overlay(
+        &runtime->shell,
+        options->enable_application_launcher ? &launcher_menu_model : NULL);
     if (!nb_application_host_init(&runtime->applications,
                                   &runtime->shell)) {
         free(runtime);
@@ -1021,6 +1066,7 @@ struct nb_desktop_runtime *nb_desktop_runtime_create(
     if (runtime->nixinfo_application == NB_APPLICATION_ID_NONE ||
         !nb_application_host_start(&runtime->applications,
                                    runtime->nixinfo_application) ||
+        !sync_application_focus(runtime) ||
         !nb_desktop_runtime_set_output(runtime, initial_output)) {
         nb_desktop_runtime_destroy(runtime);
         return NULL;
@@ -1162,6 +1208,8 @@ bool nb_desktop_runtime_handle_input(
     }
     update->redraw = true;
     update->quit_requested = runtime->quit_requested;
+    update->launch_request = runtime->pending_launch_request;
+    runtime->pending_launch_request = NB_DESKTOP_LAUNCH_NONE;
     return true;
 }
 

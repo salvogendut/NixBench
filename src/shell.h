@@ -56,6 +56,10 @@ struct nb_shell {
     struct nb_shell_menu_binding menu_bindings[NB_DESKTOP_MAX_WINDOWS];
     nb_menu_source_id desktop_menu_source;
     const struct nb_menu_model *desktop_menu_model;
+    const struct nb_menu_model *menu_overlay_model;
+    const struct nb_menu_model *active_base_menu_model;
+    struct nb_menu_spec composed_menus[NB_MENU_MAX_MENUS];
+    struct nb_menu_model composed_menu_model;
     nb_menu_source_id active_menu_source;
     nb_window_id active_menu_window;
     enum nb_shell_pointer_owner pointer_owner;
@@ -64,6 +68,10 @@ struct nb_shell {
 void nb_shell_init(struct nb_shell *shell,
                    nb_menu_source_id desktop_menu_source,
                    const struct nb_menu_model *desktop_menu_model);
+
+/* Append shell-owned menus to every active desktop/application menu model. */
+void nb_shell_set_menu_overlay(struct nb_shell *shell,
+                               const struct nb_menu_model *menu_overlay_model);
 
 nb_window_id nb_shell_open_window(struct nb_shell *shell,
                                   const char *title,
