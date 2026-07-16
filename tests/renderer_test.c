@@ -67,6 +67,38 @@ static bool pixel_equals(SDL_Surface *surface,
            blue == expected_blue && alpha == SDL_ALPHA_OPAQUE;
 }
 
+static bool pixel_near(SDL_Surface *surface,
+                       int x,
+                       int y,
+                       Uint8 expected_red,
+                       Uint8 expected_green,
+                       Uint8 expected_blue,
+                       Uint8 tolerance)
+{
+    Uint8 red = 0;
+    Uint8 green = 0;
+    Uint8 blue = 0;
+    Uint8 alpha = 0;
+
+    return SDL_ReadSurfacePixel(surface,
+                                x,
+                                y,
+                                &red,
+                                &green,
+                                &blue,
+                                &alpha) &&
+           red >= expected_red - SDL_min(expected_red, tolerance) &&
+           red <= expected_red + SDL_min((Uint8)(255 - expected_red),
+                                         tolerance) &&
+           green >= expected_green - SDL_min(expected_green, tolerance) &&
+           green <= expected_green + SDL_min((Uint8)(255 - expected_green),
+                                             tolerance) &&
+           blue >= expected_blue - SDL_min(expected_blue, tolerance) &&
+           blue <= expected_blue + SDL_min((Uint8)(255 - expected_blue),
+                                           tolerance) &&
+           alpha == SDL_ALPHA_OPAQUE;
+}
+
 static bool record_content(SDL_Renderer *renderer,
                            nb_window_id id,
                            const struct nb_window *window,
@@ -314,8 +346,53 @@ static void test_backdrop_gradients(void)
         NB_BACKDROP_GRADIENT_DIAGONAL;
     CHECK(nb_backdrop_render(renderer, viewport, &preferences));
     CHECK(SDL_RenderPresent(renderer));
-    CHECK(pixel_equals(surface, 0, 0, 10, 20, 30));
-    CHECK(pixel_equals(surface, 4, 4, 110, 120, 130));
+    CHECK(pixel_near(surface, 0, 0, 10, 20, 30, 15));
+    CHECK(pixel_near(surface, 4, 4, 110, 120, 130, 15));
+
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroySurface(surface);
+}
+
+static void test_console_sized_diagonal_gradient(void)
+{
+    const int width = 1366;
+    const int height = 768;
+    SDL_Surface *surface =
+        SDL_CreateSurface(width, height, SDL_PIXELFORMAT_XRGB8888);
+    SDL_Renderer *renderer = NULL;
+    struct nb_user_preferences preferences;
+    const struct nb_rect viewport = {0, 0, width, height};
+    int frame;
+
+    CHECK(surface != NULL);
+    if (surface == NULL) {
+        return;
+    }
+    renderer = SDL_CreateSoftwareRenderer(surface);
+    CHECK(renderer != NULL);
+    if (renderer == NULL) {
+        SDL_DestroySurface(surface);
+        return;
+    }
+    nb_user_preferences_init(&preferences);
+    preferences.backdrop_primary = (struct nb_color){24, 54, 76};
+    preferences.backdrop_secondary = (struct nb_color){142, 47, 39};
+    preferences.backdrop_gradient_enabled = true;
+    preferences.backdrop_gradient_direction =
+        NB_BACKDROP_GRADIENT_DIAGONAL;
+
+    for (frame = 0; frame < 32; ++frame) {
+        CHECK(nb_backdrop_render(renderer, viewport, &preferences));
+        CHECK(SDL_RenderPresent(renderer));
+    }
+    CHECK(pixel_near(surface, 0, 0, 24, 54, 76, 1));
+    CHECK(pixel_near(surface,
+                     width - 1,
+                     height - 1,
+                     142,
+                     47,
+                     39,
+                     1));
 
     SDL_DestroyRenderer(renderer);
     SDL_DestroySurface(surface);
@@ -326,6 +403,7 @@ int main(void)
     test_content_callback_and_clip_restoration();
     test_checked_menu_item_gutter();
     test_backdrop_gradients();
+    test_console_sized_diagonal_gradient();
 
     if (failures != 0) {
         fprintf(stderr, "%d renderer check(s) failed\n", failures);

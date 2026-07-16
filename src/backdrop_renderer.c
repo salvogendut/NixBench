@@ -91,35 +91,75 @@ static bool render_diagonal(
     const struct nb_user_preferences *preferences)
 {
     const int maximum = viewport.width + viewport.height - 2;
-    int diagonal;
+    const int right_position = viewport.width - 1;
+    const int bottom_position = viewport.height - 1;
+    const SDL_FColor primary = {
+        preferences->backdrop_primary.red / 255.0f,
+        preferences->backdrop_primary.green / 255.0f,
+        preferences->backdrop_primary.blue / 255.0f,
+        1.0f
+    };
+    const SDL_FColor top_right = {
+        interpolate(preferences->backdrop_primary.red,
+                    preferences->backdrop_secondary.red,
+                    right_position,
+                    maximum) / 255.0f,
+        interpolate(preferences->backdrop_primary.green,
+                    preferences->backdrop_secondary.green,
+                    right_position,
+                    maximum) / 255.0f,
+        interpolate(preferences->backdrop_primary.blue,
+                    preferences->backdrop_secondary.blue,
+                    right_position,
+                    maximum) / 255.0f,
+        1.0f
+    };
+    const SDL_FColor bottom_left = {
+        interpolate(preferences->backdrop_primary.red,
+                    preferences->backdrop_secondary.red,
+                    bottom_position,
+                    maximum) / 255.0f,
+        interpolate(preferences->backdrop_primary.green,
+                    preferences->backdrop_secondary.green,
+                    bottom_position,
+                    maximum) / 255.0f,
+        interpolate(preferences->backdrop_primary.blue,
+                    preferences->backdrop_secondary.blue,
+                    bottom_position,
+                    maximum) / 255.0f,
+        1.0f
+    };
+    const SDL_FColor secondary = {
+        preferences->backdrop_secondary.red / 255.0f,
+        preferences->backdrop_secondary.green / 255.0f,
+        preferences->backdrop_secondary.blue / 255.0f,
+        1.0f
+    };
+    const float left = (float)viewport.x;
+    const float top = (float)viewport.y;
+    const float right = (float)(viewport.x + viewport.width);
+    const float bottom = (float)(viewport.y + viewport.height);
+    const SDL_Vertex vertices[] = {
+        {{left, top}, primary, {0.0f, 0.0f}},
+        {{right, top}, top_right, {0.0f, 0.0f}},
+        {{right, bottom}, secondary, {0.0f, 0.0f}},
+        {{left, bottom}, bottom_left, {0.0f, 0.0f}}
+    };
+    const int indices[] = {0, 1, 2, 0, 2, 3};
 
-    for (diagonal = 0; diagonal <= maximum; ++diagonal) {
-        int first_x = diagonal - (viewport.height - 1);
-        int last_x = diagonal;
-        int first_y;
-        int last_y;
-
-        if (first_x < 0) {
-            first_x = 0;
-        }
-        if (last_x >= viewport.width) {
-            last_x = viewport.width - 1;
-        }
-        first_y = diagonal - first_x;
-        last_y = diagonal - last_x;
-        if (!set_interpolated_color(renderer,
-                                    preferences,
-                                    diagonal,
-                                    maximum) ||
-            !SDL_RenderLine(renderer,
-                            (float)(viewport.x + first_x),
-                            (float)(viewport.y + first_y),
-                            (float)(viewport.x + last_x),
-                            (float)(viewport.y + last_y))) {
-            return false;
-        }
-    }
-    return true;
+    /*
+     * The former implementation issued one negative-slope SDL_RenderLine
+     * for every anti-diagonal.  SDL's NetBSD software renderer becomes
+     * unstable on long lines of that shape at console-sized resolutions.
+     * A single pair of color-interpolated triangles describes the same
+     * linear function of x+y without exercising that line path.
+     */
+    return SDL_RenderGeometry(renderer,
+                              NULL,
+                              vertices,
+                              (int)(sizeof(vertices) / sizeof(vertices[0])),
+                              indices,
+                              (int)(sizeof(indices) / sizeof(indices[0])));
 }
 
 bool nb_backdrop_render(SDL_Renderer *renderer,
