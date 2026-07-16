@@ -48,7 +48,7 @@ case "${0##*/}" in
                     printf '%s\n' "${NB_RESTORED_VT:-1}"
                 fi
                 ;;
-            "-n /var/run/nixbench-wsdisplay-session --acknowledge-console-takeover"*)
+            *"/var/run/nixbench-wsdisplay-session --acknowledge-console-takeover"*)
                 exit "${NB_LAUNCH_STATUS:-0}"
                 ;;
         esac
