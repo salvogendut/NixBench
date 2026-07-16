@@ -775,12 +775,16 @@ _Noreturn void nb_session_credentials_drop_and_exec(
     const char *core_path,
     char *const core_argv[])
 {
+    const char *gtk_menu_bridge = getenv("NIXBENCH_GTK_MENU_BRIDGE");
+    const bool enable_gtk_menu_bridge =
+        gtk_menu_bridge != NULL && strcmp(gtk_menu_bridge, "1") == 0;
     char home_environment[NB_SESSION_CREDENTIALS_PATH_CAPACITY + 6];
     char shell_environment[NB_SESSION_CREDENTIALS_PATH_CAPACITY + 7];
     char user_environment[NB_SESSION_CREDENTIALS_USER_CAPACITY + 6];
     char logname_environment[NB_SESSION_CREDENTIALS_USER_CAPACITY + 9];
     char path_environment[sizeof(safe_path) + 5];
     char ipc_environment[32];
+    char gtk_menu_bridge_environment[] = "NIXBENCH_GTK_MENU_BRIDGE=1";
     struct nb_session_group_list expected_groups;
     int ipc_environment_length;
     char *environment[] = {
@@ -790,6 +794,7 @@ _Noreturn void nb_session_credentials_drop_and_exec(
         logname_environment,
         path_environment,
         ipc_environment,
+        enable_gtk_menu_bridge ? gtk_menu_bridge_environment : NULL,
         NULL
     };
 

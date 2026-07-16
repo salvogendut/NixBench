@@ -84,6 +84,7 @@ run_session()
     log=$6
     output=$7
     application=${8-}
+    gtk_menu_bridge=${9-0}
 
     printf '%s\n' START-NIXBENCH |
         env -u NIXBENCH_TRACE_WAYLAND \
@@ -94,6 +95,7 @@ run_session()
             NIXBENCH_EXPECT_SUPERVISOR_TERM="$supervisor_mode" \
             NIXBENCH_EXPECT_CORE_FAILURE="$core_failure" \
             NIXBENCH_APPLICATION="$application" \
+            NIXBENCH_GTK_MENU_BRIDGE="$gtk_menu_bridge" \
             NB_LAUNCH_STATUS="$launch_status" \
             NB_ABSENCE_STATUS="$absence_status" \
             NB_INITIAL_VT=1 \
@@ -153,10 +155,11 @@ fi
 application_log=$temporary/application.log
 application_output=$temporary/application.out
 run_session 0 '' 0 0 1 "$application_log" "$application_output" \
-    "$test_application"
+    "$test_application" 1
 grep -F -- "--application $test_application" "$application_log" >/dev/null
 grep -F -- "application-argument=$test_application" "$application_log" \
     >/dev/null
+grep -F -- 'NIXBENCH_GTK_MENU_BRIDGE=1' "$application_log" >/dev/null
 grep -F -- 'selected initial application will open automatically' \
     "$application_output" >/dev/null
 grep -F -- 'execution occurs only after the desktop core has dropped privileges' \

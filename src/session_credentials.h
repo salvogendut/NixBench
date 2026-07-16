@@ -79,8 +79,10 @@ bool nb_session_credentials_prepare_parent_stdio(void);
  * Run only in a freshly forked, single-threaded child. This function creates
  * a new session, establishes fd 3 as the sole inherited session channel,
  * irreversibly changes to credentials, and execs an absolute core path with a
- * minimal environment. It reports failure on standard error and _exit(2)s;
- * it never returns to privileged caller code.
+ * minimal environment. The optional NIXBENCH_GTK_MENU_BRIDGE feature flag is
+ * retained only when its value is exactly "1"; no arbitrary caller value is
+ * copied across the privilege boundary. It reports failure on standard error
+ * and _exit(2)s; it never returns to privileged caller code.
  */
 _Noreturn void nb_session_credentials_drop_and_exec(
     const struct nb_session_credentials *credentials,
