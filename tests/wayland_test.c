@@ -1991,6 +1991,21 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(nb_wayland_server_pointer_grab_window(server) ==
           NB_WINDOW_ID_NONE);
 
+    xdg_surface_set_window_geometry(xdg_surface,
+                                    8,
+                                    12,
+                                    root_width,
+                                    root_height);
+    REQUIRE(pump_barrier(server, display));
+    CHECK(nb_wayland_server_pointer_motion(server,
+                                           window,
+                                           content.x + 280,
+                                           content.y + 150,
+                                           UINT32_C(1041)));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.pointer_x == wl_fixed_from_int(148));
+    CHECK(client.pointer_y == wl_fixed_from_int(87));
+
     /* A multi-button grab lasts until every button has been released. */
     CHECK(nb_wayland_server_pointer_motion(server,
                                            window,

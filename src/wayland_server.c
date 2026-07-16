@@ -1224,6 +1224,10 @@ static bool pointer_surface_coordinates(
 {
     const struct nb_window *window;
     struct nb_rect content;
+    int geometry_x;
+    int geometry_y;
+    int geometry_width;
+    int geometry_height;
 
     if (surface == NULL || surface->window == NB_WINDOW_ID_NONE ||
         surface->width <= 0 || surface->height <= 0 ||
@@ -1239,14 +1243,27 @@ static bool pointer_surface_coordinates(
     if (content.width <= 0 || content.height <= 0) {
         return false;
     }
+    surface_window_geometry(surface,
+                            &geometry_x,
+                            &geometry_y,
+                            &geometry_width,
+                            &geometry_height);
+    if (geometry_width <= 0 || geometry_height <= 0) {
+        geometry_x = 0;
+        geometry_y = 0;
+        geometry_width = surface->width;
+        geometry_height = surface->height;
+    }
     *surface_x = pointer_fixed_coordinate(desktop_x,
                                           content.x,
                                           content.width,
-                                          surface->width);
+                                          geometry_width) +
+                 wl_fixed_from_int(geometry_x);
     *surface_y = pointer_fixed_coordinate(desktop_y,
                                           content.y,
                                           content.height,
-                                          surface->height);
+                                          geometry_height) +
+                 wl_fixed_from_int(geometry_y);
     return true;
 }
 
