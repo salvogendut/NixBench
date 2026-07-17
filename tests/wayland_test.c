@@ -1610,6 +1610,13 @@ static void test_wayland_surface_lifecycle(void)
     window = nb_wayland_server_window_at(server, 0);
     REQUIRE(window != NB_WINDOW_ID_NONE);
     CHECK(nb_wayland_server_owns_window(server, window));
+    CHECK(nb_shell_toggle_window_minimized(&shell, window));
+    CHECK(nb_desktop_find_window(&shell.desktop, window)->minimized);
+    nb_wayland_server_frame_presented(server, UINT32_C(4241));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(!client.frame_done);
+    CHECK(nb_shell_toggle_window_minimized(&shell, window));
+    CHECK(!nb_desktop_find_window(&shell.desktop, window)->minimized);
     CHECK(shell.active_menu_source == WAYLAND_MENU_SOURCE + 1);
     REQUIRE(shell.menu.model != NULL);
     CHECK(shell.menu.model->menu_count == 2);
@@ -1701,6 +1708,19 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(snapshot.stride == INITIAL_WIDTH * BYTES_PER_PIXEL);
     CHECK(snapshot.revision == 1);
     CHECK(memcmp(snapshot.pixels, pixels, buffer_size) == 0);
+    CHECK(nb_shell_toggle_window_minimized(&shell, window));
+    client.buffer_released = false;
+    wl_surface_attach(surface, buffer, 0, 0);
+    wl_surface_damage(surface, 0, 0, INITIAL_WIDTH, INITIAL_HEIGHT);
+    wl_surface_commit(surface);
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.buffer_released);
+    CHECK(!nb_wayland_server_take_redraw(server));
+    CHECK(nb_shell_toggle_window_minimized(&shell, window));
+    REQUIRE(nb_wayland_server_surface_snapshot(server,
+                                               window,
+                                               &snapshot));
+    CHECK(snapshot.revision == 2);
     parent_pixel_under_popup =
         snapshot.pixels[(size_t)POPUP_EXPECTED_Y * (size_t)INITIAL_WIDTH +
                         (size_t)POPUP_EXPECTED_X];

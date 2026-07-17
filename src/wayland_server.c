@@ -585,6 +585,21 @@ static const struct nb_wayland_surface *surface_root_toplevel_const(
                : NULL;
 }
 
+static bool surface_root_is_visible(
+    const struct nb_wayland_surface *surface)
+{
+    const struct nb_wayland_surface *root =
+        surface_root_toplevel_const(surface);
+    const struct nb_window *window;
+
+    if (root == NULL || root->window == NB_WINDOW_ID_NONE) {
+        return true;
+    }
+    window = nb_desktop_find_window(&root->server->shell->desktop,
+                                    root->window);
+    return window == NULL || (window->visible && !window->minimized);
+}
+
 static bool surface_is_mapped(const struct nb_wayland_surface *surface)
 {
     if (surface == NULL || surface->pixels == NULL ||
@@ -1005,9 +1020,9 @@ static void surface_tree_changed(struct nb_wayland_surface *surface,
                  ? nb_desktop_find_window(&root->server->shell->desktop,
                                           root->window)
                  : NULL;
-    if (window != NULL) {
+    if (window != NULL && window->visible && !window->minimized) {
         mark_redraw_rect(root->server, window->frame);
-    } else {
+    } else if (window == NULL) {
         mark_redraw_full(root->server);
     }
 }
@@ -5881,7 +5896,8 @@ void nb_wayland_server_frame_presented(struct nb_wayland_server *server,
         return;
     }
     for (index = 0; index < NB_WAYLAND_MAX_SURFACES; ++index) {
-        if (server->surfaces[index].occupied) {
+        if (server->surfaces[index].occupied &&
+            surface_root_is_visible(&server->surfaces[index])) {
             complete_ready_frames(&server->surfaces[index],
                                   milliseconds);
         }
