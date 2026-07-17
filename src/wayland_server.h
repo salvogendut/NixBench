@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #include "shell.h"
 
@@ -191,15 +192,19 @@ void nb_wayland_server_set_xwayland_interface(
     struct nb_wayland_server *server,
     const struct nb_wayland_xwayland_interface *interface,
     void *context);
+void nb_wayland_server_authorize_xwayland_client(
+    struct nb_wayland_server *server,
+    pid_t process);
 
-/*
- * Associate a legacy WL_SURFACE_ID with an X11 top-level. The surface may
- * have committed its first buffer before or after this call. Repeated calls
- * for the same pair are harmless; conflicting roles or IDs are rejected.
- */
+/* Associate an X11 top-level using either Xwayland handshake generation. */
 bool nb_wayland_server_associate_xwayland_surface(
     struct nb_wayland_server *server,
     uint32_t surface_resource_id,
+    uint32_t xwindow,
+    const char *title);
+bool nb_wayland_server_associate_xwayland_serial(
+    struct nb_wayland_server *server,
+    uint64_t surface_serial,
     uint32_t xwindow,
     const char *title);
 bool nb_wayland_server_update_xwayland_title(

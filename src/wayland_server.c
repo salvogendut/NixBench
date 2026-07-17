@@ -5,6 +5,9 @@
 #ifndef NIXBENCH_HAS_WAYLAND_DECORATION
 #define NIXBENCH_HAS_WAYLAND_DECORATION 0
 #endif
+#ifndef NIXBENCH_HAS_XWAYLAND_SHELL
+#define NIXBENCH_HAS_XWAYLAND_SHELL 0
+#endif
 
 #include <errno.h>
 #include <fcntl.h>
@@ -22,6 +25,9 @@
 #include "xdg-shell-server-protocol.h"
 #if NIXBENCH_HAS_WAYLAND_DECORATION
 #include "xdg-decoration-unstable-v1-server-protocol.h"
+#endif
+#if NIXBENCH_HAS_XWAYLAND_SHELL
+#include "xwayland-shell-v1-server-protocol.h"
 #endif
 
 enum {
@@ -119,6 +125,9 @@ struct nb_wayland_surface {
     struct wl_resource *toplevel_resource;
     struct wl_resource *popup_resource;
     struct wl_resource *subsurface_resource;
+#if NIXBENCH_HAS_XWAYLAND_SHELL
+    struct wl_resource *xwayland_surface_resource;
+#endif
 #if NIXBENCH_HAS_WAYLAND_DECORATION
     struct wl_resource *decoration_resource;
 #endif
@@ -154,6 +163,9 @@ struct nb_wayland_surface {
     size_t ready_frame_count;
     nb_window_id window;
     uint32_t xwayland_window;
+    uint64_t pending_xwayland_serial;
+    uint64_t xwayland_serial;
+    bool pending_xwayland_serial_set;
     char title[NB_WINDOW_TITLE_CAPACITY];
     char app_id[NB_WINDOW_TITLE_CAPACITY];
     struct nb_wayland_application_menu *application_menu;
@@ -184,6 +196,9 @@ struct nb_wayland_server {
     struct wl_global *subcompositor_global;
 #if NIXBENCH_HAS_WAYLAND_DECORATION
     struct wl_global *decoration_manager_global;
+#endif
+#if NIXBENCH_HAS_XWAYLAND_SHELL
+    struct wl_global *xwayland_shell_global;
 #endif
     struct wl_global *xdg_wm_base_global;
     struct wl_global *application_menu_global;
@@ -222,6 +237,7 @@ struct nb_wayland_server {
     uint64_t next_popup_sequence;
     struct nb_wayland_xwayland_interface xwayland_interface;
     void *xwayland_context;
+    pid_t xwayland_client_pid;
     char display_name[NB_WAYLAND_DISPLAY_NAME_CAPACITY];
 };
 
@@ -240,6 +256,16 @@ static void bind_decoration_manager(struct wl_client *client,
                                     void *data,
                                     uint32_t version,
                                     uint32_t id);
+#endif
+#if NIXBENCH_HAS_XWAYLAND_SHELL
+static const struct xwayland_shell_v1_interface
+    xwayland_shell_implementation;
+static const struct xwayland_surface_v1_interface
+    xwayland_surface_implementation;
+static void bind_xwayland_shell(struct wl_client *client,
+                                void *data,
+                                uint32_t version,
+                                uint32_t id);
 #endif
 static const struct xdg_surface_interface xdg_surface_implementation;
 static const struct xdg_toplevel_interface toplevel_implementation;
@@ -470,6 +496,27 @@ static struct nb_wayland_surface *find_surface_by_xwayland_window(
         if (surface->occupied &&
             surface->role == NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL &&
             surface->xwayland_window == xwindow) {
+            return surface;
+        }
+    }
+    return NULL;
+}
+
+static struct nb_wayland_surface *find_surface_by_xwayland_serial(
+    struct nb_wayland_server *server,
+    uint64_t serial)
+{
+    size_t index;
+
+    if (serial == 0) {
+        return NULL;
+    }
+    for (index = 0; index < NB_WAYLAND_MAX_SURFACES; ++index) {
+        struct nb_wayland_surface *surface = &server->surfaces[index];
+
+        if (surface->occupied &&
+            surface->role == NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL &&
+            surface->xwayland_serial == serial) {
             return surface;
         }
     }
@@ -1722,6 +1769,9 @@ static void maybe_release_surface_slot(struct nb_wayland_surface *surface)
     if (surface->surface_resource != NULL ||
         surface->xdg_surface_resource != NULL ||
         surface->toplevel_resource != NULL ||
+#if NIXBENCH_HAS_XWAYLAND_SHELL
+        surface->xwayland_surface_resource != NULL ||
+#endif
         surface_has_overlay_role(surface)) {
         return;
     }
@@ -2051,6 +2101,11 @@ static void surface_commit(struct wl_client *client,
         wl_resource_get_user_data(resource);
 
     surface->committed_once = true;
+    if (surface->pending_xwayland_serial_set) {
+        surface->xwayland_serial = surface->pending_xwayland_serial;
+        surface->pending_xwayland_serial = 0;
+        surface->pending_xwayland_serial_set = false;
+    }
     if (surface->xdg_surface_resource != NULL &&
         !surface_has_xdg_role(surface)) {
         wl_resource_post_error(surface->xdg_surface_resource,
@@ -4570,6 +4625,152 @@ static void bind_application_menu_manager(struct wl_client *client,
                                    NULL);
 }
 
+#if NIXBENCH_HAS_XWAYLAND_SHELL
+static void xwayland_surface_resource_destroyed(
+    struct wl_resource *resource)
+{
+    struct nb_wayland_surface *surface =
+        wl_resource_get_user_data(resource);
+
+    if (surface == NULL || !surface->occupied) {
+        return;
+    }
+    surface->xwayland_surface_resource = NULL;
+    maybe_release_surface_slot(surface);
+}
+
+static void xwayland_surface_set_serial(struct wl_client *client,
+                                        struct wl_resource *resource,
+                                        uint32_t serial_lo,
+                                        uint32_t serial_hi)
+{
+    struct nb_wayland_surface *surface =
+        wl_resource_get_user_data(resource);
+    const uint64_t serial = (uint64_t)serial_lo |
+                            ((uint64_t)serial_hi << 32U);
+
+    (void)client;
+    if (serial == 0) {
+        wl_resource_post_error(
+            resource,
+            XWAYLAND_SURFACE_V1_ERROR_INVALID_SERIAL,
+            "xwayland surface serial must be non-zero");
+        return;
+    }
+    if (surface->xwayland_serial != 0) {
+        wl_resource_post_error(
+            resource,
+            XWAYLAND_SURFACE_V1_ERROR_ALREADY_ASSOCIATED,
+            "xwayland surface serial was already committed");
+        return;
+    }
+    surface->pending_xwayland_serial = serial;
+    surface->pending_xwayland_serial_set = true;
+}
+
+static void xwayland_surface_destroy(struct wl_client *client,
+                                     struct wl_resource *resource)
+{
+    (void)client;
+    wl_resource_destroy(resource);
+}
+
+static const struct xwayland_surface_v1_interface
+xwayland_surface_implementation = {
+    .set_serial = xwayland_surface_set_serial,
+    .destroy = xwayland_surface_destroy
+};
+
+static void xwayland_shell_destroy(struct wl_client *client,
+                                   struct wl_resource *resource)
+{
+    (void)client;
+    wl_resource_destroy(resource);
+}
+
+static void xwayland_shell_get_surface(struct wl_client *client,
+                                       struct wl_resource *resource,
+                                       uint32_t id,
+                                       struct wl_resource *surface_resource)
+{
+    struct nb_wayland_surface *surface;
+    struct wl_resource *role_resource;
+
+    if (surface_resource == NULL ||
+        wl_resource_get_client(surface_resource) != client ||
+        !wl_resource_instance_of(surface_resource,
+                                 &wl_surface_interface,
+                                 &surface_implementation)) {
+        wl_resource_post_error(resource,
+                               XWAYLAND_SHELL_V1_ERROR_ROLE,
+                               "invalid wl_surface for xwayland role");
+        return;
+    }
+    surface = wl_resource_get_user_data(surface_resource);
+    if (surface == NULL ||
+        surface->role != NB_WAYLAND_SURFACE_ROLE_NONE) {
+        wl_resource_post_error(resource,
+                               XWAYLAND_SHELL_V1_ERROR_ROLE,
+                               "wl_surface already has a role");
+        return;
+    }
+    role_resource = wl_resource_create(client,
+                                       &xwayland_surface_v1_interface,
+                                       1,
+                                       id);
+    if (role_resource == NULL) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    surface->role = NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL;
+    surface->xwayland_surface_resource = role_resource;
+    wl_resource_set_implementation(role_resource,
+                                   &xwayland_surface_implementation,
+                                   surface,
+                                   xwayland_surface_resource_destroyed);
+}
+
+static const struct xwayland_shell_v1_interface
+xwayland_shell_implementation = {
+    .destroy = xwayland_shell_destroy,
+    .get_xwayland_surface = xwayland_shell_get_surface
+};
+
+static void bind_xwayland_shell(struct wl_client *client,
+                                void *data,
+                                uint32_t version,
+                                uint32_t id)
+{
+    struct nb_wayland_server *server = data;
+    struct wl_resource *resource;
+    pid_t process = -1;
+    uid_t user = (uid_t)-1;
+    gid_t group = (gid_t)-1;
+
+    wl_client_get_credentials(client, &process, &user, &group);
+    resource = wl_resource_create(client,
+                                  &xwayland_shell_v1_interface,
+                                  protocol_version(version, 1),
+                                  id);
+    if (resource == NULL) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(resource,
+                                   &xwayland_shell_implementation,
+                                   server,
+                                   NULL);
+    if (server->xwayland_client_pid <= 0 ||
+        process != server->xwayland_client_pid) {
+        wl_resource_post_error(resource,
+                               XWAYLAND_SHELL_V1_ERROR_ROLE,
+                               "client is not the authorized Xwayland server");
+    }
+    (void)user;
+    (void)group;
+}
+#endif
+
 static bool menu_source_range_is_available(
     const struct nb_shell *shell,
     nb_menu_source_id first)
@@ -4670,6 +4871,14 @@ struct nb_wayland_server *nb_wayland_server_create(
         server,
         bind_decoration_manager);
 #endif
+#if NIXBENCH_HAS_XWAYLAND_SHELL
+    server->xwayland_shell_global = wl_global_create(
+        server->display,
+        &xwayland_shell_v1_interface,
+        1,
+        server,
+        bind_xwayland_shell);
+#endif
     server->seat_global = wl_global_create(server->display,
                                            &wl_seat_interface,
                                            NB_WAYLAND_SEAT_VERSION,
@@ -4698,6 +4907,9 @@ struct nb_wayland_server *nb_wayland_server_create(
         server->seat_global == NULL ||
         server->data_device_manager_global == NULL ||
         server->xdg_wm_base_global == NULL ||
+#if NIXBENCH_HAS_XWAYLAND_SHELL
+        server->xwayland_shell_global == NULL ||
+#endif
         server->application_menu_global == NULL) {
         wl_display_destroy(server->display);
         destroy_keyboard_state(server);
@@ -4970,21 +5182,25 @@ void nb_wayland_server_set_xwayland_interface(
     }
 }
 
-bool nb_wayland_server_associate_xwayland_surface(
+void nb_wayland_server_authorize_xwayland_client(
     struct nb_wayland_server *server,
-    uint32_t surface_resource_id,
+    pid_t process)
+{
+    if (server == NULL || server->destroying || process < 0) {
+        return;
+    }
+    server->xwayland_client_pid = process;
+}
+
+static bool associate_xwayland_surface(
+    struct nb_wayland_server *server,
+    struct nb_wayland_surface *surface,
     uint32_t xwindow,
     const char *title)
 {
-    struct nb_wayland_surface *surface;
-    struct nb_wayland_surface *existing;
+    struct nb_wayland_surface *existing =
+        find_surface_by_xwayland_window(server, xwindow);
 
-    if (server == NULL || server->destroying ||
-        surface_resource_id == 0 || xwindow == 0) {
-        return false;
-    }
-    surface = find_surface_by_resource_id(server, surface_resource_id);
-    existing = find_surface_by_xwayland_window(server, xwindow);
     if (surface == NULL ||
         (existing != NULL && existing != surface) ||
         (surface->role != NB_WAYLAND_SURFACE_ROLE_NONE &&
@@ -5011,6 +5227,38 @@ bool nb_wayland_server_associate_xwayland_surface(
     }
     server->redraw_pending = true;
     return true;
+}
+
+bool nb_wayland_server_associate_xwayland_surface(
+    struct nb_wayland_server *server,
+    uint32_t surface_resource_id,
+    uint32_t xwindow,
+    const char *title)
+{
+    struct nb_wayland_surface *surface;
+
+    if (server == NULL || server->destroying ||
+        surface_resource_id == 0 || xwindow == 0) {
+        return false;
+    }
+    surface = find_surface_by_resource_id(server, surface_resource_id);
+    return associate_xwayland_surface(server, surface, xwindow, title);
+}
+
+bool nb_wayland_server_associate_xwayland_serial(
+    struct nb_wayland_server *server,
+    uint64_t surface_serial,
+    uint32_t xwindow,
+    const char *title)
+{
+    struct nb_wayland_surface *surface;
+
+    if (server == NULL || server->destroying ||
+        surface_serial == 0 || xwindow == 0) {
+        return false;
+    }
+    surface = find_surface_by_xwayland_serial(server, surface_serial);
+    return associate_xwayland_surface(server, surface, xwindow, title);
 }
 
 bool nb_wayland_server_update_xwayland_title(

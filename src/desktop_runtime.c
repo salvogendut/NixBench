@@ -1779,6 +1779,45 @@ bool nb_desktop_runtime_associate_xwayland_surface(
 #endif
 }
 
+bool nb_desktop_runtime_authorize_xwayland_client(
+    struct nb_desktop_runtime *runtime,
+    pid_t process)
+{
+#if NIXBENCH_HAS_WAYLAND
+    if (runtime == NULL || runtime->wayland == NULL || process < 0) {
+        return false;
+    }
+    nb_wayland_server_authorize_xwayland_client(runtime->wayland, process);
+    return true;
+#else
+    (void)runtime;
+    (void)process;
+    return false;
+#endif
+}
+
+bool nb_desktop_runtime_associate_xwayland_serial(
+    struct nb_desktop_runtime *runtime,
+    uint64_t surface_serial,
+    uint32_t xwindow,
+    const char *title)
+{
+#if NIXBENCH_HAS_WAYLAND
+    return runtime != NULL && runtime->wayland != NULL &&
+           nb_wayland_server_associate_xwayland_serial(
+               runtime->wayland,
+               surface_serial,
+               xwindow,
+               title);
+#else
+    (void)runtime;
+    (void)surface_serial;
+    (void)xwindow;
+    (void)title;
+    return false;
+#endif
+}
+
 bool nb_desktop_runtime_update_xwayland_title(
     struct nb_desktop_runtime *runtime,
     uint32_t xwindow,

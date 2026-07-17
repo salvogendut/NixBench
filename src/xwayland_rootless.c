@@ -36,6 +36,7 @@ enum {
 struct nb_xwayland_window {
     xcb_window_t window;
     uint32_t surface_id;
+    uint64_t surface_serial;
     bool occupied;
     bool associated;
     bool association_pending_reported;
@@ -48,6 +49,7 @@ struct nb_xwayland_rootless {
     xcb_screen_t *screen;
     pid_t process;
     xcb_atom_t wl_surface_id;
+    xcb_atom_t wl_surface_serial;
     xcb_atom_t net_wm_name;
     xcb_atom_t utf8_string;
     xcb_atom_t wm_name;
@@ -331,27 +333,52 @@ static void refresh_window_title(struct nb_xwayland_rootless *service,
 static void try_associate_window(struct nb_xwayland_rootless *service,
                                  struct nb_xwayland_window *entry)
 {
-    if (entry->associated || entry->surface_id == 0) {
+    if (entry->associated ||
+        (entry->surface_serial == 0 && entry->surface_id == 0)) {
         return;
     }
     refresh_window_title(service, entry);
-    entry->associated = nb_desktop_runtime_associate_xwayland_surface(
-        service->desktop,
-        entry->surface_id,
-        entry->window,
-        entry->title);
+    if (entry->surface_serial != 0) {
+        entry->associated = nb_desktop_runtime_associate_xwayland_serial(
+            service->desktop,
+            entry->surface_serial,
+            entry->window,
+            entry->title);
+    } else {
+        entry->associated = nb_desktop_runtime_associate_xwayland_surface(
+            service->desktop,
+            entry->surface_id,
+            entry->window,
+            entry->title);
+    }
     if (entry->associated) {
-        fprintf(stderr,
-                "Rootless XWM associated X window %#x with Wayland "
-                "surface %u\n",
-                (unsigned int)entry->window,
-                entry->surface_id);
+        if (entry->surface_serial != 0) {
+            fprintf(stderr,
+                    "Rootless XWM associated X window %#x with Wayland "
+                    "surface serial %llu\n",
+                    (unsigned int)entry->window,
+                    (unsigned long long)entry->surface_serial);
+        } else {
+            fprintf(stderr,
+                    "Rootless XWM associated X window %#x with Wayland "
+                    "surface %u\n",
+                    (unsigned int)entry->window,
+                    entry->surface_id);
+        }
     } else if (!entry->association_pending_reported) {
-        fprintf(stderr,
-                "Rootless XWM is waiting for Wayland surface %u for X "
-                "window %#x\n",
-                entry->surface_id,
-                (unsigned int)entry->window);
+        if (entry->surface_serial != 0) {
+            fprintf(stderr,
+                    "Rootless XWM is waiting for Wayland surface serial "
+                    "%llu for X window %#x\n",
+                    (unsigned long long)entry->surface_serial,
+                    (unsigned int)entry->window);
+        } else {
+            fprintf(stderr,
+                    "Rootless XWM is waiting for Wayland surface %u for X "
+                    "window %#x\n",
+                    entry->surface_id,
+                    (unsigned int)entry->window);
+        }
         entry->association_pending_reported = true;
     }
 }
@@ -523,6 +550,9 @@ static bool initialize_xwm(struct nb_xwayland_rootless *service)
     service->wl_surface_id = intern_atom(service->connection,
                                          "WL_SURFACE_ID",
                                          false);
+    service->wl_surface_serial = intern_atom(service->connection,
+                                             "WL_SURFACE_SERIAL",
+                                             false);
     service->net_wm_name = intern_atom(service->connection,
                                        "_NET_WM_NAME",
                                        false);
@@ -582,6 +612,7 @@ static bool initialize_xwm(struct nb_xwayland_rootless *service)
     }
     free(selection_reply);
     return service->wl_surface_id != XCB_ATOM_NONE &&
+           service->wl_surface_serial != XCB_ATOM_NONE &&
            service->wm_protocols != XCB_ATOM_NONE &&
            service->wm_delete_window != XCB_ATOM_NONE &&
            xcb_flush(service->connection) > 0;
@@ -743,6 +774,11 @@ struct nb_xwayland_rootless *nb_xwayland_rootless_create(
         _exit(127);
     }
     service->process = child;
+    if (!nb_desktop_runtime_authorize_xwayland_client(desktop, child)) {
+        fputs("Could not authorize the rootless Xwayland Wayland client\n",
+              stderr);
+        goto fail;
+    }
     (void)close(wm_sockets[1]);
     wm_sockets[1] = -1;
     (void)close(listen_descriptor);
@@ -795,6 +831,8 @@ void nb_xwayland_rootless_destroy(struct nb_xwayland_rootless *service)
         (void)nb_desktop_runtime_set_xwayland_interface(service->desktop,
                                                         NULL,
                                                         NULL);
+        (void)nb_desktop_runtime_authorize_xwayland_client(service->desktop,
+                                                           0);
     }
     if (service->connector_running) {
         stop_xwayland(service);
@@ -942,7 +980,25 @@ bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service)
             const xcb_client_message_event_t *message =
                 (const xcb_client_message_event_t *)event;
 
-            if (message->type == service->wl_surface_id &&
+            if (message->type == service->wl_surface_serial &&
+                message->format == 32 &&
+                (message->data.data32[0] != 0 ||
+                 message->data.data32[1] != 0)) {
+                struct nb_xwayland_window *entry =
+                    remember_window(service, message->window);
+
+                if (entry != NULL) {
+                    entry->surface_serial =
+                        (uint64_t)message->data.data32[0] |
+                        ((uint64_t)message->data.data32[1] << 32U);
+                    fprintf(stderr,
+                            "Rootless XWM received WL_SURFACE_SERIAL %llu "
+                            "for X window %#x\n",
+                            (unsigned long long)entry->surface_serial,
+                            (unsigned int)entry->window);
+                    try_associate_window(service, entry);
+                }
+            } else if (message->type == service->wl_surface_id &&
                 message->format == 32 && message->data.data32[0] != 0) {
                 struct nb_xwayland_window *entry =
                     remember_window(service, message->window);

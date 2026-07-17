@@ -221,6 +221,13 @@ if(NOT NIXBENCH_WAYLAND STREQUAL "OFF")
       share/qt6/wayland/protocols/xdg-decoration
       qt6/wayland/protocols/xdg-decoration
   )
+  find_file(
+    NIXBENCH_XWAYLAND_SHELL_XML
+    NAMES xwayland-shell-v1.xml
+    PATH_SUFFIXES
+      share/wayland-protocols/staging/xwayland-shell
+      wayland-protocols/staging/xwayland-shell
+  )
 
   set(_nixbench_wayland_missing)
   if(NOT NIXBENCH_WAYLAND_SERVER_INCLUDE_DIR)
@@ -269,6 +276,16 @@ if(NOT NIXBENCH_WAYLAND STREQUAL "OFF")
   else()
     set(NIXBENCH_WAYLAND_DECORATION_ENABLED FALSE)
     message(STATUS "Wayland xdg-decoration support unavailable")
+  endif()
+  if(NIXBENCH_XWAYLAND_SHELL_XML)
+    set(NIXBENCH_XWAYLAND_SHELL_ENABLED TRUE)
+    message(
+      STATUS
+      "Wayland xwayland-shell support enabled (${NIXBENCH_XWAYLAND_SHELL_XML})"
+    )
+  else()
+    set(NIXBENCH_XWAYLAND_SHELL_ENABLED FALSE)
+    message(STATUS "Wayland xwayland-shell support unavailable")
   endif()
 endif()
 
@@ -331,6 +348,16 @@ if(NIXBENCH_WAYLAND_ENABLED)
       "${NIXBENCH_WAYLAND_GENERATED_DIR}/xdg-decoration-unstable-v1-protocol.c"
     )
   endif()
+  if(NIXBENCH_XWAYLAND_SHELL_ENABLED)
+    set(
+      NIXBENCH_XWAYLAND_SHELL_SERVER_HEADER
+      "${NIXBENCH_WAYLAND_GENERATED_DIR}/xwayland-shell-v1-server-protocol.h"
+    )
+    set(
+      NIXBENCH_XWAYLAND_SHELL_PRIVATE_CODE
+      "${NIXBENCH_WAYLAND_GENERATED_DIR}/xwayland-shell-v1-protocol.c"
+    )
+  endif()
 
   add_custom_command(
     OUTPUT
@@ -380,6 +407,9 @@ if(NIXBENCH_WAYLAND_ENABLED)
         "${NIXBENCH_XDG_DECORATION_SERVER_HEADER}"
         "${NIXBENCH_XDG_DECORATION_PRIVATE_CODE}"
       COMMAND
+        "${CMAKE_COMMAND}" -E make_directory
+        "${NIXBENCH_WAYLAND_GENERATED_DIR}"
+      COMMAND
         "${NIXBENCH_WAYLAND_SCANNER}" --strict server-header
         "${NIXBENCH_XDG_DECORATION_XML}"
         "${NIXBENCH_XDG_DECORATION_SERVER_HEADER}"
@@ -391,6 +421,35 @@ if(NIXBENCH_WAYLAND_ENABLED)
         "${NIXBENCH_XDG_DECORATION_XML}"
       COMMENT "Generating the Wayland xdg-decoration bindings"
       VERBATIM
+    )
+  endif()
+
+  if(NIXBENCH_XWAYLAND_SHELL_ENABLED)
+    add_custom_command(
+      OUTPUT
+        "${NIXBENCH_XWAYLAND_SHELL_SERVER_HEADER}"
+        "${NIXBENCH_XWAYLAND_SHELL_PRIVATE_CODE}"
+      COMMAND
+        "${CMAKE_COMMAND}" -E make_directory
+        "${NIXBENCH_WAYLAND_GENERATED_DIR}"
+      COMMAND
+        "${NIXBENCH_WAYLAND_SCANNER}" --strict server-header
+        "${NIXBENCH_XWAYLAND_SHELL_XML}"
+        "${NIXBENCH_XWAYLAND_SHELL_SERVER_HEADER}"
+      COMMAND
+        "${NIXBENCH_WAYLAND_SCANNER}" --strict private-code
+        "${NIXBENCH_XWAYLAND_SHELL_XML}"
+        "${NIXBENCH_XWAYLAND_SHELL_PRIVATE_CODE}"
+      DEPENDS
+        "${NIXBENCH_XWAYLAND_SHELL_XML}"
+      COMMENT "Generating the Wayland xwayland-shell bindings"
+      VERBATIM
+    )
+    add_custom_target(
+      nixbench_xwayland_shell_protocol
+      DEPENDS
+        "${NIXBENCH_XWAYLAND_SHELL_SERVER_HEADER}"
+        "${NIXBENCH_XWAYLAND_SHELL_PRIVATE_CODE}"
     )
   endif()
 
@@ -417,6 +476,13 @@ if(NIXBENCH_WAYLAND_ENABLED)
       PRIVATE "${NIXBENCH_XDG_DECORATION_PRIVATE_CODE}"
     )
   endif()
+  if(NIXBENCH_XWAYLAND_SHELL_ENABLED)
+    target_sources(
+      nixbench_wayland
+      PRIVATE "${NIXBENCH_XWAYLAND_SHELL_PRIVATE_CODE}"
+    )
+    add_dependencies(nixbench_wayland nixbench_xwayland_shell_protocol)
+  endif()
   add_dependencies(nixbench_wayland nixbench_wayland_protocol)
   target_include_directories(
     nixbench_wayland
@@ -440,6 +506,17 @@ if(NIXBENCH_WAYLAND_ENABLED)
     target_compile_definitions(
       nixbench_wayland
       PRIVATE NIXBENCH_HAS_WAYLAND_DECORATION=0
+    )
+  endif()
+  if(NIXBENCH_XWAYLAND_SHELL_ENABLED)
+    target_compile_definitions(
+      nixbench_wayland
+      PRIVATE NIXBENCH_HAS_XWAYLAND_SHELL=1
+    )
+  else()
+    target_compile_definitions(
+      nixbench_wayland
+      PRIVATE NIXBENCH_HAS_XWAYLAND_SHELL=0
     )
   endif()
   nixbench_configure_c_target(nixbench_wayland)

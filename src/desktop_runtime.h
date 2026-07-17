@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #include "desktop.h"
 #include "host.h"
@@ -144,9 +145,17 @@ bool nb_desktop_runtime_set_xwayland_interface(
     struct nb_desktop_runtime *runtime,
     const struct nb_desktop_xwayland_interface *interface,
     void *context);
+bool nb_desktop_runtime_authorize_xwayland_client(
+    struct nb_desktop_runtime *runtime,
+    pid_t process);
 bool nb_desktop_runtime_associate_xwayland_surface(
     struct nb_desktop_runtime *runtime,
     uint32_t surface_resource_id,
+    uint32_t xwindow,
+    const char *title);
+bool nb_desktop_runtime_associate_xwayland_serial(
+    struct nb_desktop_runtime *runtime,
+    uint64_t surface_serial,
     uint32_t xwindow,
     const char *title);
 bool nb_desktop_runtime_update_xwayland_title(
