@@ -360,6 +360,7 @@ static void test_console_sized_diagonal_gradient(void)
     SDL_Surface *surface =
         SDL_CreateSurface(width, height, SDL_PIXELFORMAT_XRGB8888);
     SDL_Renderer *renderer = NULL;
+    struct nb_backdrop_cache *cache = NULL;
     struct nb_user_preferences preferences;
     const struct nb_rect viewport = {0, 0, width, height};
     int frame;
@@ -374,6 +375,13 @@ static void test_console_sized_diagonal_gradient(void)
         SDL_DestroySurface(surface);
         return;
     }
+    cache = nb_backdrop_cache_create();
+    CHECK(cache != NULL);
+    if (cache == NULL) {
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroySurface(surface);
+        return;
+    }
     nb_user_preferences_init(&preferences);
     preferences.backdrop_primary = (struct nb_color){24, 54, 76};
     preferences.backdrop_secondary = (struct nb_color){142, 47, 39};
@@ -382,7 +390,10 @@ static void test_console_sized_diagonal_gradient(void)
         NB_BACKDROP_GRADIENT_DIAGONAL;
 
     for (frame = 0; frame < 32; ++frame) {
-        CHECK(nb_backdrop_render(renderer, viewport, &preferences));
+        CHECK(nb_backdrop_cache_render(cache,
+                                       renderer,
+                                       viewport,
+                                       &preferences));
         CHECK(SDL_RenderPresent(renderer));
     }
     CHECK(pixel_near(surface, 0, 0, 24, 54, 76, 1));
@@ -394,6 +405,28 @@ static void test_console_sized_diagonal_gradient(void)
                      39,
                      1));
 
+    preferences.backdrop_secondary = (struct nb_color){40, 80, 120};
+    CHECK(nb_backdrop_cache_render(cache,
+                                   renderer,
+                                   viewport,
+                                   &preferences));
+    CHECK(SDL_RenderPresent(renderer));
+    CHECK(pixel_near(surface,
+                     width - 1,
+                     height - 1,
+                     40,
+                     80,
+                     120,
+                     1));
+
+    nb_backdrop_cache_invalidate(cache);
+    CHECK(nb_backdrop_cache_render(cache,
+                                   renderer,
+                                   viewport,
+                                   &preferences));
+    CHECK(SDL_RenderPresent(renderer));
+
+    nb_backdrop_cache_destroy(cache);
     SDL_DestroyRenderer(renderer);
     SDL_DestroySurface(surface);
 }

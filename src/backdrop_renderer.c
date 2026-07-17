@@ -1,6 +1,18 @@
 #include "backdrop_renderer.h"
 
 #include <stdint.h>
+#include <stdlib.h>
+
+struct nb_backdrop_cache {
+    SDL_Texture *texture;
+    SDL_Renderer *renderer;
+    int width;
+    int height;
+    struct nb_color primary;
+    struct nb_color secondary;
+    bool gradient_enabled;
+    enum nb_backdrop_gradient_direction gradient_direction;
+};
 
 static Uint8 interpolate(Uint8 first,
                          Uint8 second,
@@ -196,4 +208,129 @@ bool nb_backdrop_render(SDL_Renderer *renderer,
         return render_diagonal(renderer, viewport, preferences);
     }
     return false;
+}
+
+struct nb_backdrop_cache *nb_backdrop_cache_create(void)
+{
+    return calloc(1, sizeof(struct nb_backdrop_cache));
+}
+
+void nb_backdrop_cache_invalidate(struct nb_backdrop_cache *cache)
+{
+    if (cache == NULL) {
+        return;
+    }
+    SDL_DestroyTexture(cache->texture);
+    cache->texture = NULL;
+    cache->renderer = NULL;
+    cache->width = 0;
+    cache->height = 0;
+}
+
+void nb_backdrop_cache_destroy(struct nb_backdrop_cache *cache)
+{
+    if (cache == NULL) {
+        return;
+    }
+    nb_backdrop_cache_invalidate(cache);
+    free(cache);
+}
+
+static bool cache_matches(
+    const struct nb_backdrop_cache *cache,
+    SDL_Renderer *renderer,
+    struct nb_rect viewport,
+    const struct nb_user_preferences *preferences)
+{
+    return cache->texture != NULL && cache->renderer == renderer &&
+           cache->width == viewport.width &&
+           cache->height == viewport.height &&
+           nb_color_equal(cache->primary, preferences->backdrop_primary) &&
+           nb_color_equal(cache->secondary,
+                          preferences->backdrop_secondary) &&
+           cache->gradient_enabled ==
+               preferences->backdrop_gradient_enabled &&
+           cache->gradient_direction ==
+               preferences->backdrop_gradient_direction;
+}
+
+static bool rebuild_cache(
+    struct nb_backdrop_cache *cache,
+    SDL_Renderer *renderer,
+    struct nb_rect viewport,
+    const struct nb_user_preferences *preferences)
+{
+    SDL_Surface *surface = NULL;
+    SDL_Renderer *surface_renderer = NULL;
+    SDL_Texture *texture = NULL;
+    const struct nb_rect local_viewport = {
+        0,
+        0,
+        viewport.width,
+        viewport.height
+    };
+    bool rendered = false;
+
+    surface = SDL_CreateSurface(viewport.width,
+                                viewport.height,
+                                SDL_PIXELFORMAT_XRGB8888);
+    if (surface != NULL) {
+        surface_renderer = SDL_CreateSoftwareRenderer(surface);
+    }
+    if (surface_renderer != NULL &&
+        nb_backdrop_render(surface_renderer,
+                           local_viewport,
+                           preferences) &&
+        SDL_RenderPresent(surface_renderer)) {
+        texture = SDL_CreateTextureFromSurface(renderer, surface);
+    }
+    if (texture != NULL &&
+        SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_NONE)) {
+        SDL_DestroyTexture(cache->texture);
+        cache->texture = texture;
+        cache->renderer = renderer;
+        cache->width = viewport.width;
+        cache->height = viewport.height;
+        cache->primary = preferences->backdrop_primary;
+        cache->secondary = preferences->backdrop_secondary;
+        cache->gradient_enabled =
+            preferences->backdrop_gradient_enabled;
+        cache->gradient_direction =
+            preferences->backdrop_gradient_direction;
+        texture = NULL;
+        rendered = true;
+    }
+
+    SDL_DestroyTexture(texture);
+    SDL_DestroyRenderer(surface_renderer);
+    SDL_DestroySurface(surface);
+    return rendered;
+}
+
+bool nb_backdrop_cache_render(
+    struct nb_backdrop_cache *cache,
+    SDL_Renderer *renderer,
+    struct nb_rect viewport,
+    const struct nb_user_preferences *preferences)
+{
+    const SDL_FRect destination = {
+        (float)viewport.x,
+        (float)viewport.y,
+        (float)viewport.width,
+        (float)viewport.height
+    };
+
+    if (cache == NULL || renderer == NULL || viewport.width <= 0 ||
+        viewport.height <= 0 ||
+        !nb_user_preferences_is_valid(preferences)) {
+        return false;
+    }
+    if (!cache_matches(cache, renderer, viewport, preferences) &&
+        !rebuild_cache(cache, renderer, viewport, preferences)) {
+        return false;
+    }
+    return SDL_RenderTexture(renderer,
+                             cache->texture,
+                             NULL,
+                             &destination);
 }

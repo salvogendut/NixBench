@@ -139,6 +139,7 @@ struct nb_desktop_runtime {
     struct nb_application_host applications;
     struct nb_nixinfo nixinfo;
     struct nb_software_canvas *canvas;
+    struct nb_backdrop_cache *backdrop_cache;
     struct nb_host_output output;
     struct nb_rect viewport;
     nb_application_id nixinfo_application;
@@ -1336,6 +1337,11 @@ struct nb_desktop_runtime *nb_desktop_runtime_create(
     runtime->settings_window = NB_WINDOW_ID_NONE;
     runtime->settings_color_target = NB_SETTINGS_COLOR_PRIMARY;
     runtime->nixinfo_application = NB_APPLICATION_ID_NONE;
+    runtime->backdrop_cache = nb_backdrop_cache_create();
+    if (runtime->backdrop_cache == NULL) {
+        free(runtime);
+        return NULL;
+    }
     nb_user_preferences_init(&runtime->preferences);
     if (options->preferences != NULL) {
         runtime->preferences = *options->preferences;
@@ -1350,6 +1356,7 @@ struct nb_desktop_runtime *nb_desktop_runtime_create(
     rebuild_launcher_menu(runtime);
     if (!nb_application_host_init(&runtime->applications,
                                   &runtime->shell)) {
+        nb_backdrop_cache_destroy(runtime->backdrop_cache);
         free(runtime);
         return NULL;
     }
@@ -1393,6 +1400,8 @@ void nb_desktop_runtime_destroy(struct nb_desktop_runtime *runtime)
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "Could not stop NixInfo cleanly");
     }
+    nb_backdrop_cache_destroy(runtime->backdrop_cache);
+    runtime->backdrop_cache = NULL;
     nb_software_canvas_destroy(runtime->canvas);
     runtime->canvas = NULL;
     free(runtime);
@@ -1438,6 +1447,7 @@ bool nb_desktop_runtime_set_output(
     }
 #endif
     cancel_pointer_input(runtime, 0);
+    nb_backdrop_cache_invalidate(runtime->backdrop_cache);
     nb_software_canvas_destroy(runtime->canvas);
     runtime->canvas = canvas;
     runtime->output = *output;
@@ -1608,9 +1618,10 @@ bool nb_desktop_runtime_render(
     }
     renderer = nb_software_canvas_renderer(runtime->canvas);
     if (renderer == NULL ||
-        !nb_backdrop_render(renderer,
-                            runtime->viewport,
-                            &runtime->preferences) ||
+        !nb_backdrop_cache_render(runtime->backdrop_cache,
+                                  renderer,
+                                  runtime->viewport,
+                                  &runtime->preferences) ||
         !nb_shell_render_with_content(renderer,
                                       &runtime->shell,
                                       runtime->viewport,
