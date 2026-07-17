@@ -30,6 +30,7 @@ Environment:
   NIXBENCH_GTK_MENU_BRIDGE  Export GTK3 application menus (default: 1)
   NIXBENCH_XWAYLAND_ROOTLESS Start the rootless X11 compatibility service
                             when Xwayland is installed (default: 1)
+  NIXBENCH_XWAYLAND          Override the absolute Xwayland executable path
   NIXBENCH_VT_AWAY          One-based VT used by the lifecycle test
 EOF
         exit 0

@@ -781,6 +781,9 @@ _Noreturn void nb_session_credentials_drop_and_exec(
     const char *xwayland_rootless = getenv("NIXBENCH_XWAYLAND_ROOTLESS");
     const bool enable_xwayland_rootless =
         xwayland_rootless != NULL && strcmp(xwayland_rootless, "1") == 0;
+    const char *xwayland = getenv("NIXBENCH_XWAYLAND");
+    const bool preserve_xwayland =
+        enable_xwayland_rootless && xwayland != NULL && xwayland[0] == '/';
     const char *trace_wayland = getenv("NIXBENCH_TRACE_WAYLAND");
     const bool enable_wayland_trace =
         trace_wayland != NULL && strcmp(trace_wayland, "1") == 0;
@@ -793,11 +796,12 @@ _Noreturn void nb_session_credentials_drop_and_exec(
     char gtk_menu_bridge_environment[] = "NIXBENCH_GTK_MENU_BRIDGE=1";
     char xwayland_rootless_environment[] =
         "NIXBENCH_XWAYLAND_ROOTLESS=1";
+    char xwayland_environment[NB_SESSION_CREDENTIALS_PATH_CAPACITY + 20];
     char trace_wayland_environment[] = "NIXBENCH_TRACE_WAYLAND=1";
     struct nb_session_group_list expected_groups;
     size_t environment_count = 0;
     int ipc_environment_length;
-    char *environment[10];
+    char *environment[11];
 
     if (!credential_record_is_valid(credentials) || core_path == NULL ||
         core_path[0] != '/' || core_argv == NULL || core_argv[0] == NULL ||
@@ -951,6 +955,17 @@ _Noreturn void nb_session_credentials_drop_and_exec(
     }
     if (enable_xwayland_rootless) {
         environment[environment_count++] = xwayland_rootless_environment;
+    }
+    if (preserve_xwayland) {
+        if (!append_environment(xwayland_environment,
+                                sizeof(xwayland_environment),
+                                "NIXBENCH_XWAYLAND",
+                                xwayland)) {
+            child_failure(NB_SESSION_CREDENTIALS_SETUP_EXIT,
+                          "could not preserve the Xwayland override",
+                          EOVERFLOW);
+        }
+        environment[environment_count++] = xwayland_environment;
     }
     if (enable_wayland_trace) {
         environment[environment_count++] = trace_wayland_environment;

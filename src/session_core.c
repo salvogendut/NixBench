@@ -1045,6 +1045,7 @@ static bool dispatch_desktop(struct nb_session_core *core)
 #if NIXBENCH_HAS_ROOTLESS_XWAYLAND
 static const char *resolve_xwayland_path(void)
 {
+    const char *override = getenv("NIXBENCH_XWAYLAND");
     static const char *const candidates[] = {
         "/usr/pkg/bin/Xwayland",
         "/usr/X11R7/bin/Xwayland",
@@ -1053,6 +1054,16 @@ static const char *resolve_xwayland_path(void)
     };
     size_t index;
 
+    if (override != NULL) {
+        if (override[0] != '/' || access(override, X_OK) != 0) {
+            fprintf(stderr,
+                    "NIXBENCH_XWAYLAND does not name an executable absolute "
+                    "path: %s\n",
+                    override);
+            return NULL;
+        }
+        return override;
+    }
     for (index = 0; index < sizeof(candidates) / sizeof(candidates[0]);
          ++index) {
         if (access(candidates[index], X_OK) == 0) {
