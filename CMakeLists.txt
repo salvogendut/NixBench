@@ -891,6 +891,7 @@ if(UNIX AND NIXBENCH_WAYLAND_ENABLED)
     AND NIXBENCH_XCB_LIBRARY
     AND NIXBENCH_XCB_COMPOSITE_LIBRARY
   )
+    find_package(Threads REQUIRED)
     set(NIXBENCH_ROOTLESS_XWAYLAND_AVAILABLE TRUE)
     add_library(nixbench_xwayland_rootless STATIC src/xwayland_rootless.c)
     target_include_directories(
@@ -902,6 +903,7 @@ if(UNIX AND NIXBENCH_WAYLAND_ENABLED)
       nixbench_xwayland_rootless
       PRIVATE
         nixbench_desktop_runtime
+        Threads::Threads
         "${NIXBENCH_XCB_COMPOSITE_LIBRARY}"
         "${NIXBENCH_XCB_LIBRARY}"
     )

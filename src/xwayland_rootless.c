@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -51,6 +52,11 @@ struct nb_xwayland_rootless {
     xcb_atom_t wm_name;
     xcb_atom_t wm_protocols;
     xcb_atom_t wm_delete_window;
+    xcb_connection_t *pending_connection;
+    pthread_t connector_thread;
+    int startup_pipe[2];
+    int connector_descriptor;
+    bool connector_running;
     bool ready;
     char display_name[16];
     char socket_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
@@ -86,6 +92,22 @@ static bool suppress_socket_sigpipe(int descriptor)
     (void)descriptor;
     return true;
 #endif
+}
+
+static void *connect_xwm(void *context)
+{
+    struct nb_xwayland_rootless *service = context;
+    const char notification = 'X';
+    ssize_t written;
+
+    service->pending_connection =
+        xcb_connect_to_fd(service->connector_descriptor, NULL);
+    do {
+        written = write(service->startup_pipe[1],
+                        &notification,
+                        sizeof(notification));
+    } while (written < 0 && errno == EINTR);
+    return NULL;
 }
 
 static int create_listen_socket(char *path,
@@ -605,6 +627,9 @@ struct nb_xwayland_rootless *nb_xwayland_rootless_create(
     }
     service->desktop = desktop;
     service->process = -1;
+    service->startup_pipe[0] = -1;
+    service->startup_pipe[1] = -1;
+    service->connector_descriptor = -1;
     listen_descriptor = create_listen_socket(service->socket_path,
                                              sizeof(service->socket_path),
                                              service->display_name,
@@ -656,11 +681,28 @@ struct nb_xwayland_rootless *nb_xwayland_rootless_create(
     wm_sockets[1] = -1;
     (void)close(listen_descriptor);
     listen_descriptor = -1;
-    service->connection = xcb_connect_to_fd(wm_sockets[0], NULL);
-    wm_sockets[0] = -1;
-    if (service->connection == NULL) {
+    if (pipe(service->startup_pipe) != 0 ||
+        !set_close_on_exec(service->startup_pipe[0], true) ||
+        !set_close_on_exec(service->startup_pipe[1], true)) {
         goto fail;
     }
+    service->connector_descriptor = wm_sockets[0];
+    {
+        const int thread_error = pthread_create(&service->connector_thread,
+                                                NULL,
+                                                connect_xwm,
+                                                service);
+
+        if (thread_error != 0) {
+            fprintf(stderr,
+                    "Could not create the rootless XWM connector: %s\n",
+                    strerror(thread_error));
+            service->connector_descriptor = -1;
+            goto fail;
+        }
+    }
+    service->connector_running = true;
+    wm_sockets[0] = -1;
     return service;
 
 fail:
@@ -688,11 +730,27 @@ void nb_xwayland_rootless_destroy(struct nb_xwayland_rootless *service)
                                                         NULL,
                                                         NULL);
     }
+    if (service->connector_running) {
+        stop_xwayland(service);
+        (void)pthread_join(service->connector_thread, NULL);
+        service->connector_running = false;
+        service->connector_descriptor = -1;
+    }
+    if (service->pending_connection != NULL) {
+        xcb_disconnect(service->pending_connection);
+        service->pending_connection = NULL;
+    }
     if (service->connection != NULL) {
         xcb_disconnect(service->connection);
         service->connection = NULL;
     }
     stop_xwayland(service);
+    if (service->startup_pipe[0] >= 0) {
+        (void)close(service->startup_pipe[0]);
+    }
+    if (service->startup_pipe[1] >= 0) {
+        (void)close(service->startup_pipe[1]);
+    }
     if (service->socket_path[0] != '\0') {
         (void)unlink(service->socket_path);
     }
@@ -706,13 +764,58 @@ bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service)
     pid_t child_result;
     size_t index;
 
-    if (service == NULL || service->connection == NULL) {
+    if (service == NULL) {
         return false;
     }
     if (!service->ready) {
-        struct pollfd descriptor;
         struct nb_desktop_xwayland_interface interface;
-        int poll_result;
+
+        if (service->connection == NULL) {
+            struct pollfd descriptor;
+            char notification;
+            ssize_t received;
+            int poll_result;
+
+            memset(&descriptor, 0, sizeof(descriptor));
+            descriptor.fd = service->startup_pipe[0];
+            descriptor.events = POLLIN;
+            poll_result = poll(&descriptor, 1, 0);
+            if (poll_result < 0) {
+                if (errno == EINTR) {
+                    return true;
+                }
+                fprintf(stderr,
+                        "Could not poll rootless XWM connector: %s\n",
+                        strerror(errno));
+                return false;
+            }
+            if (poll_result == 0) {
+                return true;
+            }
+            do {
+                received = read(service->startup_pipe[0],
+                                &notification,
+                                sizeof(notification));
+            } while (received < 0 && errno == EINTR);
+            if (received <= 0 ||
+                pthread_join(service->connector_thread, NULL) != 0) {
+                fputs("Rootless XWM connector did not complete\n", stderr);
+                return false;
+            }
+            service->connector_running = false;
+            service->connector_descriptor = -1;
+            (void)close(service->startup_pipe[0]);
+            (void)close(service->startup_pipe[1]);
+            service->startup_pipe[0] = -1;
+            service->startup_pipe[1] = -1;
+            service->connection = service->pending_connection;
+            service->pending_connection = NULL;
+            if (service->connection == NULL) {
+                fputs("Rootless XWM connector returned no connection\n",
+                      stderr);
+                return false;
+            }
+        }
 
         child_result = waitpid(service->process, &child_status, WNOHANG);
         if (child_result == service->process) {
@@ -733,29 +836,6 @@ bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service)
         if (xcb_connection_has_error(service->connection) != 0) {
             report_startup_failure(service);
             return false;
-        }
-        memset(&descriptor, 0, sizeof(descriptor));
-        descriptor.fd = xcb_get_file_descriptor(service->connection);
-        descriptor.events = POLLIN;
-        poll_result = poll(&descriptor, 1, 0);
-        if (poll_result < 0) {
-            if (errno == EINTR) {
-                return true;
-            }
-            fprintf(stderr,
-                    "Could not poll the rootless XWM startup socket: %s\n",
-                    strerror(errno));
-            return false;
-        }
-        if (poll_result == 0) {
-            return true;
-        }
-        if ((descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
-            report_startup_failure(service);
-            return false;
-        }
-        if ((descriptor.revents & POLLIN) == 0) {
-            return true;
         }
         if (!initialize_xwm(service)) {
             report_startup_failure(service);
@@ -861,9 +941,13 @@ bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service)
 int nb_xwayland_rootless_event_descriptor(
     const struct nb_xwayland_rootless *service)
 {
-    return service != NULL && service->connection != NULL
-               ? xcb_get_file_descriptor(service->connection)
-               : -1;
+    if (service == NULL) {
+        return -1;
+    }
+    if (service->connection != NULL) {
+        return xcb_get_file_descriptor(service->connection);
+    }
+    return service->connector_running ? service->startup_pipe[0] : -1;
 }
 
 const char *nb_xwayland_rootless_display_name(
