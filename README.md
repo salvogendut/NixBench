@@ -10,11 +10,18 @@ without X.org underneath it. NixBench already supports its own Wayland clients,
 GTK3 applications through their Wayland backend, and traditional X11
 applications through rootless Xwayland.
 
+## Screenshots
+
 ![NixBench running NixInfo, Sakura, NixClock, and xclock](docs/images/nixbench-desktop.png)
 
 *NixBench running directly on NetBSD with native NixInfo, a GTK3/Wayland
 Sakura terminal, native Wayland NixClock, and X11 xclock through rootless
 Xwayland.*
+
+![The 1984 Amstrad CPC emulator running on NixBench](docs/images/nixbench-1984.png)
+
+*The SDL3-based 1984 Amstrad CPC emulator running through Wayland on NixBench,
+alongside NixInfo and a Sakura terminal.*
 
 ## What works today
 
