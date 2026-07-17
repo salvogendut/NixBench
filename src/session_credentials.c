@@ -791,18 +791,9 @@ _Noreturn void nb_session_credentials_drop_and_exec(
     char xwayland_rootless_environment[] =
         "NIXBENCH_XWAYLAND_ROOTLESS=1";
     struct nb_session_group_list expected_groups;
+    size_t environment_count = 0;
     int ipc_environment_length;
-    char *environment[] = {
-        home_environment,
-        shell_environment,
-        user_environment,
-        logname_environment,
-        path_environment,
-        ipc_environment,
-        enable_gtk_menu_bridge ? gtk_menu_bridge_environment : NULL,
-        enable_xwayland_rootless ? xwayland_rootless_environment : NULL,
-        NULL
-    };
+    char *environment[9];
 
     if (!credential_record_is_valid(credentials) || core_path == NULL ||
         core_path[0] != '/' || core_argv == NULL || core_argv[0] == NULL ||
@@ -945,6 +936,19 @@ _Noreturn void nb_session_credentials_drop_and_exec(
                       "could not build the session IPC environment",
                       EOVERFLOW);
     }
+    environment[environment_count++] = home_environment;
+    environment[environment_count++] = shell_environment;
+    environment[environment_count++] = user_environment;
+    environment[environment_count++] = logname_environment;
+    environment[environment_count++] = path_environment;
+    environment[environment_count++] = ipc_environment;
+    if (enable_gtk_menu_bridge) {
+        environment[environment_count++] = gtk_menu_bridge_environment;
+    }
+    if (enable_xwayland_rootless) {
+        environment[environment_count++] = xwayland_rootless_environment;
+    }
+    environment[environment_count] = NULL;
     if (!set_descriptor_cloexec(NB_SESSION_CREDENTIALS_IPC_FD, false)) {
         child_failure(NB_SESSION_CREDENTIALS_SETUP_EXIT,
                       "could not inherit the session IPC descriptor",
