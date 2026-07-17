@@ -194,9 +194,13 @@ NixBench now has a minimal C11/SDL3 shell, an internal window manager, and its
 first reference application. NixInfo displays a system snapshot in one or more
 NixBench-managed windows. On NetBSD it reports kernel identity, CPU model and
 count, physical memory, uptime, load averages, and root-volume capacity using
-libc and native `sysctl` interfaces. Its Project, View, and Window menus are
-published by the application and shown in the global top bar alongside a live
-local-time clock. Clicking the desktop restores the shell's own menu set.
+libc and native `sysctl` interfaces. A recessed rolling-load panel at the
+bottom samples `kern.cp_time` and `vm.uvmexp2` once per second while a NixInfo
+system window is open, retaining 120 seconds of cyan CPU and amber memory
+history without polling while NixInfo is closed. Its Project, View, and Window
+menus are published by the application and shown in the global top bar
+alongside a live local-time clock. Clicking the desktop restores the shell's
+own menu set.
 
 NixInfo is deliberately a separate, SDL-free application controller, although
 it still runs in the shell process during this prototype phase. A small
@@ -472,6 +476,12 @@ resolved from the build tree or installed prefix; the GTK entries currently use
 `/usr/pkg/bin/sakura` and `/usr/pkg/bin/midori`. To export GTK application
 menus into the bar as well, start the session with
 `NIXBENCH_GTK_MENU_BRIDGE=1`.
+
+The shell's **NixBench > Take Screenshot** command shows `SHOT 5` through
+`SHOT 1` in the clock area, then captures the next complete desktop frame after
+the countdown has disappeared. It writes a mode-`0600` PNG as
+`~/nixbench-USER-PID-YYYYMMDD-HHMMSS.png`; a numeric suffix prevents an
+existing same-second file from being replaced.
 
 The ordinary-user core creates `~/.nixbenchrc` with mode `0600` the first time
 `nixbench-session` runs. The shell's **NixBench > Settings...** command opens
@@ -1017,7 +1027,7 @@ and Quit NixInfo exits the application without exiting the desktop. The
 NixBench desktop menu can start it again.
 
 Click an internal window to focus it and bring it to the front, drag it by its
-title bar, and use its top-left gadget to close it. Resize it using the gadget
+title bar, and use its close gadget to close it. Resize it using the gadget
 at the right end of its bottom decorator rail. The global top bar switches
 between the focused application's menus and the NixBench desktop menu. Click a
 menu and then an item, or press and drag directly to an item. F10 opens the

@@ -719,14 +719,24 @@ static enum nb_host_event_status wait_for_activity(
 {
     int descriptors[2];
     size_t descriptor_count = 0;
+    const uint64_t milliseconds =
+        nb_host_monotonic_milliseconds(core->host);
     const int wayland_descriptor =
         nb_desktop_runtime_event_descriptor(core->desktop);
-    const uint32_t timeout = nb_session_frame_pacing_wait_timeout(
+    uint32_t fallback_timeout = clock_refresh_timeout();
+    const uint32_t runtime_timeout =
+        nb_desktop_runtime_timer_timeout(core->desktop, milliseconds);
+    uint32_t timeout;
+
+    if (runtime_timeout < fallback_timeout) {
+        fallback_timeout = runtime_timeout;
+    }
+    timeout = nb_session_frame_pacing_wait_timeout(
         &core->frame_pacing,
-        nb_host_monotonic_milliseconds(core->host),
+        milliseconds,
         core->redraw_needed,
         core->pending_frame_serial != 0,
-        clock_refresh_timeout());
+        fallback_timeout);
 
     if (wayland_descriptor >= 0) {
         descriptors[descriptor_count++] = wayland_descriptor;
@@ -897,6 +907,17 @@ static bool apply_runtime_update(
         return begin_shutdown(core);
     }
     return true;
+}
+
+static bool update_runtime_timers(struct nb_session_core *core)
+{
+    struct nb_desktop_runtime_update update;
+
+    return nb_desktop_runtime_tick(
+               core->desktop,
+               nb_host_monotonic_milliseconds(core->host),
+               &update) &&
+           apply_runtime_update(core, &update);
 }
 
 static bool set_runtime_focus(struct nb_session_core *core,
@@ -1446,6 +1467,9 @@ int nb_session_core_run(int protocol_descriptor,
                      event_status == NB_HOST_EVENT_STATUS_AVAILABLE);
         } else {
             refresh_clock(&core);
+        }
+        if (!update_runtime_timers(&core)) {
+            goto cleanup;
         }
         if (!advance_shutdown(&core)) {
             goto cleanup;

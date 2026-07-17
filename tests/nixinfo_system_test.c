@@ -168,11 +168,46 @@ static void test_native_collection_smoke(void)
     }
 }
 
+static void test_usage_calculations(void)
+{
+    const uint64_t previous[] = {100, 200, 300, 400, 1000};
+    const uint64_t current[] = {110, 220, 330, 440, 1100};
+    uint64_t regressed[] = {110, 220, 299, 440, 1100};
+    unsigned int percent = 999;
+
+    CHECK(nb_nixinfo_cpu_usage_percent(previous,
+                                       current,
+                                       5,
+                                       4,
+                                       &percent));
+    CHECK(percent == 50);
+    CHECK(!nb_nixinfo_cpu_usage_percent(previous,
+                                        previous,
+                                        5,
+                                        4,
+                                        &percent));
+    CHECK(!nb_nixinfo_cpu_usage_percent(previous,
+                                        regressed,
+                                        5,
+                                        4,
+                                        &percent));
+    CHECK(!nb_nixinfo_cpu_usage_percent(NULL,
+                                        current,
+                                        5,
+                                        4,
+                                        &percent));
+    CHECK(nb_nixinfo_memory_usage_percent(1000, 250, &percent));
+    CHECK(percent == 75);
+    CHECK(!nb_nixinfo_memory_usage_percent(0, 0, &percent));
+    CHECK(!nb_nixinfo_memory_usage_percent(100, 101, &percent));
+}
+
 int main(void)
 {
     test_sanitize_text();
     test_format_bytes();
     test_format_duration();
+    test_usage_calculations();
     test_native_collection_smoke();
 
     if (failures != 0) {

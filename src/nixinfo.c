@@ -14,7 +14,7 @@ enum {
     NIXINFO_WINDOW_X = 96,
     NIXINFO_WINDOW_Y = 60,
     NIXINFO_WINDOW_WIDTH = 620,
-    NIXINFO_WINDOW_HEIGHT = 360,
+    NIXINFO_WINDOW_HEIGHT = 520,
     NIXINFO_WINDOW_CASCADE = 26,
     NIXINFO_WINDOW_CASCADE_COUNT = 7,
     NIXINFO_ABOUT_X = 300,
@@ -33,6 +33,30 @@ static bool native_snapshot_provider(
     (void)context;
     nb_nixinfo_system_collect(snapshot);
     return snapshot->available != 0;
+}
+
+static bool has_system_window(const struct nb_nixinfo *nixinfo)
+{
+    size_t index;
+
+    for (index = 0; index < NB_NIXINFO_MAX_WINDOWS; ++index) {
+        if (nixinfo->windows[index].window != NB_WINDOW_ID_NONE &&
+            nixinfo->windows[index].kind == NB_NIXINFO_WINDOW_SYSTEM) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void append_usage_sample(
+    struct nb_nixinfo_usage_history *history,
+    const struct nb_nixinfo_usage_sample *sample)
+{
+    history->samples[history->next] = *sample;
+    history->next = (history->next + 1) % NB_NIXINFO_USAGE_HISTORY_CAPACITY;
+    if (history->count < NB_NIXINFO_USAGE_HISTORY_CAPACITY) {
+        ++history->count;
+    }
 }
 
 static struct nb_nixinfo_window_state *find_window_mutable(
@@ -388,6 +412,8 @@ void nb_nixinfo_init(struct nb_nixinfo *nixinfo,
                                     ? provide_snapshot
                                     : native_snapshot_provider;
     nixinfo->provider_context = provider_context;
+    nixinfo->native_usage_sampling = provide_snapshot == NULL;
+    nb_nixinfo_usage_sampler_init(&nixinfo->usage_sampler);
 
     nixinfo->project_items[PROJECT_NEW_INDEX] =
         (struct nb_menu_item_spec){"New Window",
@@ -503,4 +529,78 @@ const struct nb_menu_model *nb_nixinfo_menu_model(
     const struct nb_nixinfo *nixinfo)
 {
     return &nixinfo->menu_model;
+}
+
+bool nb_nixinfo_tick(struct nb_nixinfo *nixinfo, uint64_t milliseconds)
+{
+    struct nb_nixinfo_usage_sample sample;
+
+    if (nixinfo == NULL || !nixinfo->native_usage_sampling ||
+        nixinfo->usage_sampling_unavailable || !has_system_window(nixinfo)) {
+        return false;
+    }
+    if (nixinfo->next_usage_sample_milliseconds != 0 &&
+        milliseconds < nixinfo->next_usage_sample_milliseconds) {
+        return false;
+    }
+    nixinfo->next_usage_sample_milliseconds =
+        milliseconds > UINT64_MAX - UINT64_C(1000)
+            ? UINT64_MAX
+            : milliseconds + UINT64_C(1000);
+    if (!nb_nixinfo_system_sample_usage(&nixinfo->usage_sampler, &sample)) {
+        ++nixinfo->usage_sampling_failures;
+        if (nixinfo->usage_sampling_failures >= 3) {
+            nixinfo->usage_sampling_unavailable = true;
+        }
+        return false;
+    }
+    nixinfo->usage_sampling_failures = 0;
+    append_usage_sample(&nixinfo->usage_history, &sample);
+    return true;
+}
+
+uint32_t nb_nixinfo_timer_timeout(const struct nb_nixinfo *nixinfo,
+                                  uint64_t milliseconds)
+{
+    uint64_t remaining;
+
+    if (nixinfo == NULL || !nixinfo->native_usage_sampling ||
+        nixinfo->usage_sampling_unavailable || !has_system_window(nixinfo) ||
+        nixinfo->next_usage_sample_milliseconds == 0 ||
+        milliseconds >= nixinfo->next_usage_sample_milliseconds) {
+        return nixinfo != NULL && nixinfo->native_usage_sampling &&
+                       !nixinfo->usage_sampling_unavailable &&
+                       has_system_window(nixinfo)
+                   ? 0
+                   : UINT32_MAX;
+    }
+    remaining = nixinfo->next_usage_sample_milliseconds - milliseconds;
+    return remaining > UINT32_MAX ? UINT32_MAX : (uint32_t)remaining;
+}
+
+const struct nb_nixinfo_usage_history *nb_nixinfo_usage_history(
+    const struct nb_nixinfo *nixinfo)
+{
+    return nixinfo != NULL ? &nixinfo->usage_history : NULL;
+}
+
+bool nb_nixinfo_usage_history_at(
+    const struct nb_nixinfo_usage_history *history,
+    size_t chronological_index,
+    struct nb_nixinfo_usage_sample *sample)
+{
+    size_t oldest;
+
+    if (history == NULL || sample == NULL ||
+        chronological_index >= history->count ||
+        history->count > NB_NIXINFO_USAGE_HISTORY_CAPACITY ||
+        history->next >= NB_NIXINFO_USAGE_HISTORY_CAPACITY) {
+        return false;
+    }
+    oldest = history->count == NB_NIXINFO_USAGE_HISTORY_CAPACITY
+                 ? history->next
+                 : 0;
+    *sample = history->samples[
+        (oldest + chronological_index) % NB_NIXINFO_USAGE_HISTORY_CAPACITY];
+    return true;
 }

@@ -19,6 +19,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
 endif()
 
 find_package(SDL3 3.2.0 CONFIG REQUIRED COMPONENTS SDL3)
+find_package(ZLIB REQUIRED)
 
 option(
   NIXBENCH_BUILD_EXAMPLES
@@ -644,6 +645,22 @@ target_link_libraries(
 nixbench_configure_c_target(nixbench_software_canvas)
 
 add_library(
+  nixbench_screenshot STATIC
+  src/png_writer.c
+  src/screenshot.c
+)
+target_include_directories(
+  nixbench_screenshot
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(
+  nixbench_screenshot
+  PUBLIC nixbench_host
+  PRIVATE ZLIB::ZLIB
+)
+nixbench_configure_c_target(nixbench_screenshot)
+
+add_library(
   nixbench_renderers STATIC
   src/backdrop_renderer.c
   src/desktop_renderer.c
@@ -691,6 +708,7 @@ target_link_libraries(
     SDL3::SDL3
     nixbench_model
     nixbench_renderers
+    nixbench_screenshot
     nixbench_software_canvas
 )
 if(NIXBENCH_WAYLAND_ENABLED)
@@ -1655,6 +1673,13 @@ if(BUILD_TESTING)
   )
   nixbench_configure_c_target(nixbench_nixinfo_system_tests)
 
+  add_executable(nixbench_screenshot_tests tests/screenshot_test.c)
+  target_link_libraries(
+    nixbench_screenshot_tests
+    PRIVATE nixbench_screenshot
+  )
+  nixbench_configure_c_target(nixbench_screenshot_tests)
+
   add_executable(
     nixbench_renderer_tests
     tests/renderer_test.c
@@ -1929,6 +1954,7 @@ if(BUILD_TESTING)
     NAME nixbench.nixinfo.system
     COMMAND nixbench_nixinfo_system_tests
   )
+  add_test(NAME nixbench.screenshot COMMAND nixbench_screenshot_tests)
   add_test(NAME nixbench.renderer.callback COMMAND nixbench_renderer_tests)
   add_test(
     NAME nixbench.desktop.preview

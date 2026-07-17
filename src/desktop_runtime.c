@@ -1,6 +1,7 @@
 #include "desktop_runtime.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #include <SDL3/SDL.h>
@@ -13,6 +14,7 @@
 #include "settings_ui.h"
 #include "shell.h"
 #include "shell_renderer.h"
+#include "screenshot.h"
 #include "software_canvas.h"
 #include "window_renderer.h"
 
@@ -44,6 +46,7 @@ enum {
     NIXBENCH_DESKTOP_COMMAND_ABOUT = 1,
     NIXBENCH_DESKTOP_COMMAND_OPEN_NIXINFO,
     NIXBENCH_DESKTOP_COMMAND_SETTINGS,
+    NIXBENCH_DESKTOP_COMMAND_SCREENSHOT,
     NIXBENCH_DESKTOP_COMMAND_QUIT
 };
 
@@ -70,6 +73,8 @@ static const struct nb_menu_item_spec desktop_items[] = {
     {"Open NixInfo", NIXBENCH_DESKTOP_COMMAND_OPEN_NIXINFO,
      NB_MENU_ITEM_COMMAND, true, false},
     {"Settings...", NIXBENCH_DESKTOP_COMMAND_SETTINGS,
+     NB_MENU_ITEM_COMMAND, true, false},
+    {"Take Screenshot", NIXBENCH_DESKTOP_COMMAND_SCREENSHOT,
      NB_MENU_ITEM_COMMAND, true, false},
     {NULL, NB_MENU_COMMAND_NONE, NB_MENU_ITEM_SEPARATOR, false, false},
     {"Quit NixBench", NIXBENCH_DESKTOP_COMMAND_QUIT,
@@ -163,6 +168,10 @@ struct nb_desktop_runtime {
     int pointer_y;
     bool pointer_visible;
     bool quit_requested;
+    uint64_t screenshot_deadline;
+    unsigned int screenshot_countdown;
+    bool screenshot_countdown_active;
+    bool screenshot_capture_pending;
     enum nb_desktop_launch_request pending_launch_request;
     bool render_damage_valid;
     struct nb_damage_region render_damage;
@@ -638,7 +647,8 @@ static bool open_nixinfo(struct nb_desktop_runtime *runtime)
 }
 
 static bool apply_shell_action(struct nb_desktop_runtime *runtime,
-                               struct nb_shell_action action)
+                               struct nb_shell_action action,
+                               uint64_t milliseconds)
 {
     if (action.type == NB_SHELL_ACTION_MENU_COMMAND) {
         if (action.menu_command ==
@@ -770,6 +780,16 @@ static bool apply_shell_action(struct nb_desktop_runtime *runtime,
         }
         if (action.menu_command == NIXBENCH_DESKTOP_COMMAND_SETTINGS) {
             return show_settings_window(runtime);
+        }
+        if (action.menu_command == NIXBENCH_DESKTOP_COMMAND_SCREENSHOT) {
+            runtime->screenshot_deadline =
+                milliseconds > UINT64_MAX - UINT64_C(5000)
+                    ? UINT64_MAX
+                    : milliseconds + UINT64_C(5000);
+            runtime->screenshot_countdown = 5;
+            runtime->screenshot_countdown_active = true;
+            runtime->screenshot_capture_pending = false;
+            return true;
         }
         if (action.menu_command == NIXBENCH_DESKTOP_COMMAND_QUIT) {
             runtime->quit_requested = true;
@@ -1053,7 +1073,9 @@ static bool process_pointer_event(const struct nb_host_event *event,
                                         y,
                                         runtime->viewport);
 
-                if (!apply_shell_action(runtime, action)) {
+                if (!apply_shell_action(runtime,
+                                        action,
+                                        event->milliseconds)) {
                     return false;
                 }
             }
@@ -1249,7 +1271,7 @@ static bool process_key_event(const struct nb_host_event *event,
             capture_shell_key(runtime, key_name);
         }
 #endif
-        return apply_shell_action(runtime, action);
+        return apply_shell_action(runtime, action, event->milliseconds);
     }
 
     if (menu_open) {
@@ -1696,6 +1718,84 @@ int nb_desktop_runtime_event_descriptor(
 #endif
 }
 
+static unsigned int screenshot_seconds_remaining(
+    const struct nb_desktop_runtime *runtime,
+    uint64_t milliseconds)
+{
+    uint64_t remaining;
+    uint64_t seconds;
+
+    if (!runtime->screenshot_countdown_active ||
+        milliseconds >= runtime->screenshot_deadline) {
+        return 0;
+    }
+    remaining = runtime->screenshot_deadline - milliseconds;
+    seconds = remaining / UINT64_C(1000);
+    if (remaining % UINT64_C(1000) != 0) {
+        ++seconds;
+    }
+    return seconds > 5 ? 5 : (unsigned int)seconds;
+}
+
+bool nb_desktop_runtime_tick(
+    struct nb_desktop_runtime *runtime,
+    uint64_t milliseconds,
+    struct nb_desktop_runtime_update *update)
+{
+    unsigned int seconds;
+
+    if (runtime == NULL || update == NULL) {
+        return false;
+    }
+    clear_update(update);
+    seconds = screenshot_seconds_remaining(runtime, milliseconds);
+    if (runtime->screenshot_countdown_active && seconds == 0) {
+        runtime->screenshot_countdown_active = false;
+        runtime->screenshot_countdown = 0;
+        runtime->screenshot_capture_pending = true;
+        update->redraw = true;
+    } else if (seconds != 0 && seconds != runtime->screenshot_countdown) {
+        runtime->screenshot_countdown = seconds;
+        update->redraw = true;
+    }
+    if (nb_nixinfo_tick(&runtime->nixinfo, milliseconds)) {
+        update->redraw = true;
+    }
+    update->quit_requested = runtime->quit_requested;
+    return true;
+}
+
+uint32_t nb_desktop_runtime_timer_timeout(
+    const struct nb_desktop_runtime *runtime,
+    uint64_t milliseconds)
+{
+    uint64_t remaining;
+    unsigned int seconds;
+    uint64_t until_boundary;
+
+    uint32_t timeout;
+    uint32_t nixinfo_timeout;
+
+    if (runtime == NULL) {
+        return UINT32_MAX;
+    }
+    nixinfo_timeout = nb_nixinfo_timer_timeout(&runtime->nixinfo,
+                                               milliseconds);
+    if (!runtime->screenshot_countdown_active) {
+        return nixinfo_timeout;
+    }
+    if (milliseconds >= runtime->screenshot_deadline) {
+        return 0;
+    }
+    remaining = runtime->screenshot_deadline - milliseconds;
+    seconds = screenshot_seconds_remaining(runtime, milliseconds);
+    until_boundary = remaining - (uint64_t)(seconds - 1) * UINT64_C(1000);
+    timeout = until_boundary > UINT32_MAX
+                  ? UINT32_MAX
+                  : (uint32_t)until_boundary;
+    return nixinfo_timeout < timeout ? nixinfo_timeout : timeout;
+}
+
 bool nb_desktop_runtime_render(
     struct nb_desktop_runtime *runtime,
     const char *clock_text,
@@ -1753,6 +1853,8 @@ bool nb_desktop_runtime_render_region(
     SDL_Renderer *renderer;
     SDL_Rect clip;
     struct nb_damage_rect bounds;
+    char countdown_text[16];
+    const char *bar_text = clock_text;
     bool rendered;
 
     if (runtime == NULL || clock_text == NULL || clock_text[0] == '\0' ||
@@ -1775,6 +1877,13 @@ bool nb_desktop_runtime_render_region(
         return false;
     }
     runtime->render_damage_valid = damage != NULL;
+    if (runtime->screenshot_countdown_active) {
+        (void)snprintf(countdown_text,
+                       sizeof(countdown_text),
+                       "SHOT %u",
+                       runtime->screenshot_countdown);
+        bar_text = countdown_text;
+    }
 #if NIXBENCH_HAS_WAYLAND
     nb_wayland_renderer_set_damage(runtime->wayland_renderer, damage);
 #endif
@@ -1796,7 +1905,7 @@ bool nb_desktop_runtime_render_region(
                nb_shell_render_with_content(renderer,
                                             &runtime->shell,
                                             runtime->viewport,
-                                            clock_text,
+                                            bar_text,
                                             render_window_content,
                                             runtime) &&
                (!runtime->pointer_visible ||
@@ -1818,6 +1927,23 @@ bool nb_desktop_runtime_render_region(
         frame->damage_height = bounds.height;
         frame->damage_rects = damage->rects;
         frame->damage_count = damage->count;
+    }
+    if (runtime->screenshot_capture_pending && damage == NULL) {
+        char saved_path[1024];
+        char error[256];
+
+        runtime->screenshot_capture_pending = false;
+        if (nb_screenshot_save_home(frame,
+                                    saved_path,
+                                    sizeof(saved_path),
+                                    error,
+                                    sizeof(error))) {
+            SDL_Log("NixBench screenshot saved: %s", saved_path);
+        } else {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "Could not save NixBench screenshot: %s",
+                         error);
+        }
     }
     return true;
 }

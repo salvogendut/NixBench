@@ -116,6 +116,17 @@ bool nb_desktop_runtime_dispatch(
     struct nb_desktop_runtime *runtime,
     struct nb_desktop_runtime_update *update);
 
+/* Advance delayed shell work without polling or busy-waiting. */
+bool nb_desktop_runtime_tick(
+    struct nb_desktop_runtime *runtime,
+    uint64_t milliseconds,
+    struct nb_desktop_runtime_update *update);
+
+/* Milliseconds until the next runtime timer, or UINT32_MAX when idle. */
+uint32_t nb_desktop_runtime_timer_timeout(
+    const struct nb_desktop_runtime *runtime,
+    uint64_t milliseconds);
+
 /* Pollable optional-compositor descriptor, or -1 without Wayland service. */
 int nb_desktop_runtime_event_descriptor(
     const struct nb_desktop_runtime *runtime);

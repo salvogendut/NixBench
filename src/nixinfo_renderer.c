@@ -19,6 +19,10 @@ static const struct color heading_text_color = {248, 249, 241};
 static const struct color text_color = {18, 30, 34};
 static const struct color muted_text_color = {76, 88, 88};
 static const struct color error_text_color = {142, 47, 39};
+static const struct color graph_background_color = {20, 31, 35};
+static const struct color graph_grid_color = {54, 72, 74};
+static const struct color graph_cpu_color = {78, 207, 184};
+static const struct color graph_memory_color = {242, 181, 74};
 
 static bool set_color(SDL_Renderer *renderer, struct color color)
 {
@@ -61,6 +65,22 @@ static bool render_bevel(SDL_Renderer *renderer, struct nb_rect rect)
            set_color(renderer, panel_shadow) &&
            SDL_RenderLine(renderer, right, top, right, bottom) &&
            SDL_RenderLine(renderer, right, bottom, left, bottom);
+}
+
+static bool render_outline(SDL_Renderer *renderer,
+                           struct nb_rect rect,
+                           struct color color)
+{
+    const SDL_FRect outline = {
+        (float)rect.x,
+        (float)rect.y,
+        (float)rect.width,
+        (float)rect.height
+    };
+
+    return rect.width <= 0 || rect.height <= 0 ||
+           (set_color(renderer, color) &&
+            SDL_RenderRect(renderer, &outline));
 }
 
 static bool render_clipped_text(SDL_Renderer *renderer,
@@ -155,9 +175,154 @@ static bool render_about(SDL_Renderer *renderer, struct nb_rect content)
     return true;
 }
 
+static bool render_usage_trace(
+    SDL_Renderer *renderer,
+    struct nb_rect chart,
+    const struct nb_nixinfo_usage_history *history,
+    uint32_t availability,
+    bool cpu,
+    struct color color)
+{
+    bool previous_valid = false;
+    float previous_x = 0.0f;
+    float previous_y = 0.0f;
+    size_t index;
+
+    if (!set_color(renderer, color)) {
+        return false;
+    }
+    for (index = 0; index < history->count; ++index) {
+        struct nb_nixinfo_usage_sample sample;
+        const size_t age = history->count - 1 - index;
+        const float x = (float)(chart.x + chart.width - 1) -
+                        (float)(age * (size_t)(chart.width - 1)) /
+                            (float)(NB_NIXINFO_USAGE_HISTORY_CAPACITY - 1);
+        unsigned int percent;
+        float y;
+
+        if (!nb_nixinfo_usage_history_at(history, index, &sample) ||
+            (sample.available & availability) == 0) {
+            previous_valid = false;
+            continue;
+        }
+        percent = cpu ? sample.cpu_percent : sample.memory_percent;
+        if (percent > 100) {
+            percent = 100;
+        }
+        y = (float)(chart.y + chart.height - 1) -
+            ((float)percent * (float)(chart.height - 1) / 100.0f);
+        if (previous_valid &&
+            !SDL_RenderLine(renderer, previous_x, previous_y, x, y)) {
+            return false;
+        }
+        if (!previous_valid &&
+            !SDL_RenderPoint(renderer, x, y)) {
+            return false;
+        }
+        previous_valid = true;
+        previous_x = x;
+        previous_y = y;
+    }
+    return true;
+}
+
+static bool render_usage_history(
+    SDL_Renderer *renderer,
+    struct nb_rect graph,
+    const struct nb_nixinfo_usage_history *history)
+{
+    struct nb_rect chart;
+    struct nb_nixinfo_usage_sample latest;
+    char legend[128];
+    char cpu_value[16];
+    char memory_value[16];
+    int grid;
+
+    if (graph.width < 100 || graph.height < 70) {
+        return true;
+    }
+    chart = (struct nb_rect){graph.x + 8,
+                             graph.y + 25,
+                             graph.width - 16,
+                             graph.height - 33};
+    if (!fill_rect(renderer, graph, graph_background_color) ||
+        !render_outline(renderer, graph, panel_shadow)) {
+        return false;
+    }
+    if (history == NULL || history->count == 0 ||
+        !nb_nixinfo_usage_history_at(history,
+                                     history->count - 1,
+                                     &latest)) {
+        return render_clipped_text(renderer,
+                                   graph.x + 10,
+                                   graph.y + 9,
+                                   graph.x + graph.width - 8,
+                                   "SYSTEM LOAD  awaiting native samples...",
+                                   panel_highlight);
+    }
+    if ((latest.available & NB_NIXINFO_USAGE_HAS_CPU) != 0) {
+        (void)snprintf(cpu_value,
+                       sizeof(cpu_value),
+                       "%u%%",
+                       latest.cpu_percent);
+    } else {
+        (void)snprintf(cpu_value, sizeof(cpu_value), "--");
+    }
+    if ((latest.available & NB_NIXINFO_USAGE_HAS_MEMORY) != 0) {
+        (void)snprintf(memory_value,
+                       sizeof(memory_value),
+                       "%u%%",
+                       latest.memory_percent);
+    } else {
+        (void)snprintf(memory_value, sizeof(memory_value), "--");
+    }
+    (void)snprintf(legend,
+                   sizeof(legend),
+                   "SYSTEM LOAD  CPU %s cyan  MEM %s amber  (120 seconds)",
+                   cpu_value,
+                   memory_value);
+    if (!render_clipped_text(renderer,
+                             graph.x + 10,
+                             graph.y + 9,
+                             graph.x + graph.width - 8,
+                             legend,
+                             panel_highlight)) {
+        return false;
+    }
+    if (!set_color(renderer, graph_grid_color)) {
+        return false;
+    }
+    for (grid = 1; grid < 4; ++grid) {
+        const float y = (float)(chart.y +
+                                (chart.height - 1) * grid / 4);
+
+        if (!SDL_RenderLine(renderer,
+                            (float)chart.x,
+                            y,
+                            (float)(chart.x + chart.width - 1),
+                            y)) {
+            return false;
+        }
+    }
+    return render_outline(renderer, chart, graph_grid_color) &&
+           render_usage_trace(renderer,
+                              chart,
+                              history,
+                              NB_NIXINFO_USAGE_HAS_MEMORY,
+                              false,
+                              graph_memory_color) &&
+           render_usage_trace(renderer,
+                              chart,
+                              history,
+                              NB_NIXINFO_USAGE_HAS_CPU,
+                              true,
+                              graph_cpu_color);
+}
+
 static bool render_system(
     SDL_Renderer *renderer,
     struct nb_rect content,
+    const struct nb_nixinfo *nixinfo,
     const struct nb_nixinfo_window_state *state)
 {
     const struct nb_nixinfo_system_snapshot *snapshot = &state->snapshot;
@@ -322,20 +487,31 @@ static bool render_system(
     y += 18;
 
     if (state->refresh_failed) {
-        return render_clipped_text(renderer,
-                                   content.x + 18,
-                                   y,
-                                   content.x + content.width - 12,
-                                   "Refresh failed; previous data retained.",
-                                   error_text_color);
+        if (!render_clipped_text(renderer,
+                                 content.x + 18,
+                                 y,
+                                 content.x + content.width - 12,
+                                 "Refresh failed; previous data retained.",
+                                 error_text_color)) {
+            return false;
+        }
+    } else if (!render_row(renderer,
+                           content,
+                           y,
+                           "Updated",
+                           state->refreshed_at[0] != '\0'
+                               ? state->refreshed_at
+                               : "Unavailable")) {
+        return false;
     }
-    return render_row(renderer,
-                      content,
-                      y,
-                      "Updated",
-                      state->refreshed_at[0] != '\0'
-                          ? state->refreshed_at
-                          : "Unavailable");
+    y += 26;
+    return render_usage_history(
+        renderer,
+        (struct nb_rect){content.x + 18,
+                         y,
+                         content.width - 36,
+                         content.y + content.height - y - 14},
+        nb_nixinfo_usage_history(nixinfo));
 }
 
 bool nb_nixinfo_render_content(SDL_Renderer *renderer,
@@ -391,5 +567,5 @@ bool nb_nixinfo_render_content(SDL_Renderer *renderer,
 
     return state->kind == NB_NIXINFO_WINDOW_ABOUT
                ? render_about(renderer, content_rect)
-               : render_system(renderer, content_rect, state);
+               : render_system(renderer, content_rect, nixinfo, state);
 }

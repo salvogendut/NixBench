@@ -108,9 +108,16 @@ static uint32_t clock_refresh_timeout(void)
 }
 
 static uint32_t event_wait_timeout(
-    const struct nb_desktop_runtime *desktop)
+    const struct nb_desktop_runtime *desktop,
+    uint64_t milliseconds)
 {
     uint32_t timeout = clock_refresh_timeout();
+    const uint32_t runtime_timeout =
+        nb_desktop_runtime_timer_timeout(desktop, milliseconds);
+
+    if (runtime_timeout < timeout) {
+        timeout = runtime_timeout;
+    }
 
     if (nb_desktop_runtime_wayland_display_name(desktop) != NULL &&
         timeout > NIXBENCH_WAYLAND_WAIT_MS) {
@@ -181,6 +188,20 @@ static void apply_runtime_update(
         frontend->running = false;
     }
     reconcile_pointer_capture(frontend);
+}
+
+static bool update_runtime_timers(struct frontend *frontend)
+{
+    struct nb_desktop_runtime_update update;
+
+    if (!nb_desktop_runtime_tick(
+            frontend->desktop,
+            nb_host_monotonic_milliseconds(frontend->host),
+            &update)) {
+        return false;
+    }
+    apply_runtime_update(frontend, &update);
+    return true;
 }
 
 static bool set_output(struct frontend *frontend,
@@ -390,7 +411,10 @@ int main(int argc, char *argv[])
     while (frontend.running) {
         enum nb_host_event_status event_status =
             nb_host_wait_event(frontend.host,
-                               event_wait_timeout(frontend.desktop),
+                               event_wait_timeout(
+                                   frontend.desktop,
+                                   nb_host_monotonic_milliseconds(
+                                       frontend.host)),
                                &event);
 
         if (event_status == NB_HOST_EVENT_STATUS_ERROR) {
@@ -422,6 +446,11 @@ int main(int argc, char *argv[])
                      event_status == NB_HOST_EVENT_STATUS_AVAILABLE);
         } else {
             frontend.redraw_needed = true;
+        }
+
+        if (!update_runtime_timers(&frontend)) {
+            exit_status = 1;
+            break;
         }
 
         if (frontend.running && frontend.redraw_needed &&

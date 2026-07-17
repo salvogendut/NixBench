@@ -10,8 +10,10 @@
 #include <float.h>
 #include <stdlib.h>
 #include <sys/param.h>
+#include <sys/sched.h>
 #include <sys/sysctl.h>
 #include <time.h>
+#include <uvm/uvm_extern.h>
 #endif
 
 static bool is_ascii_whitespace(char character)
@@ -241,6 +243,126 @@ void nb_nixinfo_system_collect(struct nb_nixinfo_system_snapshot *snapshot)
 #if defined(__NetBSD__)
     collect_netbsd_optional_fields(snapshot);
 #endif
+}
+
+void nb_nixinfo_usage_sampler_init(
+    struct nb_nixinfo_usage_sampler *sampler)
+{
+    if (sampler != NULL) {
+        (void)memset(sampler, 0, sizeof(*sampler));
+    }
+}
+
+bool nb_nixinfo_cpu_usage_percent(const uint64_t *previous,
+                                  const uint64_t *current,
+                                  size_t state_count,
+                                  size_t idle_state,
+                                  unsigned int *percent)
+{
+    uint64_t total = 0;
+    uint64_t idle = 0;
+    size_t index;
+
+    if (previous == NULL || current == NULL || percent == NULL ||
+        state_count == 0 || idle_state >= state_count) {
+        return false;
+    }
+    for (index = 0; index < state_count; ++index) {
+        uint64_t delta;
+
+        if (current[index] < previous[index]) {
+            return false;
+        }
+        delta = current[index] - previous[index];
+        if (UINT64_MAX - total < delta) {
+            return false;
+        }
+        total += delta;
+        if (index == idle_state) {
+            idle = delta;
+        }
+    }
+    if (total == 0 || idle > total) {
+        return false;
+    }
+    *percent = (unsigned int)(
+        ((double)(total - idle) * 100.0 / (double)total) + 0.5);
+    if (*percent > 100) {
+        *percent = 100;
+    }
+    return true;
+}
+
+bool nb_nixinfo_memory_usage_percent(uint64_t total_pages,
+                                     uint64_t free_pages,
+                                     unsigned int *percent)
+{
+    if (percent == NULL || total_pages == 0 || free_pages > total_pages) {
+        return false;
+    }
+    *percent = (unsigned int)(
+        ((double)(total_pages - free_pages) * 100.0 /
+         (double)total_pages) +
+        0.5);
+    if (*percent > 100) {
+        *percent = 100;
+    }
+    return true;
+}
+
+bool nb_nixinfo_system_sample_usage(
+    struct nb_nixinfo_usage_sampler *sampler,
+    struct nb_nixinfo_usage_sample *sample)
+{
+    if (sampler == NULL || sample == NULL) {
+        return false;
+    }
+    (void)memset(sample, 0, sizeof(*sample));
+#if defined(__NetBSD__)
+    {
+        uint64_t cpu[CPUSTATES];
+        size_t cpu_size = sizeof(cpu);
+
+        if (CPUSTATES <= NB_NIXINFO_CPU_STATE_CAPACITY &&
+            sysctlbyname("kern.cp_time",
+                         cpu,
+                         &cpu_size,
+                         NULL,
+                         0) == 0 &&
+            cpu_size == sizeof(cpu)) {
+            if (sampler->previous_cpu_valid &&
+                sampler->cpu_state_count == CPUSTATES &&
+                nb_nixinfo_cpu_usage_percent(sampler->previous_cpu,
+                                             cpu,
+                                             CPUSTATES,
+                                             CP_IDLE,
+                                             &sample->cpu_percent)) {
+                sample->available |= NB_NIXINFO_USAGE_HAS_CPU;
+            }
+            (void)memcpy(sampler->previous_cpu, cpu, sizeof(cpu));
+            sampler->cpu_state_count = CPUSTATES;
+            sampler->previous_cpu_valid = true;
+        }
+    }
+    {
+        struct uvmexp_sysctl memory;
+        size_t memory_size = sizeof(memory);
+
+        if (sysctlbyname("vm.uvmexp2",
+                         &memory,
+                         &memory_size,
+                         NULL,
+                         0) == 0 &&
+            memory_size == sizeof(memory) && memory.npages > 0 &&
+            memory.free >= 0 && memory.free <= memory.npages &&
+            nb_nixinfo_memory_usage_percent((uint64_t)memory.npages,
+                                            (uint64_t)memory.free,
+                                            &sample->memory_percent)) {
+            sample->available |= NB_NIXINFO_USAGE_HAS_MEMORY;
+        }
+    }
+#endif
+    return sample->available != 0;
 }
 
 static bool format_succeeded(char *destination,

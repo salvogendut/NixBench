@@ -512,6 +512,54 @@ static void test_settings_and_application_pins(void)
     nb_desktop_runtime_destroy(runtime);
 }
 
+static void test_screenshot_countdown(void)
+{
+    struct nb_desktop_runtime *runtime = create_runtime(false);
+    struct nb_desktop_runtime_update update;
+    struct nb_host_event event;
+    struct nb_host_frame frame;
+    uint64_t initial_hash;
+    uint64_t second_hash;
+    uint64_t milliseconds = 100;
+
+    CHECK(runtime != NULL);
+    if (runtime == NULL) {
+        return;
+    }
+    CHECK(nb_desktop_runtime_tick(runtime, milliseconds, &update));
+    update = click_runtime(runtime, 900, 600, ++milliseconds);
+    milliseconds += 2;
+
+    event = key_event("FK10", true, ++milliseconds);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("DOWN", true, ++milliseconds);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event.milliseconds = ++milliseconds;
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event.milliseconds = ++milliseconds;
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RTRN", true, ++milliseconds);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    CHECK(update.redraw);
+    CHECK(nb_desktop_runtime_timer_timeout(runtime, milliseconds) <= 1000);
+
+    CHECK(nb_desktop_runtime_render(runtime, "12:34", 1, &frame));
+    initial_hash = frame_hash(&frame);
+    CHECK(nb_desktop_runtime_tick(runtime,
+                                  milliseconds + 1000,
+                                  &update));
+    CHECK(update.redraw);
+    CHECK(nb_desktop_runtime_render(runtime, "12:34", 2, &frame));
+    second_hash = frame_hash(&frame);
+    CHECK(second_hash != initial_hash);
+
+    CHECK(nb_desktop_runtime_tick(runtime,
+                                  milliseconds + 5000,
+                                  &update));
+    CHECK(update.redraw);
+    nb_desktop_runtime_destroy(runtime);
+}
+
 static void test_defensive_api(void)
 {
     struct nb_desktop_runtime_options invalid_options;
@@ -569,6 +617,9 @@ static void test_defensive_api(void)
     CHECK(!update.redraw);
     CHECK(!update.quit_requested);
     CHECK(update.launch_request == NB_DESKTOP_LAUNCH_NONE);
+    CHECK(!nb_desktop_runtime_tick(NULL, 0, &update));
+    CHECK(!nb_desktop_runtime_tick(runtime, 0, NULL));
+    CHECK(nb_desktop_runtime_timer_timeout(NULL, 0) == UINT32_MAX);
 
     CHECK(!nb_desktop_runtime_render(NULL, "12:34", 1, &frame));
     CHECK(!nb_desktop_runtime_render(runtime, NULL, 1, &frame));
@@ -603,6 +654,7 @@ int main(void)
     test_keyboard_menu_path();
     test_application_launcher_menu();
     test_settings_and_application_pins();
+    test_screenshot_countdown();
     test_defensive_api();
 
     if (failures != 0) {

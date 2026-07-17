@@ -14,7 +14,14 @@ enum {
     NB_NIXINFO_PROJECT_ITEM_COUNT = 6,
     NB_NIXINFO_VIEW_ITEM_COUNT = 1,
     NB_NIXINFO_WINDOW_ITEM_COUNT = 2,
-    NB_NIXINFO_MENU_COUNT = 3
+    NB_NIXINFO_MENU_COUNT = 3,
+    NB_NIXINFO_USAGE_HISTORY_CAPACITY = 120
+};
+
+struct nb_nixinfo_usage_history {
+    struct nb_nixinfo_usage_sample samples[NB_NIXINFO_USAGE_HISTORY_CAPACITY];
+    size_t count;
+    size_t next;
 };
 
 enum nb_nixinfo_command {
@@ -60,6 +67,12 @@ struct nb_nixinfo {
     nb_window_id active_window;
     nb_window_id about_window;
     unsigned int next_window_position;
+    struct nb_nixinfo_usage_sampler usage_sampler;
+    struct nb_nixinfo_usage_history usage_history;
+    uint64_t next_usage_sample_milliseconds;
+    unsigned int usage_sampling_failures;
+    bool native_usage_sampling;
+    bool usage_sampling_unavailable;
     struct nb_menu_item_spec
         project_items[NB_NIXINFO_PROJECT_ITEM_COUNT];
     struct nb_menu_item_spec view_items[NB_NIXINFO_VIEW_ITEM_COUNT];
@@ -89,5 +102,16 @@ const struct nb_nixinfo_window_state *nb_nixinfo_find_window(
     nb_window_id window);
 const struct nb_menu_model *nb_nixinfo_menu_model(
     const struct nb_nixinfo *nixinfo);
+
+/* One-second rolling system-load history, active only with a system window. */
+bool nb_nixinfo_tick(struct nb_nixinfo *nixinfo, uint64_t milliseconds);
+uint32_t nb_nixinfo_timer_timeout(const struct nb_nixinfo *nixinfo,
+                                  uint64_t milliseconds);
+const struct nb_nixinfo_usage_history *nb_nixinfo_usage_history(
+    const struct nb_nixinfo *nixinfo);
+bool nb_nixinfo_usage_history_at(
+    const struct nb_nixinfo_usage_history *history,
+    size_t chronological_index,
+    struct nb_nixinfo_usage_sample *sample);
 
 #endif

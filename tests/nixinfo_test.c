@@ -563,6 +563,33 @@ static void test_invalid_actions_are_rejected(void)
           NB_APPLICATION_DISPATCH_ERROR);
 }
 
+static void test_usage_history_contract(void)
+{
+    struct nb_nixinfo_usage_history history;
+    struct nb_nixinfo_usage_sample sample;
+    size_t index;
+
+    memset(&history, 0, sizeof(history));
+    history.count = NB_NIXINFO_USAGE_HISTORY_CAPACITY;
+    history.next = 7;
+    for (index = 0; index < NB_NIXINFO_USAGE_HISTORY_CAPACITY; ++index) {
+        history.samples[index].available = NB_NIXINFO_USAGE_HAS_CPU;
+        history.samples[index].cpu_percent = (unsigned int)index;
+    }
+    CHECK(nb_nixinfo_usage_history_at(&history, 0, &sample));
+    CHECK(sample.cpu_percent == 7);
+    CHECK(nb_nixinfo_usage_history_at(
+        &history,
+        NB_NIXINFO_USAGE_HISTORY_CAPACITY - 1,
+        &sample));
+    CHECK(sample.cpu_percent == 6);
+    CHECK(!nb_nixinfo_usage_history_at(
+        &history,
+        NB_NIXINFO_USAGE_HISTORY_CAPACITY,
+        &sample));
+    CHECK(!nb_nixinfo_usage_history_at(NULL, 0, &sample));
+}
+
 int main(void)
 {
     test_launch_and_menu_contract();
@@ -571,6 +598,7 @@ int main(void)
     test_capacity_and_disabled_commands();
     test_quit_is_application_scoped_and_restartable();
     test_invalid_actions_are_rejected();
+    test_usage_history_contract();
 
     if (failures != 0) {
         fprintf(stderr, "%d nixinfo check(s) failed\n", failures);
