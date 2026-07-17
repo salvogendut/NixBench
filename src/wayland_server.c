@@ -4708,6 +4708,14 @@ bool nb_wayland_server_add_client_fd(struct nb_wayland_server *server,
            wl_client_create(server->display, fd) != NULL;
 }
 
+int nb_wayland_server_event_descriptor(
+    const struct nb_wayland_server *server)
+{
+    return server != NULL && server->event_loop != NULL
+               ? wl_event_loop_get_fd(server->event_loop)
+               : -1;
+}
+
 bool nb_wayland_server_dispatch(struct nb_wayland_server *server)
 {
     if (server == NULL ||

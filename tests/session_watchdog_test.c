@@ -147,6 +147,20 @@ static void test_saturating_deadline(void)
           NB_SESSION_WATCHDOG_ACTION_STARTUP_EXPIRED);
 }
 
+static void test_wait_timeout(void)
+{
+    struct nb_session_watchdog watchdog;
+
+    nb_session_watchdog_init(&watchdog, 100);
+    CHECK(nb_session_watchdog_wait_timeout(&watchdog, 100) ==
+          NB_SESSION_WATCHDOG_STARTUP_GRACE_MS);
+    CHECK(nb_session_watchdog_wait_timeout(&watchdog, 10099) == 1);
+    CHECK(nb_session_watchdog_wait_timeout(&watchdog, 10100) == 0);
+    watchdog.deadline = UINT64_MAX;
+    CHECK(nb_session_watchdog_wait_timeout(&watchdog, 0) == UINT32_MAX);
+    CHECK(nb_session_watchdog_wait_timeout(NULL, 0) == 0);
+}
+
 static void test_invalid_arguments(void)
 {
     struct nb_session_watchdog watchdog;
@@ -174,6 +188,7 @@ int main(void)
     test_heartbeat_expiry();
     test_token_wrap_skips_zero();
     test_saturating_deadline();
+    test_wait_timeout();
     test_invalid_arguments();
 
     if (failures != 0) {

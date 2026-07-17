@@ -1626,6 +1626,19 @@ bool nb_desktop_runtime_dispatch(
     return true;
 }
 
+int nb_desktop_runtime_event_descriptor(
+    const struct nb_desktop_runtime *runtime)
+{
+#if NIXBENCH_HAS_WAYLAND
+    return runtime != NULL && runtime->wayland != NULL
+               ? nb_wayland_server_event_descriptor(runtime->wayland)
+               : -1;
+#else
+    (void)runtime;
+    return -1;
+#endif
+}
+
 bool nb_desktop_runtime_render(
     struct nb_desktop_runtime *runtime,
     const char *clock_text,

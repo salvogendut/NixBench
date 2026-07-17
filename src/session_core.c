@@ -712,6 +712,25 @@ static uint32_t event_wait_timeout(const struct nb_session_core *core)
     return timeout;
 }
 
+static enum nb_host_event_status wait_for_activity(
+    struct nb_session_core *core,
+    struct nb_host_event *event)
+{
+    const int descriptor =
+        nb_desktop_runtime_event_descriptor(core->desktop);
+
+    if (descriptor >= 0) {
+        return nb_host_privsep_client_wait_event_with_descriptor(
+            core->host,
+            descriptor,
+            clock_refresh_timeout(),
+            event);
+    }
+    return nb_host_wait_event(core->host,
+                              event_wait_timeout(core),
+                              event);
+}
+
 static bool request_helper_shutdown(struct nb_session_core *core)
 {
     if (core->shutdown_requested) {
@@ -1207,9 +1226,7 @@ int nb_session_core_run(int protocol_descriptor,
     while (core.running) {
         struct nb_host_event event;
         enum nb_host_event_status event_status =
-            nb_host_wait_event(core.host,
-                               event_wait_timeout(&core),
-                               &event);
+            wait_for_activity(&core, &event);
 
         reap_applications_nonblocking(&core);
 

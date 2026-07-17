@@ -78,6 +78,10 @@ const char *nb_wayland_server_display_name(
 bool nb_wayland_server_add_client_fd(struct nb_wayland_server *server,
                                      int fd);
 
+/* Pollable libwayland event-loop descriptor, or -1 when unavailable. */
+int nb_wayland_server_event_descriptor(
+    const struct nb_wayland_server *server);
+
 /* Dispatch queued client requests without blocking and flush all clients. */
 bool nb_wayland_server_dispatch(struct nb_wayland_server *server);
 /*

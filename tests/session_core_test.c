@@ -156,6 +156,7 @@ static struct nb_privsep_output runtime_output(void)
 static void test_host_proxy(void)
 {
     int sockets[2] = {-1, -1};
+    int wake_pipe[2] = {-1, -1};
     struct wire_reader reader;
     struct nb_privsep_message message;
     struct nb_host *host = NULL;
@@ -205,6 +206,30 @@ static void test_host_proxy(void)
     CHECK(nb_host_get_state(host) == NB_HOST_STATE_ACTIVE);
     CHECK(nb_host_get_output(host, &output));
     CHECK(output.pixel_width == 3 && output.pixel_height == 2);
+
+    CHECK(pipe(wake_pipe) == 0);
+    if (wake_pipe[0] >= 0 && wake_pipe[1] >= 0) {
+        unsigned char wake = 1;
+
+        CHECK(nb_host_privsep_client_wait_event_with_descriptor(
+                  host,
+                  wake_pipe[0],
+                  1,
+                  &event) == NB_HOST_EVENT_STATUS_EMPTY);
+        CHECK(write_all(wake_pipe[1], &wake, sizeof(wake)));
+        CHECK(nb_host_privsep_client_wait_event_with_descriptor(
+                  host,
+                  wake_pipe[0],
+                  1000,
+                  &event) == NB_HOST_EVENT_STATUS_EMPTY);
+        CHECK(read(wake_pipe[0], &wake, sizeof(wake)) ==
+              (ssize_t)sizeof(wake));
+        CHECK(nb_host_privsep_client_wait_event_with_descriptor(
+                  host,
+                  -1,
+                  1,
+                  &event) == NB_HOST_EVENT_STATUS_ERROR);
+    }
 
     for (index = 0; index < sizeof(source); ++index) {
         source[index] = index < 16 ? (unsigned char)(index + 1) :
@@ -438,6 +463,12 @@ static void test_host_proxy(void)
     }
 
     nb_host_destroy(host);
+    if (wake_pipe[0] >= 0) {
+        (void)close(wake_pipe[0]);
+    }
+    if (wake_pipe[1] >= 0) {
+        (void)close(wake_pipe[1]);
+    }
     (void)close(sockets[1]);
 }
 

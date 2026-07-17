@@ -103,6 +103,10 @@ bool nb_desktop_runtime_dispatch(
     struct nb_desktop_runtime *runtime,
     struct nb_desktop_runtime_update *update);
 
+/* Pollable optional-compositor descriptor, or -1 without Wayland service. */
+int nb_desktop_runtime_event_descriptor(
+    const struct nb_desktop_runtime *runtime);
+
 /*
  * Render a complete canonical frame. Pixels are borrowed from the runtime
  * until its next render, output change, or destruction.

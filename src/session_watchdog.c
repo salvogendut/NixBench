@@ -118,3 +118,16 @@ enum nb_session_watchdog_action nb_session_watchdog_advance(
         return NB_SESSION_WATCHDOG_ACTION_WAIT;
     }
 }
+
+uint32_t nb_session_watchdog_wait_timeout(
+    const struct nb_session_watchdog *watchdog,
+    uint64_t now)
+{
+    uint64_t remaining;
+
+    if (watchdog == NULL || now >= watchdog->deadline) {
+        return 0;
+    }
+    remaining = watchdog->deadline - now;
+    return remaining > UINT32_MAX ? UINT32_MAX : (uint32_t)remaining;
+}

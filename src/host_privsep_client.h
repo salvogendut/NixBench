@@ -14,6 +14,19 @@
  */
 struct nb_host *nb_host_privsep_client_create(int descriptor);
 
+/*
+ * Wait for helper traffic or one caller-owned wake descriptor. Readiness on
+ * wake_descriptor returns EMPTY after servicing helper traffic; the caller
+ * retains and drains that descriptor. This keeps the standalone compositor
+ * event-driven without exposing the private helper descriptor.
+ */
+enum nb_host_event_status
+nb_host_privsep_client_wait_event_with_descriptor(
+    struct nb_host *host,
+    int wake_descriptor,
+    uint32_t timeout_milliseconds,
+    struct nb_host_event *event);
+
 /* Queue one orderly session shutdown request.  token must be nonzero. */
 bool nb_host_privsep_client_request_shutdown(struct nb_host *host,
                                              uint64_t token);

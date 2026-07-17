@@ -55,4 +55,9 @@ enum nb_session_watchdog_action nb_session_watchdog_advance(
     uint64_t now,
     uint64_t *ping_token);
 
+/* Milliseconds until advance() can change state, saturated to UINT32_MAX. */
+uint32_t nb_session_watchdog_wait_timeout(
+    const struct nb_session_watchdog *watchdog,
+    uint64_t now);
+
 #endif

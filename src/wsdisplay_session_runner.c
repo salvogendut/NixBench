@@ -391,7 +391,6 @@ enum {
     NB_SESSION_CORE_REPORT_TIMEOUT_MS =
         NB_SESSION_WATCHDOG_STARTUP_GRACE_MS + 10000,
     NB_SESSION_WAIT_SLICE_MS = 20,
-    NB_SESSION_IDLE_WAIT_MS = 50,
     NB_SESSION_IO_BATCH = 64,
     NB_SESSION_WORKER_CLEANUP_INCOMPLETE_EXIT = 2,
     NB_SESSION_WORKER_CORE_CRASH_EXIT = 3,
@@ -892,16 +891,21 @@ static bool handle_host_event(struct worker_context *worker,
     }
 }
 
-static bool wait_for_worker_event(struct worker_context *worker)
+static bool wait_for_worker_event(
+    struct worker_context *worker,
+    const struct nb_session_watchdog *watchdog)
 {
     int descriptors[2 + NB_WSCONS_INPUT_WAIT_DESCRIPTOR_COUNT];
     size_t count = 2;
     struct nb_host_event event;
     struct nb_host_fd_wait_result result;
     enum nb_host_event_status status;
-    uint32_t timeout = nb_privsep_helper_outbound_size(worker->helper) != 0
-                           ? NB_SESSION_WAIT_SLICE_MS
-                           : NB_SESSION_IDLE_WAIT_MS;
+    const uint32_t timeout =
+        nb_privsep_helper_outbound_size(worker->helper) != 0
+            ? NB_SESSION_WAIT_SLICE_MS
+            : nb_session_watchdog_wait_timeout(
+                  watchdog,
+                  monotonic_milliseconds());
 
     descriptors[0] = worker->socket_fd;
     descriptors[1] = worker->fault_fd;
@@ -1565,7 +1569,7 @@ static int run_device_worker(
             !nb_privsep_helper_send_ping(worker.helper, ping_token)) {
             break;
         }
-        if (!wait_for_worker_event(&worker)) {
+        if (!wait_for_worker_event(&worker, &watchdog)) {
             break;
         }
     }

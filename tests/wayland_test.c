@@ -1388,6 +1388,8 @@ static void test_wayland_surface_lifecycle(void)
                                       OUTPUT_WIDTH,
                                       OUTPUT_HEIGHT);
     REQUIRE(server != NULL);
+    CHECK(nb_wayland_server_event_descriptor(NULL) == -1);
+    CHECK(nb_wayland_server_event_descriptor(server) >= 0);
     CHECK(!nb_wayland_server_take_redraw(server));
     REQUIRE(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
     REQUIRE(add_server_client(server, sockets[0]));
