@@ -247,8 +247,12 @@ launches the selected initial application, with the matching
 standalone session. When rootless Xwayland is enabled, the root supervisor
 also provisions the standard root-owned `/tmp/.X11-unix` socket directory with
 mode `01777` before takeover; unsafe pre-existing paths are rejected rather
-than repaired. The standalone core paces frame callbacks and presentation to
-the output refresh interval; wsdisplay uses a 17 ms fallback because dumb
+than repaired. The rootless X window manager publishes and handles the EWMH
+fullscreen state used by SDL and other X11 toolkits. An active fullscreen
+client receives the complete viewport without NixBench decorations or menu
+bar, and leaving fullscreen restores its prior normal or maximized frame. The
+standalone core paces frame callbacks and presentation to the output refresh
+interval; wsdisplay uses a 17 ms fallback because dumb
 framebuffer output does not report a refresh rate. Client redraws arriving
 inside one interval are coalesced, clipped to their affected NixBench windows,
 and transported as validated packed damage rectangles. The privileged helper

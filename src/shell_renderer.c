@@ -40,11 +40,20 @@ bool nb_shell_render_with_content(
     nb_window_content_render_callback render_content,
     void *context)
 {
-    return nb_desktop_render_with_content(renderer,
-                                          &shell->desktop,
-                                          render_content,
-                                          context) &&
-           nb_menu_render(renderer, &shell->menu, viewport, clock_text) &&
+    const struct nb_window *active = nb_desktop_find_window(
+        &shell->desktop,
+        nb_desktop_active_window_id(&shell->desktop));
+
+    if (!nb_desktop_render_with_content(renderer,
+                                        &shell->desktop,
+                                        render_content,
+                                        context)) {
+        return false;
+    }
+    if (active != NULL && active->fullscreen) {
+        return true;
+    }
+    return nb_menu_render(renderer, &shell->menu, viewport, clock_text) &&
            render_minimized_windows(renderer, shell, viewport);
 }
 

@@ -69,8 +69,11 @@ struct nb_window {
     int resize_origin_height;
     struct nb_rect restore_frame;
     bool restore_frame_valid;
+    struct nb_rect fullscreen_restore_frame;
+    bool fullscreen_restore_maximized;
     bool minimized;
     bool maximized;
+    bool fullscreen;
     bool minimize_gadget_visible;
     bool maximize_gadget_visible;
     enum nb_window_control_layout control_layout;
@@ -110,6 +113,9 @@ void nb_window_pointer_cancel(struct nb_window *window);
 bool nb_window_toggle_minimized(struct nb_window *window);
 bool nb_window_toggle_maximized(struct nb_window *window,
                                struct nb_rect bounds);
+bool nb_window_set_fullscreen(struct nb_window *window,
+                              bool fullscreen,
+                              struct nb_rect bounds);
 bool nb_window_clamp_to(struct nb_window *window, struct nb_rect bounds);
 
 #endif

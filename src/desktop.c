@@ -287,6 +287,20 @@ bool nb_desktop_toggle_window_maximized(struct nb_desktop *desktop,
     return nb_window_toggle_maximized(window, bounds);
 }
 
+bool nb_desktop_set_window_fullscreen(struct nb_desktop *desktop,
+                                      nb_window_id id,
+                                      bool fullscreen,
+                                      struct nb_rect bounds)
+{
+    struct nb_window *window = find_window_mutable(desktop, id);
+
+    if (window == NULL ||
+        !nb_window_set_fullscreen(window, fullscreen, bounds)) {
+        return false;
+    }
+    return !fullscreen || nb_desktop_activate_window(desktop, id);
+}
+
 void nb_desktop_set_window_controls(struct nb_desktop *desktop,
                                     bool minimize_gadget_visible,
                                     bool maximize_gadget_visible,
@@ -454,5 +468,27 @@ bool nb_desktop_clamp_windows(struct nb_desktop *desktop,
         }
     }
 
+    return changed;
+}
+
+bool nb_desktop_clamp_windows_for_viewport(
+    struct nb_desktop *desktop,
+    struct nb_rect work_area,
+    struct nb_rect viewport)
+{
+    size_t index;
+    bool changed = false;
+
+    for (index = 0; index < desktop->window_count; ++index) {
+        struct nb_window *window =
+            &desktop->slots[desktop->stack[index]].window;
+        const struct nb_rect bounds = window->fullscreen
+                                          ? viewport
+                                          : work_area;
+
+        if (nb_window_clamp_to(window, bounds)) {
+            changed = true;
+        }
+    }
     return changed;
 }

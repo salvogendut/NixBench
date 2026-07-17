@@ -326,7 +326,7 @@ static bool render_resize_gadget(SDL_Renderer *renderer,
         window->pointer_mode == NB_WINDOW_POINTER_RESIZE;
     const float inset = pressed ? 1.0f : 0.0f;
 
-    if (window->maximized) {
+    if (window->maximized || window->fullscreen) {
         return true;
     }
 
@@ -374,6 +374,10 @@ bool nb_window_render_base(SDL_Renderer *renderer,
 {
     if (!window->visible || window->minimized) {
         return true;
+    }
+
+    if (window->fullscreen) {
+        return render_content_background(renderer, window);
     }
 
     return fill_rect(renderer, window->frame, frame_color) &&

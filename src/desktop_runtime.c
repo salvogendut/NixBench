@@ -2277,6 +2277,24 @@ bool nb_desktop_runtime_update_xwayland_identity(
 #endif
 }
 
+bool nb_desktop_runtime_set_xwayland_fullscreen(
+    struct nb_desktop_runtime *runtime,
+    uint32_t xwindow,
+    bool fullscreen)
+{
+#if NIXBENCH_HAS_WAYLAND
+    return runtime != NULL && runtime->wayland != NULL &&
+           nb_wayland_server_set_xwayland_fullscreen(runtime->wayland,
+                                                     xwindow,
+                                                     fullscreen);
+#else
+    (void)runtime;
+    (void)xwindow;
+    (void)fullscreen;
+    return false;
+#endif
+}
+
 bool nb_desktop_runtime_unmap_xwayland_window(
     struct nb_desktop_runtime *runtime,
     uint32_t xwindow)

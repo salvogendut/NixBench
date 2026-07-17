@@ -194,6 +194,10 @@ bool nb_desktop_runtime_update_xwayland_identity(
     uint32_t xwindow,
     const char *title,
     const char *application_name);
+bool nb_desktop_runtime_set_xwayland_fullscreen(
+    struct nb_desktop_runtime *runtime,
+    uint32_t xwindow,
+    bool fullscreen);
 bool nb_desktop_runtime_unmap_xwayland_window(
     struct nb_desktop_runtime *runtime,
     uint32_t xwindow);

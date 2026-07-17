@@ -30,7 +30,10 @@ enum {
     NB_XWAYLAND_LAST_DISPLAY = 109,
     NB_XWAYLAND_MAX_WINDOWS = 32,
     NB_XWAYLAND_EXIT_WAIT_MS = 2000,
-    NB_XWAYLAND_EXIT_WAIT_SLICE_MS = 20
+    NB_XWAYLAND_EXIT_WAIT_SLICE_MS = 20,
+    NB_NET_WM_STATE_REMOVE = 0,
+    NB_NET_WM_STATE_ADD = 1,
+    NB_NET_WM_STATE_TOGGLE = 2
 };
 
 struct nb_xwayland_window {
@@ -40,6 +43,7 @@ struct nb_xwayland_window {
     bool occupied;
     bool associated;
     bool association_pending_reported;
+    bool fullscreen;
     char title[NB_WINDOW_TITLE_CAPACITY];
     char application_name[NB_WINDOW_TITLE_CAPACITY];
 };
@@ -52,6 +56,9 @@ struct nb_xwayland_rootless {
     xcb_atom_t wl_surface_id;
     xcb_atom_t wl_surface_serial;
     xcb_atom_t net_wm_name;
+    xcb_atom_t net_supported;
+    xcb_atom_t net_wm_state;
+    xcb_atom_t net_wm_state_fullscreen;
     xcb_atom_t utf8_string;
     xcb_atom_t wm_name;
     xcb_atom_t wm_class;
@@ -512,6 +519,70 @@ static bool close_native_window(void *context, uint32_t xwindow)
     return xcb_flush(service->connection) > 0;
 }
 
+static bool publish_fullscreen_state(
+    struct nb_xwayland_rootless *service,
+    struct nb_xwayland_window *entry,
+    bool fullscreen)
+{
+    const xcb_atom_t state = service->net_wm_state_fullscreen;
+
+    if (!checked_request_succeeded(
+            service->connection,
+            xcb_change_property_checked(service->connection,
+                                        XCB_PROP_MODE_REPLACE,
+                                        entry->window,
+                                        service->net_wm_state,
+                                        XCB_ATOM_ATOM,
+                                        32,
+                                        fullscreen ? 1 : 0,
+                                        &state),
+            "publish an X11 fullscreen state")) {
+        return false;
+    }
+    entry->fullscreen = fullscreen;
+    return true;
+}
+
+static bool handle_wm_state_message(
+    struct nb_xwayland_rootless *service,
+    const xcb_client_message_event_t *message)
+{
+    struct nb_xwayland_window *entry;
+    bool fullscreen;
+
+    if (message->type != service->net_wm_state || message->format != 32 ||
+        (message->data.data32[1] != service->net_wm_state_fullscreen &&
+         message->data.data32[2] != service->net_wm_state_fullscreen)) {
+        return false;
+    }
+    entry = remember_window(service, message->window);
+    if (entry == NULL || !entry->associated) {
+        return true;
+    }
+    if (message->data.data32[0] == NB_NET_WM_STATE_ADD) {
+        fullscreen = true;
+    } else if (message->data.data32[0] == NB_NET_WM_STATE_REMOVE) {
+        fullscreen = false;
+    } else if (message->data.data32[0] == NB_NET_WM_STATE_TOGGLE) {
+        fullscreen = !entry->fullscreen;
+    } else {
+        return true;
+    }
+    if (fullscreen == entry->fullscreen) {
+        return true;
+    }
+    if (!nb_desktop_runtime_set_xwayland_fullscreen(service->desktop,
+                                                    entry->window,
+                                                    fullscreen) ||
+        !publish_fullscreen_state(service, entry, fullscreen)) {
+        fprintf(stderr,
+                "Rootless XWM could not %s fullscreen for X window %#x\n",
+                fullscreen ? "enter" : "leave",
+                (unsigned int)entry->window);
+    }
+    return true;
+}
+
 static bool focus_native_window(void *context, uint32_t xwindow)
 {
     struct nb_xwayland_rootless *service = context;
@@ -641,6 +712,7 @@ static bool initialize_xwm(struct nb_xwayland_rootless *service)
         XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY |
         XCB_EVENT_MASK_PROPERTY_CHANGE;
     const uint32_t support_event_mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
+    xcb_atom_t supported[2];
 
     if (xcb_connection_has_error(service->connection) != 0) {
         return false;
@@ -679,6 +751,16 @@ static bool initialize_xwm(struct nb_xwayland_rootless *service)
     service->net_wm_name = intern_atom(service->connection,
                                        "_NET_WM_NAME",
                                        false);
+    service->net_supported = intern_atom(service->connection,
+                                         "_NET_SUPPORTED",
+                                         false);
+    service->net_wm_state = intern_atom(service->connection,
+                                        "_NET_WM_STATE",
+                                        false);
+    service->net_wm_state_fullscreen = intern_atom(
+        service->connection,
+        "_NET_WM_STATE_FULLSCREEN",
+        false);
     service->utf8_string = intern_atom(service->connection,
                                        "UTF8_STRING",
                                        false);
@@ -697,6 +779,24 @@ static bool initialize_xwm(struct nb_xwayland_rootless *service)
     service->wm_selection = intern_atom(service->connection,
                                         "WM_S0",
                                         false);
+    supported[0] = service->net_wm_state;
+    supported[1] = service->net_wm_state_fullscreen;
+    if (service->net_supported == XCB_ATOM_NONE ||
+        service->net_wm_state == XCB_ATOM_NONE ||
+        service->net_wm_state_fullscreen == XCB_ATOM_NONE ||
+        !checked_request_succeeded(
+            service->connection,
+            xcb_change_property_checked(service->connection,
+                                        XCB_PROP_MODE_REPLACE,
+                                        service->screen->root,
+                                        service->net_supported,
+                                        XCB_ATOM_ATOM,
+                                        32,
+                                        2,
+                                        supported),
+            "publish supported X11 window states")) {
+        return false;
+    }
     service->wm_window = xcb_generate_id(service->connection);
     if (service->wm_selection == XCB_ATOM_NONE ||
         service->wm_window == XCB_WINDOW_NONE ||
@@ -1115,6 +1215,9 @@ bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service)
             const xcb_client_message_event_t *message =
                 (const xcb_client_message_event_t *)event;
 
+            if (handle_wm_state_message(service, message)) {
+                break;
+            }
             if (message->type == service->wl_surface_serial &&
                 message->format == 32 &&
                 (message->data.data32[0] != 0 ||

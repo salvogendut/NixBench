@@ -53,6 +53,10 @@ bool nb_desktop_toggle_window_minimized(struct nb_desktop *desktop,
 bool nb_desktop_toggle_window_maximized(struct nb_desktop *desktop,
                                         nb_window_id id,
                                         struct nb_rect bounds);
+bool nb_desktop_set_window_fullscreen(struct nb_desktop *desktop,
+                                      nb_window_id id,
+                                      bool fullscreen,
+                                      struct nb_rect bounds);
 void nb_desktop_set_window_controls(struct nb_desktop *desktop,
                                     bool minimize_gadget_visible,
                                     bool maximize_gadget_visible,
@@ -84,5 +88,9 @@ bool nb_desktop_has_pointer_interaction(const struct nb_desktop *desktop);
 
 bool nb_desktop_clamp_windows(struct nb_desktop *desktop,
                               struct nb_rect bounds);
+bool nb_desktop_clamp_windows_for_viewport(
+    struct nb_desktop *desktop,
+    struct nb_rect work_area,
+    struct nb_rect viewport);
 
 #endif

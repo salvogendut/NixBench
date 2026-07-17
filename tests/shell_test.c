@@ -561,6 +561,27 @@ static void test_cancel_and_clamp(void)
     CHECK(window_a->frame.y == NB_MENU_BAR_HEIGHT);
 }
 
+static void test_fullscreen_routes_through_menu_bar(void)
+{
+    const struct nb_rect viewport = {0, 0, 800, 600};
+    struct fixture fixture = make_fixture();
+    struct nb_shell_pointer_target target;
+    const struct nb_window *window_b;
+
+    CHECK(nb_desktop_set_window_fullscreen(&fixture.shell.desktop,
+                                           fixture.b,
+                                           true,
+                                           viewport));
+    window_b = nb_desktop_find_window(&fixture.shell.desktop, fixture.b);
+    CHECK(window_b != NULL && window_b->fullscreen);
+    target = nb_shell_pointer_target_at(&fixture.shell, 10, 10, viewport);
+    CHECK(target.window == fixture.b);
+    CHECK(target.hit == NB_WINDOW_HIT_CONTENT);
+    CHECK(nb_shell_pointer_down(&fixture.shell, 10, 10, viewport));
+    CHECK(!nb_menu_is_open(&fixture.shell.menu));
+    CHECK(nb_desktop_active_window_id(&fixture.shell.desktop) == fixture.b);
+}
+
 int main(void)
 {
     test_active_application_menu();
@@ -573,6 +594,7 @@ int main(void)
     test_pointer_target_query();
     test_close_and_keyboard_actions();
     test_cancel_and_clamp();
+    test_fullscreen_routes_through_menu_bar();
 
     if (failures != 0) {
         fprintf(stderr, "%d shell model check(s) failed\n", failures);

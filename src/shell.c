@@ -557,11 +557,16 @@ struct nb_shell_pointer_target nb_shell_pointer_target_at(
         NB_WINDOW_ID_NONE,
         NB_WINDOW_HIT_NONE
     };
+    const struct nb_window *active = nb_desktop_find_window(
+        &shell->desktop,
+        nb_desktop_active_window_id(&shell->desktop));
+    const bool active_fullscreen = active != NULL && active->fullscreen;
     size_t stack_index;
 
-    if (nb_menu_is_open(&shell->menu) ||
+    if (!active_fullscreen &&
+        (nb_menu_is_open(&shell->menu) ||
         nb_menu_hit_test(&shell->menu, x, y, viewport).kind !=
-            NB_MENU_HIT_NONE) {
+            NB_MENU_HIT_NONE)) {
         return target;
     }
 
@@ -588,6 +593,10 @@ bool nb_shell_pointer_down(struct nb_shell *shell,
                            int y,
                            struct nb_rect viewport)
 {
+    const struct nb_window *active = nb_desktop_find_window(
+        &shell->desktop,
+        nb_desktop_active_window_id(&shell->desktop));
+    const bool active_fullscreen = active != NULL && active->fullscreen;
     enum nb_window_hit window_hit;
     nb_window_id minimized_window;
 
@@ -595,7 +604,7 @@ bool nb_shell_pointer_down(struct nb_shell *shell,
         return true;
     }
 
-    minimized_window = nb_menu_is_open(&shell->menu)
+    minimized_window = active_fullscreen || nb_menu_is_open(&shell->menu)
                            ? NB_WINDOW_ID_NONE
                            : minimized_window_at(shell, x, y, viewport);
     if (minimized_window != NB_WINDOW_ID_NONE) {
@@ -605,7 +614,7 @@ bool nb_shell_pointer_down(struct nb_shell *shell,
         return true;
     }
 
-    if (nb_menu_is_open(&shell->menu)) {
+    if (!active_fullscreen && nb_menu_is_open(&shell->menu)) {
         nb_menu_pointer_down(&shell->menu, x, y, viewport);
         if (nb_menu_is_tracking(&shell->menu)) {
             shell->pointer_owner = NB_SHELL_POINTER_MENU;
@@ -613,7 +622,8 @@ bool nb_shell_pointer_down(struct nb_shell *shell,
         return true;
     }
 
-    if (nb_menu_pointer_down(&shell->menu, x, y, viewport)) {
+    if (!active_fullscreen &&
+        nb_menu_pointer_down(&shell->menu, x, y, viewport)) {
         if (nb_menu_is_tracking(&shell->menu)) {
             shell->pointer_owner = NB_SHELL_POINTER_MENU;
         }
@@ -763,6 +773,8 @@ bool nb_shell_wants_pointer_motion(const struct nb_shell *shell)
 bool nb_shell_clamp_windows(struct nb_shell *shell,
                             struct nb_rect viewport)
 {
-    return nb_desktop_clamp_windows(&shell->desktop,
-                                    nb_menu_work_area(viewport));
+    return nb_desktop_clamp_windows_for_viewport(
+        &shell->desktop,
+        nb_menu_work_area(viewport),
+        viewport);
 }

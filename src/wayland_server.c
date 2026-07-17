@@ -5752,6 +5752,38 @@ bool nb_wayland_server_update_xwayland_identity(
     return true;
 }
 
+bool nb_wayland_server_set_xwayland_fullscreen(
+    struct nb_wayland_server *server,
+    uint32_t xwindow,
+    bool fullscreen)
+{
+    struct nb_wayland_surface *surface;
+    const struct nb_rect viewport = {
+        0,
+        0,
+        server != NULL ? server->output_width : 0,
+        server != NULL ? server->output_height : 0
+    };
+
+    if (server == NULL || server->destroying || xwindow == 0) {
+        return false;
+    }
+    surface = find_surface_by_xwayland_window(server, xwindow);
+    if (surface == NULL || surface->window == NB_WINDOW_ID_NONE) {
+        return false;
+    }
+    nb_shell_pointer_cancel(server->shell);
+    if (!nb_desktop_set_window_fullscreen(&server->shell->desktop,
+                                          surface->window,
+                                          fullscreen,
+                                          viewport) ||
+        !nb_wayland_server_window_resized(server, surface->window)) {
+        return false;
+    }
+    mark_redraw_full(server);
+    return true;
+}
+
 bool nb_wayland_server_unmap_xwayland_window(
     struct nb_wayland_server *server,
     uint32_t xwindow)
@@ -6111,6 +6143,7 @@ bool nb_wayland_server_request_close(struct nb_wayland_server *server,
 bool nb_wayland_server_window_resized(struct nb_wayland_server *server,
                                       nb_window_id window)
 {
+    struct nb_rect content;
     const struct nb_window *host_window;
     struct nb_wayland_surface *surface;
     int desired_width;
@@ -6129,11 +6162,9 @@ bool nb_wayland_server_window_resized(struct nb_wayland_server *server,
     if (host_window == NULL) {
         return false;
     }
-    desired_width =
-        host_window->frame.width - (2 * NB_WINDOW_BORDER_WIDTH);
-    desired_height = host_window->frame.height -
-                     (2 * NB_WINDOW_BORDER_WIDTH) -
-                     NB_WINDOW_TITLE_HEIGHT - NB_WINDOW_FOOTER_HEIGHT;
+    content = nb_window_content_rect(host_window);
+    desired_width = content.width;
+    desired_height = content.height;
     if (desired_width < NB_WINDOW_MIN_WIDTH) {
         desired_width = NB_WINDOW_MIN_WIDTH;
     }

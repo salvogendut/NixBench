@@ -82,8 +82,11 @@ void nb_window_init(struct nb_window *window,
     window->resize_origin_height = 0;
     window->restore_frame = window->frame;
     window->restore_frame_valid = false;
+    window->fullscreen_restore_frame = window->frame;
+    window->fullscreen_restore_maximized = false;
     window->minimized = false;
     window->maximized = false;
+    window->fullscreen = false;
     window->minimize_gadget_visible = true;
     window->maximize_gadget_visible = true;
     window->control_layout = NB_WINDOW_CONTROLS_RIGHT;
@@ -128,6 +131,12 @@ void nb_window_set_controls(struct nb_window *window,
 
 struct nb_rect nb_window_title_rect(const struct nb_window *window)
 {
+    if (window->fullscreen) {
+        return (struct nb_rect){window->frame.x,
+                                window->frame.y,
+                                0,
+                                0};
+    }
     const int inner_width = maximum(0, window->frame.width -
                                        (2 * NB_WINDOW_BORDER_WIDTH));
     const int inner_height = maximum(0, window->frame.height -
@@ -144,6 +153,9 @@ struct nb_rect nb_window_title_rect(const struct nb_window *window)
 
 struct nb_rect nb_window_content_rect(const struct nb_window *window)
 {
+    if (window->fullscreen) {
+        return window->frame;
+    }
     const struct nb_rect title = nb_window_title_rect(window);
     const int bottom = window->frame.y + window->frame.height -
                        NB_WINDOW_BORDER_WIDTH - NB_WINDOW_FOOTER_HEIGHT;
@@ -294,6 +306,10 @@ enum nb_window_hit nb_window_hit_test(const struct nb_window *window,
     if (!window->visible || window->minimized ||
         !rect_contains(window->frame, x, y)) {
         return NB_WINDOW_HIT_NONE;
+    }
+
+    if (window->fullscreen) {
+        return NB_WINDOW_HIT_CONTENT;
     }
 
     if (rect_contains(nb_window_close_rect(window), x, y)) {
@@ -489,7 +505,8 @@ bool nb_window_toggle_maximized(struct nb_window *window, struct nb_rect bounds)
 {
     struct nb_rect restored;
 
-    if (bounds.width <= 0 || bounds.height <= 0) {
+    if (window == NULL || window->fullscreen || bounds.width <= 0 ||
+        bounds.height <= 0) {
         return false;
     }
 
@@ -515,6 +532,34 @@ bool nb_window_toggle_maximized(struct nb_window *window, struct nb_rect bounds)
     return true;
 }
 
+bool nb_window_set_fullscreen(struct nb_window *window,
+                              bool fullscreen,
+                              struct nb_rect bounds)
+{
+    if (window == NULL || bounds.width <= 0 || bounds.height <= 0) {
+        return false;
+    }
+    if (window->fullscreen == fullscreen) {
+        return true;
+    }
+
+    nb_window_pointer_cancel(window);
+    if (fullscreen) {
+        window->fullscreen_restore_frame = window->frame;
+        window->fullscreen_restore_maximized = window->maximized;
+        window->fullscreen = true;
+        window->maximized = false;
+        window->minimized = false;
+        window->frame = bounds;
+        return true;
+    }
+
+    window->fullscreen = false;
+    window->maximized = window->fullscreen_restore_maximized;
+    window->frame = window->fullscreen_restore_frame;
+    return true;
+}
+
 bool nb_window_clamp_to(struct nb_window *window, struct nb_rect bounds)
 {
     const int old_x = window->frame.x;
@@ -522,7 +567,7 @@ bool nb_window_clamp_to(struct nb_window *window, struct nb_rect bounds)
     const int old_width = window->frame.width;
     const int old_height = window->frame.height;
 
-    if (window->maximized) {
+    if (window->maximized || window->fullscreen) {
         if (window->frame.x != bounds.x || window->frame.y != bounds.y ||
             window->frame.width != bounds.width ||
             window->frame.height != bounds.height) {

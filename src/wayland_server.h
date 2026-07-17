@@ -225,6 +225,10 @@ bool nb_wayland_server_update_xwayland_identity(
     uint32_t xwindow,
     const char *title,
     const char *application_name);
+bool nb_wayland_server_set_xwayland_fullscreen(
+    struct nb_wayland_server *server,
+    uint32_t xwindow,
+    bool fullscreen);
 bool nb_wayland_server_unmap_xwayland_window(
     struct nb_wayland_server *server,
     uint32_t xwindow);

@@ -382,6 +382,40 @@ static void test_minimize_capture_and_focus(void)
     check_invariants(&fixture.desktop);
 }
 
+static void test_fullscreen_state_and_clamp(void)
+{
+    struct fixture fixture = make_fixture();
+    const struct nb_rect work_area = {0, 24, 800, 576};
+    const struct nb_rect viewport = {0, 0, 800, 600};
+    const struct nb_rect larger_viewport = {0, 0, 1024, 768};
+    const struct nb_window *window_a;
+
+    CHECK(nb_desktop_set_window_fullscreen(&fixture.desktop,
+                                           fixture.a,
+                                           true,
+                                           viewport));
+    window_a = nb_desktop_find_window(&fixture.desktop, fixture.a);
+    CHECK(window_a != NULL);
+    CHECK(window_a->fullscreen);
+    CHECK(nb_desktop_active_window_id(&fixture.desktop) == fixture.a);
+    CHECK(nb_desktop_window_id_at(&fixture.desktop, 1) == fixture.a);
+    CHECK(window_a->frame.width == viewport.width);
+    CHECK(window_a->frame.height == viewport.height);
+    CHECK(nb_desktop_clamp_windows_for_viewport(&fixture.desktop,
+                                                work_area,
+                                                larger_viewport));
+    CHECK(window_a->frame.width == larger_viewport.width);
+    CHECK(window_a->frame.height == larger_viewport.height);
+    CHECK(nb_desktop_set_window_fullscreen(&fixture.desktop,
+                                           fixture.a,
+                                           false,
+                                           larger_viewport));
+    CHECK(!window_a->fullscreen);
+    CHECK(window_a->frame.x == 40);
+    CHECK(window_a->frame.y == 40);
+    check_invariants(&fixture.desktop);
+}
+
 static void test_active_fallback(void)
 {
     struct fixture fixture = make_fixture();
@@ -568,6 +602,7 @@ int main(void)
     test_resize_capture_routing();
     test_maximize_capture_routing();
     test_minimize_capture_and_focus();
+    test_fullscreen_state_and_clamp();
     test_active_fallback();
     test_explicit_activation();
     test_clamp_all();

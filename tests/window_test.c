@@ -233,6 +233,51 @@ static void test_minimize_toggle(void)
     CHECK(!window.minimized);
 }
 
+static void test_fullscreen_state(void)
+{
+    struct nb_window window = make_window();
+    const struct nb_rect original = window.frame;
+    const struct nb_rect viewport = {0, 0, 800, 600};
+    const struct nb_rect resized_viewport = {0, 0, 1024, 768};
+
+    CHECK(nb_window_set_fullscreen(&window, true, viewport));
+    CHECK(window.fullscreen);
+    CHECK(!window.maximized);
+    CHECK(window.frame.x == 0);
+    CHECK(window.frame.y == 0);
+    CHECK(window.frame.width == 800);
+    CHECK(window.frame.height == 600);
+    CHECK(nb_window_content_rect(&window).width == 800);
+    CHECK(nb_window_content_rect(&window).height == 600);
+    CHECK(nb_window_title_rect(&window).width == 0);
+    CHECK(nb_window_hit_test(&window, 10, 10) == NB_WINDOW_HIT_CONTENT);
+    CHECK(!nb_window_toggle_maximized(&window, viewport));
+
+    CHECK(nb_window_clamp_to(&window, resized_viewport));
+    CHECK(window.frame.width == 1024);
+    CHECK(window.frame.height == 768);
+    CHECK(nb_window_set_fullscreen(&window, false, resized_viewport));
+    CHECK(!window.fullscreen);
+    CHECK(!window.maximized);
+    CHECK(window.frame.x == original.x);
+    CHECK(window.frame.y == original.y);
+    CHECK(window.frame.width == original.width);
+    CHECK(window.frame.height == original.height);
+
+    CHECK(nb_window_toggle_maximized(&window, viewport));
+    CHECK(nb_window_set_fullscreen(&window, true, viewport));
+    CHECK(window.fullscreen);
+    CHECK(!window.maximized);
+    CHECK(nb_window_set_fullscreen(&window, false, viewport));
+    CHECK(!window.fullscreen);
+    CHECK(window.maximized);
+    CHECK(window.frame.width == viewport.width);
+    CHECK(window.frame.height == viewport.height);
+    CHECK(nb_window_toggle_maximized(&window, viewport));
+    CHECK(window.frame.x == original.x);
+    CHECK(window.frame.y == original.y);
+}
+
 static void test_window_control_preferences(void)
 {
     struct nb_window window = make_window();
@@ -445,6 +490,7 @@ int main(void)
     test_clamping();
     test_maximize_toggle();
     test_minimize_toggle();
+    test_fullscreen_state();
     test_window_control_preferences();
     test_resizing();
     test_close_tracking();
