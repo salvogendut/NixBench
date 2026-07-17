@@ -52,7 +52,7 @@ static void test_geometry_and_hit_testing(void)
     CHECK(close.y == 87);
     CHECK(close.width == 16);
     CHECK(close.height == 16);
-    CHECK(minimize.x == 107);
+    CHECK(minimize.x == 357);
     CHECK(minimize.y == 87);
     CHECK(maximize.x == 377);
     CHECK(maximize.y == 87);
@@ -208,7 +208,7 @@ static void test_minimize_toggle(void)
     const int minimize_x = minimize.x + (minimize.width / 2);
     const int minimize_y = minimize.y + (minimize.height / 2);
 
-    CHECK(minimize.x == 107);
+    CHECK(minimize.x == 357);
     CHECK(minimize.y == 87);
     CHECK(nb_window_hit_test(&window, minimize_x, minimize_y) ==
           NB_WINDOW_HIT_MINIMIZE);

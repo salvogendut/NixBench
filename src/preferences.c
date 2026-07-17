@@ -25,7 +25,7 @@ void nb_user_preferences_init(struct nb_user_preferences *preferences)
         NB_BACKDROP_GRADIENT_VERTICAL;
     preferences->minimize_gadget_visible = true;
     preferences->maximize_gadget_visible = true;
-    preferences->window_control_layout = NB_WINDOW_CONTROLS_SPLIT;
+    preferences->window_control_layout = NB_WINDOW_CONTROLS_RIGHT;
     (void)snprintf(preferences->desktop_theme,
                    sizeof(preferences->desktop_theme),
                    "%s",

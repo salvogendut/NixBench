@@ -95,7 +95,7 @@ void nb_window_init(struct nb_window *window,
     window->maximized = false;
     window->minimize_gadget_visible = true;
     window->maximize_gadget_visible = true;
-    window->control_layout = NB_WINDOW_CONTROLS_SPLIT;
+    window->control_layout = NB_WINDOW_CONTROLS_RIGHT;
 }
 
 void nb_window_set_controls(struct nb_window *window,
@@ -218,8 +218,6 @@ struct nb_rect nb_window_minimize_rect(const struct nb_window *window)
     }
     if (window->control_layout == NB_WINDOW_CONTROLS_LEFT) {
         x = close.x + close.width + NB_WINDOW_GADGET_MARGIN;
-    } else if (window->control_layout == NB_WINDOW_CONTROLS_SPLIT) {
-        x = title.x + NB_WINDOW_GADGET_MARGIN;
     } else {
         x = close.x - NB_WINDOW_GADGET_MARGIN - size;
         if (window->maximize_gadget_visible) {

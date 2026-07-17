@@ -480,12 +480,13 @@ live and saved atomically. The current panel provides:
 - an optional vertical, horizontal, or diagonal gradient from color 1 to
   color 2;
 - persistent pins for NixClock, Sakura, and Midori; and
-- minimize- and maximize-gadget visibility, with split, left, or right
-  window-gadget placement.
+- minimize- and maximize-gadget visibility, with left or right window-gadget
+  placement.
 
-The default split layout keeps minimize on the left and groups maximize with
-close on the right, with close as the rightmost gadget. The left and right
-layouts group all visible gadgets on their named side.
+The default layout groups minimize, maximize, and close on the right, in that
+order. The close gadget is therefore the rightmost control. Existing
+`windows.controls=split` files are accepted as the new right layout; selecting
+Left in Settings groups all visible gadgets on the left instead.
 
 The version-2 file also reserves `desktop.wallpaper`, `desktop.theme`, and
 `windows.theme` keys for future wallpaper and skinning work. Version-1 files

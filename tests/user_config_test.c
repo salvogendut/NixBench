@@ -89,6 +89,7 @@ int main(void)
     CHECK(!preferences.backdrop_gradient_enabled);
     CHECK(preferences.minimize_gadget_visible);
     CHECK(preferences.maximize_gadget_visible);
+    CHECK(preferences.window_control_layout == NB_WINDOW_CONTROLS_RIGHT);
 
     preferences.pinned_applications[NB_PINNED_APPLICATION_SAKURA] = false;
     preferences.backdrop_primary = (struct nb_color){1, 2, 3};
@@ -127,6 +128,14 @@ int main(void)
                                            sizeof(error));
     CHECK(result == NB_USER_CONFIG_LOADED);
     CHECK(loaded.minimize_gadget_visible);
+
+    CHECK(write_text(path, "version=2\nwindows.controls=split\n"));
+    result = nb_user_config_load_or_create(path,
+                                           &loaded,
+                                           error,
+                                           sizeof(error));
+    CHECK(result == NB_USER_CONFIG_LOADED);
+    CHECK(loaded.window_control_layout == NB_WINDOW_CONTROLS_RIGHT);
 
     CHECK(write_text(path, "version=3\n"));
     nb_user_preferences_init(&loaded);

@@ -204,10 +204,7 @@ static const char *layout_name(enum nb_window_control_layout value)
     if (value == NB_WINDOW_CONTROLS_LEFT) {
         return "Left";
     }
-    if (value == NB_WINDOW_CONTROLS_RIGHT) {
-        return "Right";
-    }
-    return "Split";
+    return "Right";
 }
 
 size_t nb_settings_palette_size(void)

@@ -164,7 +164,7 @@ void nb_shell_init(struct nb_shell *shell,
     shell->minimized_pointer_pressed = false;
     shell->minimize_gadget_visible = true;
     shell->maximize_gadget_visible = true;
-    shell->window_control_layout = NB_WINDOW_CONTROLS_SPLIT;
+    shell->window_control_layout = NB_WINDOW_CONTROLS_RIGHT;
     sync_active_menu(shell);
 }
 

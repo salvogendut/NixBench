@@ -176,7 +176,9 @@ static bool parse_known_key(struct nb_user_preferences *preferences,
     }
     if (strcmp(key, "windows.controls") == 0) {
         if (strcmp(value, "split") == 0) {
-            preferences->window_control_layout = NB_WINDOW_CONTROLS_SPLIT;
+            /* Version-2 split placed close on the left. Keep old files
+             * readable while adopting the right-hand control cluster. */
+            preferences->window_control_layout = NB_WINDOW_CONTROLS_RIGHT;
         } else if (strcmp(value, "left") == 0) {
             preferences->window_control_layout = NB_WINDOW_CONTROLS_LEFT;
         } else if (strcmp(value, "right") == 0) {
@@ -328,7 +330,7 @@ static const char *layout_name(enum nb_window_control_layout value)
 {
     switch (value) {
     case NB_WINDOW_CONTROLS_SPLIT:
-        return "split";
+        return "right";
     case NB_WINDOW_CONTROLS_LEFT:
         return "left";
     case NB_WINDOW_CONTROLS_RIGHT:

@@ -556,8 +556,10 @@ static bool apply_settings_action(struct nb_desktop_runtime *runtime,
             runtime->preferences.window_control_layout);
     } else if (action == NB_SETTINGS_ACTION_CYCLE_CONTROL_LAYOUT) {
         runtime->preferences.window_control_layout =
-            (enum nb_window_control_layout)(
-                (runtime->preferences.window_control_layout + 1) % 3);
+            runtime->preferences.window_control_layout ==
+                    NB_WINDOW_CONTROLS_LEFT
+                ? NB_WINDOW_CONTROLS_RIGHT
+                : NB_WINDOW_CONTROLS_LEFT;
         changed = true;
         nb_shell_set_window_controls(
             &runtime->shell,
