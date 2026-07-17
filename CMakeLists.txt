@@ -758,6 +758,18 @@ if(
   nixbench_configure_c_target(nixbench_wsdisplay_smoke_support)
 endif()
 
+if(UNIX AND (BUILD_TESTING OR NIXBENCH_BUILD_WSDISPLAY_SESSION))
+  add_library(
+    nixbench_session_frame_pacing STATIC
+    src/session_frame_pacing.c
+  )
+  target_include_directories(
+    nixbench_session_frame_pacing
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  )
+  nixbench_configure_c_target(nixbench_session_frame_pacing)
+endif()
+
 if(
   UNIX
   AND (
@@ -1229,6 +1241,7 @@ if(
       nixbench_desktop_runtime
       nixbench_host_privsep_client
       nixbench_preferences
+      nixbench_session_frame_pacing
   )
   target_compile_definitions(
     nixbench_session_core
@@ -1446,6 +1459,16 @@ if(BUILD_TESTING)
       PRIVATE nixbench_session_console_shortcuts
     )
     nixbench_configure_c_target(nixbench_session_console_shortcuts_tests)
+
+    add_executable(
+      nixbench_session_frame_pacing_tests
+      tests/session_frame_pacing_test.c
+    )
+    target_link_libraries(
+      nixbench_session_frame_pacing_tests
+      PRIVATE nixbench_session_frame_pacing
+    )
+    nixbench_configure_c_target(nixbench_session_frame_pacing_tests)
 
     add_executable(
       nixbench_session_runtime_sentinel_tests
@@ -1712,6 +1735,10 @@ if(BUILD_TESTING)
     add_test(
       NAME nixbench.session.console-shortcuts
       COMMAND nixbench_session_console_shortcuts_tests
+    )
+    add_test(
+      NAME nixbench.session.frame-pacing
+      COMMAND nixbench_session_frame_pacing_tests
     )
     add_test(
       NAME nixbench.session.runtime-sentinel

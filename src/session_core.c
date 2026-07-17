@@ -29,6 +29,7 @@
 #include "desktop_runtime.h"
 #include "host.h"
 #include "host_privsep_client.h"
+#include "session_frame_pacing.h"
 #include "user_config.h"
 
 #ifndef NIXBENCH_HAS_ROOTLESS_XWAYLAND
@@ -48,7 +49,6 @@ enum {
     NB_SESSION_CORE_SHUTDOWN_TIMEOUT_MS = 5000,
     NB_SESSION_CORE_APPLICATION_EXIT_TIMEOUT_MS = 2000,
     NB_SESSION_CORE_APPLICATION_WAIT_SLICE_MS = 20,
-    NB_SESSION_CORE_WAYLAND_WAIT_MS = 16,
     NB_SESSION_CORE_CLOCK_FALLBACK_WAIT_MS = 1000,
     NB_SESSION_CORE_MAX_APPLICATIONS = 16
 };
@@ -72,6 +72,7 @@ struct nb_session_core {
     struct nb_host *host;
     struct nb_desktop_runtime *desktop;
     struct nb_session_runtime_directory runtime_directory;
+    struct nb_session_frame_pacing frame_pacing;
     uint64_t next_frame_serial;
     uint64_t pending_frame_serial;
     uint64_t shutdown_deadline;
@@ -711,18 +712,6 @@ static uint32_t clock_refresh_timeout(void)
     return (uint32_t)seconds * UINT32_C(1000);
 }
 
-static uint32_t event_wait_timeout(const struct nb_session_core *core)
-{
-    uint32_t timeout = clock_refresh_timeout();
-
-    if (core->desktop != NULL &&
-        nb_desktop_runtime_wayland_display_name(core->desktop) != NULL &&
-        timeout > NB_SESSION_CORE_WAYLAND_WAIT_MS) {
-        timeout = NB_SESSION_CORE_WAYLAND_WAIT_MS;
-    }
-    return timeout;
-}
-
 static enum nb_host_event_status wait_for_activity(
     struct nb_session_core *core,
     struct nb_host_event *event)
@@ -731,6 +720,12 @@ static enum nb_host_event_status wait_for_activity(
     size_t descriptor_count = 0;
     const int wayland_descriptor =
         nb_desktop_runtime_event_descriptor(core->desktop);
+    const uint32_t timeout = nb_session_frame_pacing_wait_timeout(
+        &core->frame_pacing,
+        nb_host_monotonic_milliseconds(core->host),
+        core->redraw_needed,
+        core->pending_frame_serial != 0,
+        clock_refresh_timeout());
 
     if (wayland_descriptor >= 0) {
         descriptors[descriptor_count++] = wayland_descriptor;
@@ -750,12 +745,10 @@ static enum nb_host_event_status wait_for_activity(
             core->host,
             descriptors,
             descriptor_count,
-            clock_refresh_timeout(),
+            timeout,
             event);
     }
-    return nb_host_wait_event(core->host,
-                              event_wait_timeout(core),
-                              event);
+    return nb_host_wait_event(core->host, timeout, event);
 }
 
 static bool request_helper_shutdown(struct nb_session_core *core)
@@ -900,6 +893,8 @@ static bool configure_output(struct nb_session_core *core,
         fputs("Could not configure the standalone desktop output\n", stderr);
         return false;
     }
+    nb_session_frame_pacing_configure(&core->frame_pacing,
+                                      output->refresh_millihertz);
     core->redraw_needed = true;
     return true;
 }
@@ -908,10 +903,15 @@ static bool present_desktop(struct nb_session_core *core)
 {
     struct nb_host_frame frame;
     enum nb_host_result result;
+    uint64_t started;
 
     if (core->shutdown_pending || !core->redraw_needed ||
         core->pending_frame_serial != 0 ||
         nb_host_get_state(core->host) != NB_HOST_STATE_ACTIVE) {
+        return true;
+    }
+    started = nb_host_monotonic_milliseconds(core->host);
+    if (!nb_session_frame_pacing_ready(&core->frame_pacing, started)) {
         return true;
     }
     if (core->next_frame_serial == 0 ||
@@ -938,6 +938,7 @@ static bool present_desktop(struct nb_session_core *core)
     }
     core->pending_frame_serial = core->next_frame_serial;
     ++core->next_frame_serial;
+    nb_session_frame_pacing_presented(&core->frame_pacing, started);
     core->redraw_needed = false;
     return true;
 }
@@ -1217,6 +1218,7 @@ int nb_session_core_run(int protocol_descriptor,
     int status = 1;
 
     memset(&core, 0, sizeof(core));
+    nb_session_frame_pacing_init(&core.frame_pacing);
     core.next_frame_serial = 1;
     core.redraw_needed = true;
     core.running = true;

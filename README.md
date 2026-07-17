@@ -668,7 +668,11 @@ launches the selected initial application, with the matching
 standalone session. When rootless Xwayland is enabled, the root supervisor
 also provisions the standard root-owned `/tmp/.X11-unix` socket directory with
 mode `01777` before takeover; unsafe pre-existing paths are rejected rather
-than repaired. Once the core and application process group are gone, the
+than repaired. The standalone core paces frame callbacks and presentation to
+the output refresh interval; wsdisplay uses a 17 ms fallback because dumb
+framebuffer output does not report a refresh rate. Client redraws arriving
+inside one interval are coalesced into the next complete desktop frame. Once
+the core and application process group are gone, the
 worker asks the ordinary-user sentinel to remove the bounded, user-owned
 runtime subtree and its directory. The descriptor-relative traversal never
 follows symbolic links, never crosses to another filesystem, and rejects

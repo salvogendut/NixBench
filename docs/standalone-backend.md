@@ -536,6 +536,15 @@ application receives no console, recovery, or helper descriptor. This is
 privilege separation, not application sandboxing: the client retains the
 invoking user's home-directory and group access.
 
+The standalone core applies an explicit presentation deadline before it
+completes client frame callbacks. Backends with a known refresh rate determine
+the interval; NetBSD wsdisplay uses a 17 ms fallback because dumb framebuffer
+mode does not report one. Multiple client commits and desktop changes inside
+that interval are coalesced into one complete canonical frame. This prevents
+unthrottled Xwayland animation from turning the synchronous software renderer
+and framebuffer copy into a maximum-throughput loop while preserving the
+existing complete-frame privilege-separation contract.
+
 The ordinary-user core also owns a bounded multi-application process table.
 The global **Applications** menu launches NixClock from beside the core and
 the pkgsrc Sakura and Midori executables directly on the private Wayland
