@@ -120,6 +120,23 @@ int main(void)
     CHECK(!loaded.maximize_gadget_visible);
     CHECK(loaded.window_control_layout == NB_WINDOW_CONTROLS_RIGHT);
 
+    CHECK(write_text(path, "version=1\nwindows.minimize=false\n"));
+    result = nb_user_config_load_or_create(path,
+                                           &loaded,
+                                           error,
+                                           sizeof(error));
+    CHECK(result == NB_USER_CONFIG_LOADED);
+    CHECK(loaded.minimize_gadget_visible);
+
+    CHECK(write_text(path, "version=3\n"));
+    nb_user_preferences_init(&loaded);
+    CHECK(nb_user_config_load_or_create(path,
+                                        &loaded,
+                                        error,
+                                        sizeof(error)) ==
+          NB_USER_CONFIG_LOAD_ERROR);
+    CHECK(strstr(error, "version") != NULL);
+
     CHECK(write_text(path, "desktop.backdrop.primary=not-a-color\n"));
     nb_user_preferences_init(&loaded);
     CHECK(nb_user_config_load_or_create(path,

@@ -94,10 +94,21 @@ static bool parse_color(const char *value, struct nb_color *color)
 
 static bool parse_known_key(struct nb_user_preferences *preferences,
                             const char *key,
-                            const char *value)
+                            const char *value,
+                            unsigned int *version,
+                            bool *minimize_value,
+                            bool *minimize_present)
 {
     if (strcmp(key, "version") == 0) {
-        return strcmp(value, "1") == 0;
+        if (strcmp(value, "1") == 0) {
+            *version = 1;
+            return true;
+        }
+        if (strcmp(value, "2") == 0) {
+            *version = 2;
+            return true;
+        }
+        return false;
     }
     if (strcmp(key, "applications.nixclock") == 0) {
         return parse_boolean(value,
@@ -160,7 +171,8 @@ static bool parse_known_key(struct nb_user_preferences *preferences,
         return parse_boolean(value, &preferences->maximize_gadget_visible);
     }
     if (strcmp(key, "windows.minimize") == 0) {
-        return parse_boolean(value, &preferences->minimize_gadget_visible);
+        *minimize_present = parse_boolean(value, minimize_value);
+        return *minimize_present;
     }
     if (strcmp(key, "windows.controls") == 0) {
         if (strcmp(value, "split") == 0) {
@@ -185,6 +197,9 @@ static bool parse_stream(FILE *stream,
 {
     char line[NB_USER_CONFIG_LINE_CAPACITY];
     unsigned long line_number = 0;
+    unsigned int version = 1;
+    bool minimize_value = preferences->minimize_gadget_visible;
+    bool minimize_present = false;
 
     while (fgets(line, sizeof(line), stream) != NULL) {
         char *key;
@@ -232,7 +247,13 @@ static bool parse_stream(FILE *stream,
         while (end > value && isspace((unsigned char)end[-1])) {
             *--end = '\0';
         }
-        if (key[0] == '\0' || !parse_known_key(preferences, key, value)) {
+        if (key[0] == '\0' ||
+            !parse_known_key(preferences,
+                             key,
+                             value,
+                             &version,
+                             &minimize_value,
+                             &minimize_present)) {
             set_error(error,
                       error_capacity,
                       "invalid value for '%s' on line %lu",
@@ -247,6 +268,9 @@ static bool parse_stream(FILE *stream,
                   "could not read configuration: %s",
                   strerror(errno));
         return false;
+    }
+    if (version >= 2 && minimize_present) {
+        preferences->minimize_gadget_visible = minimize_value;
     }
     return nb_user_preferences_is_valid(preferences);
 }
@@ -319,7 +343,7 @@ static bool write_stream(FILE *stream,
     return fprintf(stream,
                    "# NixBench user configuration\n"
                    "# This file is rewritten atomically by NixBench Settings.\n"
-                   "version=1\n"
+                   "version=2\n"
                    "applications.nixclock=%s\n"
                    "applications.sakura=%s\n"
                    "applications.midori=%s\n"

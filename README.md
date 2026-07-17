@@ -483,14 +483,16 @@ live and saved atomically. The current panel provides:
 - minimize- and maximize-gadget visibility, with split, left, or right
   window-gadget placement.
 
-The version-1 file also reserves `desktop.wallpaper`, `desktop.theme`,
-and `windows.theme` keys for future wallpaper and skinning work. Minimizing a
-window hides it from the desktop without changing its geometry and creates a
-compact, titled button in the global bar. Clicking that button restores,
-raises, and focuses the window. Unknown keys are ignored so newer
-configurations remain readable by older builds. A malformed known value is
-reported and the session uses safe defaults without giving the file to the
-privileged helper.
+The version-2 file also reserves `desktop.wallpaper`, `desktop.theme`, and
+`windows.theme` keys for future wallpaper and skinning work. Version-1 files
+used `windows.minimize` as an inactive placeholder; that old value is ignored
+and the new minimize gadget defaults to visible until the user saves a
+version-2 preference. Minimizing a window hides it from the desktop without
+changing its geometry and creates a compact, titled button in the global bar.
+Clicking that button restores, raises, and focuses the window. Unknown keys
+are ignored so newer configurations remain readable by older builds. A
+malformed known value is reported and the session uses safe defaults without
+giving the file to the privileged helper.
 
 For a package-style NetBSD installation, configure the standard pkgsrc prefix,
 build, test, and install as root:
