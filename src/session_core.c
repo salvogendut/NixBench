@@ -31,6 +31,14 @@
 #include "host_privsep_client.h"
 #include "user_config.h"
 
+#ifndef NIXBENCH_HAS_ROOTLESS_XWAYLAND
+#define NIXBENCH_HAS_ROOTLESS_XWAYLAND 0
+#endif
+
+#if NIXBENCH_HAS_ROOTLESS_XWAYLAND
+#include "xwayland_rootless.h"
+#endif
+
 enum {
     NB_SESSION_CORE_RUNTIME_PATH_CAPACITY = 512,
     NB_SESSION_CORE_DISPLAY_NAME_CAPACITY = 128,
@@ -75,6 +83,9 @@ struct nb_session_core {
     bool shutdown_pending;
     bool shutdown_requested;
     bool running;
+#if NIXBENCH_HAS_ROOTLESS_XWAYLAND
+    struct nb_xwayland_rootless *xwayland;
+#endif
 };
 
 static volatile sig_atomic_t session_core_sigterm_requested;
@@ -716,13 +727,29 @@ static enum nb_host_event_status wait_for_activity(
     struct nb_session_core *core,
     struct nb_host_event *event)
 {
-    const int descriptor =
+    int descriptors[2];
+    size_t descriptor_count = 0;
+    const int wayland_descriptor =
         nb_desktop_runtime_event_descriptor(core->desktop);
 
-    if (descriptor >= 0) {
-        return nb_host_privsep_client_wait_event_with_descriptor(
+    if (wayland_descriptor >= 0) {
+        descriptors[descriptor_count++] = wayland_descriptor;
+    }
+#if NIXBENCH_HAS_ROOTLESS_XWAYLAND
+    if (core->xwayland != NULL) {
+        const int xwayland_descriptor =
+            nb_xwayland_rootless_event_descriptor(core->xwayland);
+
+        if (xwayland_descriptor >= 0) {
+            descriptors[descriptor_count++] = xwayland_descriptor;
+        }
+    }
+#endif
+    if (descriptor_count != 0) {
+        return nb_host_privsep_client_wait_event_with_descriptors(
             core->host,
-            descriptor,
+            descriptors,
+            descriptor_count,
             clock_refresh_timeout(),
             event);
     }
@@ -1002,8 +1029,62 @@ static bool dispatch_desktop(struct nb_session_core *core)
         fputs("Could not dispatch standalone Wayland clients\n", stderr);
         return false;
     }
-    return apply_runtime_update(core, &update);
+    if (!apply_runtime_update(core, &update)) {
+        return false;
+    }
+#if NIXBENCH_HAS_ROOTLESS_XWAYLAND
+    if (core->xwayland != NULL &&
+        !nb_xwayland_rootless_dispatch(core->xwayland)) {
+        fputs("Could not dispatch rootless Xwayland clients\n", stderr);
+        return false;
+    }
+#endif
+    return true;
 }
+
+#if NIXBENCH_HAS_ROOTLESS_XWAYLAND
+static const char *resolve_xwayland_path(void)
+{
+    static const char *const candidates[] = {
+        "/usr/pkg/bin/Xwayland",
+        "/usr/X11R7/bin/Xwayland",
+        "/usr/local/bin/Xwayland",
+        "/usr/bin/Xwayland"
+    };
+    size_t index;
+
+    for (index = 0; index < sizeof(candidates) / sizeof(candidates[0]);
+         ++index) {
+        if (access(candidates[index], X_OK) == 0) {
+            return candidates[index];
+        }
+    }
+    return NULL;
+}
+
+static void start_rootless_xwayland(struct nb_session_core *core)
+{
+    const char *enabled = getenv("NIXBENCH_XWAYLAND_ROOTLESS");
+    const char *path;
+
+    if (enabled == NULL || strcmp(enabled, "1") != 0) {
+        return;
+    }
+    path = resolve_xwayland_path();
+    if (path == NULL) {
+        fputs("Rootless Xwayland was requested but no Xwayland executable "
+              "was found\n",
+              stderr);
+        return;
+    }
+    core->xwayland = nb_xwayland_rootless_create(core->desktop, path);
+    if (core->xwayland == NULL) {
+        fputs("Rootless Xwayland could not be started; continuing with "
+              "native Wayland applications only\n",
+              stderr);
+    }
+}
+#endif
 
 static void refresh_clock(struct nb_session_core *core)
 {
@@ -1186,6 +1267,9 @@ int nb_session_core_run(int protocol_descriptor,
               stderr);
         goto cleanup;
     }
+#if NIXBENCH_HAS_ROOTLESS_XWAYLAND
+    start_rootless_xwayland(&core);
+#endif
     if (!prepare_application_environment(&core) ||
         (initial_application_path != NULL &&
          !launch_application(&core,
@@ -1212,6 +1296,12 @@ int nb_session_core_run(int protocol_descriptor,
            "XDG_RUNTIME_DIR=%s WAYLAND_DISPLAY=%s",
            core.runtime_directory.path,
            core.runtime_directory.display_name);
+#if NIXBENCH_HAS_ROOTLESS_XWAYLAND
+    if (core.xwayland != NULL) {
+        printf(" DISPLAY=%s",
+               nb_xwayland_rootless_display_name(core.xwayland));
+    }
+#endif
     if (initial_application_pid > 0) {
         printf(" application-pid=%ld", (long)initial_application_pid);
     } else {
@@ -1282,6 +1372,10 @@ cleanup:
      * Destroying the compositor first turns an orderly session shutdown into
      * a misleading client-side connection error. */
     stop_applications(&core);
+#if NIXBENCH_HAS_ROOTLESS_XWAYLAND
+    nb_xwayland_rootless_destroy(core.xwayland);
+    core.xwayland = NULL;
+#endif
     nb_desktop_runtime_destroy(core.desktop);
     core.desktop = NULL;
     if (!destroy_runtime_directory(&core.runtime_directory)) {

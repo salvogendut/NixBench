@@ -15,6 +15,20 @@ enum {
 struct nb_wayland_server;
 
 /*
+ * Rootless Xwayland creates ordinary wl_surface objects without assigning an
+ * xdg-shell role. Its X window manager identifies those surfaces through the
+ * WL_SURFACE_ID client message and supplies the corresponding X11 window ID.
+ * Configure and close requests then travel back to that unprivileged XWM.
+ */
+struct nb_wayland_xwayland_interface {
+    bool (*configure_window)(void *context,
+                             uint32_t xwindow,
+                             int width,
+                             int height);
+    bool (*close_window)(void *context, uint32_t xwindow);
+};
+
+/*
  * Stable, host-independent buttons.  The server translates these to the
  * Linux evdev button numbers required by the Wayland wire protocol, so the
  * SDL adapter does not need Linux-only input headers on NetBSD.
@@ -171,5 +185,29 @@ bool nb_wayland_server_dispatch_menu_command(
     nb_window_id window,
     nb_menu_source_id menu_source,
     nb_menu_command command);
+
+/* Install or clear the unprivileged rootless-Xwayland control callbacks. */
+void nb_wayland_server_set_xwayland_interface(
+    struct nb_wayland_server *server,
+    const struct nb_wayland_xwayland_interface *interface,
+    void *context);
+
+/*
+ * Associate a legacy WL_SURFACE_ID with an X11 top-level. The surface may
+ * have committed its first buffer before or after this call. Repeated calls
+ * for the same pair are harmless; conflicting roles or IDs are rejected.
+ */
+bool nb_wayland_server_associate_xwayland_surface(
+    struct nb_wayland_server *server,
+    uint32_t surface_resource_id,
+    uint32_t xwindow,
+    const char *title);
+bool nb_wayland_server_update_xwayland_title(
+    struct nb_wayland_server *server,
+    uint32_t xwindow,
+    const char *title);
+bool nb_wayland_server_unmap_xwayland_window(
+    struct nb_wayland_server *server,
+    uint32_t xwindow);
 
 #endif

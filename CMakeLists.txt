@@ -866,6 +866,52 @@ if(NIXBENCH_BUILD_APPLICATIONS)
   endif()
 endif()
 
+set(NIXBENCH_ROOTLESS_XWAYLAND_AVAILABLE FALSE)
+if(UNIX AND NIXBENCH_WAYLAND_ENABLED)
+  find_path(
+    NIXBENCH_XCB_INCLUDE_DIR
+    NAMES xcb/xcb.h xcb/composite.h
+    PATHS /usr/X11R7
+    PATH_SUFFIXES include
+  )
+  find_library(
+    NIXBENCH_XCB_LIBRARY
+    NAMES xcb
+    PATHS /usr/X11R7
+    PATH_SUFFIXES lib
+  )
+  find_library(
+    NIXBENCH_XCB_COMPOSITE_LIBRARY
+    NAMES xcb-composite
+    PATHS /usr/X11R7
+    PATH_SUFFIXES lib
+  )
+  if(
+    NIXBENCH_XCB_INCLUDE_DIR
+    AND NIXBENCH_XCB_LIBRARY
+    AND NIXBENCH_XCB_COMPOSITE_LIBRARY
+  )
+    set(NIXBENCH_ROOTLESS_XWAYLAND_AVAILABLE TRUE)
+    add_library(nixbench_xwayland_rootless STATIC src/xwayland_rootless.c)
+    target_include_directories(
+      nixbench_xwayland_rootless
+      PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+      PRIVATE "${NIXBENCH_XCB_INCLUDE_DIR}"
+    )
+    target_link_libraries(
+      nixbench_xwayland_rootless
+      PRIVATE
+        nixbench_desktop_runtime
+        "${NIXBENCH_XCB_COMPOSITE_LIBRARY}"
+        "${NIXBENCH_XCB_LIBRARY}"
+    )
+    nixbench_configure_c_target(nixbench_xwayland_rootless)
+    message(STATUS "Rootless Xwayland XWM support enabled")
+  else()
+    message(STATUS "Rootless Xwayland XWM support unavailable (XCB Composite missing)")
+  endif()
+endif()
+
 set(
   NIXBENCH_GTK_MENU_BRIDGE "AUTO"
   CACHE STRING "Build the optional GTK3 menu bridge (AUTO, ON, or OFF)"
@@ -1111,6 +1157,21 @@ if(
       "NB_SESSION_INSTALLED_NIXCLOCK_PATH=\"${CMAKE_INSTALL_FULL_BINDIR}/nixclock\""
       "NB_SESSION_INSTALLED_GTK_MODULE_PATH=\"${CMAKE_INSTALL_FULL_LIBDIR}/gtk-3.0/modules/${CMAKE_SHARED_MODULE_PREFIX}nixbench_gtk_menu_bridge${CMAKE_SHARED_MODULE_SUFFIX}\""
   )
+  if(NIXBENCH_ROOTLESS_XWAYLAND_AVAILABLE)
+    target_link_libraries(
+      nixbench_session_core
+      PRIVATE nixbench_xwayland_rootless
+    )
+    target_compile_definitions(
+      nixbench_session_core
+      PRIVATE NIXBENCH_HAS_ROOTLESS_XWAYLAND=1
+    )
+  else()
+    target_compile_definitions(
+      nixbench_session_core
+      PRIVATE NIXBENCH_HAS_ROOTLESS_XWAYLAND=0
+    )
+  endif()
   nixbench_configure_c_target(nixbench_session_core)
 endif()
 
@@ -1686,6 +1747,12 @@ if(BUILD_TESTING)
         COMMAND
           sh -n
           "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-xwayland-probe.sh"
+      )
+      add_test(
+        NAME nixbench.xwayland-rootless-probe.syntax
+        COMMAND
+          sh -n
+          "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-xwayland-rootless-probe.sh"
       )
     endif()
     add_test(

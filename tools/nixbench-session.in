@@ -28,6 +28,8 @@ restoration below the desktop core and focused applications.
 Environment:
   NIXBENCH_APPLICATION      Absolute executable to open at startup
   NIXBENCH_GTK_MENU_BRIDGE  Export GTK3 application menus (default: 1)
+  NIXBENCH_XWAYLAND_ROOTLESS Start the rootless X11 compatibility service
+                            when Xwayland is installed (default: 1)
   NIXBENCH_VT_AWAY          One-based VT used by the lifecycle test
 EOF
         exit 0
@@ -72,8 +74,10 @@ NIXBENCH_INSTALLED_MODE=1
 NIXBENCH_SESSION_HELPER=$libexecdir/nixbench/nixbench-wsdisplay-session
 NIXBENCH_SESSION_CORE=$libexecdir/nixbench/nixbench-session-core
 NIXBENCH_GTK_MENU_BRIDGE=${NIXBENCH_GTK_MENU_BRIDGE:-1}
+NIXBENCH_XWAYLAND_ROOTLESS=${NIXBENCH_XWAYLAND_ROOTLESS:-1}
 NIXBENCH_ALLOW_LOCAL=$local_launch
 export NIXBENCH_INSTALLED_MODE NIXBENCH_SESSION_HELPER
-export NIXBENCH_SESSION_CORE NIXBENCH_GTK_MENU_BRIDGE NIXBENCH_ALLOW_LOCAL
+export NIXBENCH_SESSION_CORE NIXBENCH_GTK_MENU_BRIDGE
+export NIXBENCH_XWAYLAND_ROOTLESS NIXBENCH_ALLOW_LOCAL
 
 exec "$libexecdir/nixbench/run-wsdisplay-session.sh"

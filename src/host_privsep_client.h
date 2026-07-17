@@ -4,6 +4,7 @@
 #include "host.h"
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /*
@@ -24,6 +25,15 @@ enum nb_host_event_status
 nb_host_privsep_client_wait_event_with_descriptor(
     struct nb_host *host,
     int wake_descriptor,
+    uint32_t timeout_milliseconds,
+    struct nb_host_event *event);
+
+/* Same contract for up to four independent compositor-service descriptors. */
+enum nb_host_event_status
+nb_host_privsep_client_wait_event_with_descriptors(
+    struct nb_host *host,
+    const int *wake_descriptors,
+    size_t wake_descriptor_count,
     uint32_t timeout_milliseconds,
     struct nb_host_event *event);
 

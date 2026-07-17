@@ -48,6 +48,7 @@ enum {
 enum nb_wayland_surface_role {
     NB_WAYLAND_SURFACE_ROLE_NONE,
     NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL,
+    NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL,
     NB_WAYLAND_SURFACE_ROLE_XDG_POPUP,
     NB_WAYLAND_SURFACE_ROLE_SUBSURFACE,
     NB_WAYLAND_SURFACE_ROLE_CURSOR
@@ -152,6 +153,7 @@ struct nb_wayland_surface {
     struct wl_resource *ready_frames[NB_WAYLAND_MAX_FRAME_CALLBACKS];
     size_t ready_frame_count;
     nb_window_id window;
+    uint32_t xwayland_window;
     char title[NB_WINDOW_TITLE_CAPACITY];
     char app_id[NB_WINDOW_TITLE_CAPACITY];
     struct nb_wayland_application_menu *application_menu;
@@ -218,6 +220,8 @@ struct nb_wayland_server {
     struct nb_wayland_surface surfaces[NB_WAYLAND_MAX_SURFACES];
     unsigned int next_window_position;
     uint64_t next_popup_sequence;
+    struct nb_wayland_xwayland_interface xwayland_interface;
+    void *xwayland_context;
     char display_name[NB_WAYLAND_DISPLAY_NAME_CAPACITY];
 };
 
@@ -431,6 +435,47 @@ static const struct nb_wayland_surface *find_surface_by_window_const(
     return NULL;
 }
 
+static struct nb_wayland_surface *find_surface_by_resource_id(
+    struct nb_wayland_server *server,
+    uint32_t resource_id)
+{
+    size_t index;
+
+    if (resource_id == 0) {
+        return NULL;
+    }
+    for (index = 0; index < NB_WAYLAND_MAX_SURFACES; ++index) {
+        struct nb_wayland_surface *surface = &server->surfaces[index];
+
+        if (surface->occupied && surface->surface_resource != NULL &&
+            wl_resource_get_id(surface->surface_resource) == resource_id) {
+            return surface;
+        }
+    }
+    return NULL;
+}
+
+static struct nb_wayland_surface *find_surface_by_xwayland_window(
+    struct nb_wayland_server *server,
+    uint32_t xwindow)
+{
+    size_t index;
+
+    if (xwindow == 0) {
+        return NULL;
+    }
+    for (index = 0; index < NB_WAYLAND_MAX_SURFACES; ++index) {
+        struct nb_wayland_surface *surface = &server->surfaces[index];
+
+        if (surface->occupied &&
+            surface->role == NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL &&
+            surface->xwayland_window == xwindow) {
+            return surface;
+        }
+    }
+    return NULL;
+}
+
 static bool surface_has_xdg_role(
     const struct nb_wayland_surface *surface)
 {
@@ -460,7 +505,9 @@ static struct nb_wayland_surface *surface_root_toplevel(
         ++depth;
     }
     return surface != NULL &&
-                   surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL
+                   (surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL ||
+                    surface->role ==
+                        NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL)
                ? surface
                : NULL;
 }
@@ -478,7 +525,9 @@ static const struct nb_wayland_surface *surface_root_toplevel_const(
         ++depth;
     }
     return surface != NULL &&
-                   surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL
+                   (surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL ||
+                    surface->role ==
+                        NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL)
                ? surface
                : NULL;
 }
@@ -491,6 +540,10 @@ static bool surface_is_mapped(const struct nb_wayland_surface *surface)
     }
     if (surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL) {
         return surface->toplevel_resource != NULL &&
+               surface->window != NB_WINDOW_ID_NONE;
+    }
+    if (surface->role == NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL) {
+        return surface->xwayland_window != 0 &&
                surface->window != NB_WINDOW_ID_NONE;
     }
     if (surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_POPUP) {
@@ -618,7 +671,8 @@ static bool surface_buffer_origin_in_root(
     if (surface == NULL) {
         return false;
     }
-    if (surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL) {
+    if (surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL ||
+        surface->role == NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL) {
         *origin_x = 0;
         *origin_y = 0;
         return true;
@@ -1778,7 +1832,9 @@ static void map_surface(struct nb_wayland_surface *surface)
     struct nb_rect frame;
     const char *title;
 
-    if (surface->toplevel_resource == NULL || surface->pixels == NULL ||
+    if ((surface->role != NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL &&
+         surface->role != NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL) ||
+        surface->pixels == NULL ||
         surface->window != NB_WINDOW_ID_NONE) {
         return;
     }
@@ -1797,7 +1853,10 @@ static void map_surface(struct nb_wayland_surface *surface)
                 ? surface->title
                 : (surface->app_id[0] != '\0'
                        ? surface->app_id
-                       : "Wayland Application");
+                       : (surface->role ==
+                                  NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL
+                              ? "X11 Application"
+                              : "Wayland Application"));
 
     surface->window = nb_shell_open_window(
         surface->server->shell,
@@ -2068,7 +2127,9 @@ static void surface_commit(struct wl_client *client,
         }
 
         if (surface->pixels == NULL) {
-            if (surface->toplevel_resource != NULL) {
+            if (surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL ||
+                surface->role ==
+                    NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL) {
                 unmap_surface(surface, true);
                 surface_tree_changed(surface, false);
             } else if (was_mapped) {
@@ -2080,7 +2141,9 @@ static void surface_commit(struct wl_client *client,
             surface->configure_serial = 0;
         } else {
             advance_surface_revision(surface);
-            if (surface->toplevel_resource != NULL) {
+            if (surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL ||
+                surface->role ==
+                    NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL) {
                 map_surface(surface);
                 surface_tree_changed(surface, true);
             } else {
@@ -4889,6 +4952,113 @@ bool nb_wayland_server_dispatch_menu_command(
     return true;
 }
 
+void nb_wayland_server_set_xwayland_interface(
+    struct nb_wayland_server *server,
+    const struct nb_wayland_xwayland_interface *interface,
+    void *context)
+{
+    if (server == NULL || server->destroying) {
+        return;
+    }
+    memset(&server->xwayland_interface,
+           0,
+           sizeof(server->xwayland_interface));
+    server->xwayland_context = NULL;
+    if (interface != NULL) {
+        server->xwayland_interface = *interface;
+        server->xwayland_context = context;
+    }
+}
+
+bool nb_wayland_server_associate_xwayland_surface(
+    struct nb_wayland_server *server,
+    uint32_t surface_resource_id,
+    uint32_t xwindow,
+    const char *title)
+{
+    struct nb_wayland_surface *surface;
+    struct nb_wayland_surface *existing;
+
+    if (server == NULL || server->destroying ||
+        surface_resource_id == 0 || xwindow == 0) {
+        return false;
+    }
+    surface = find_surface_by_resource_id(server, surface_resource_id);
+    existing = find_surface_by_xwayland_window(server, xwindow);
+    if (surface == NULL ||
+        (existing != NULL && existing != surface) ||
+        (surface->role != NB_WAYLAND_SURFACE_ROLE_NONE &&
+         surface->role != NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL) ||
+        surface->xdg_surface_resource != NULL ||
+        surface->subsurface_resource != NULL ||
+        (surface->xwayland_window != 0 &&
+         surface->xwayland_window != xwindow)) {
+        return false;
+    }
+    surface->role = NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL;
+    surface->xwayland_window = xwindow;
+    copy_text(surface->title,
+              sizeof(surface->title),
+              title != NULL && title[0] != '\0'
+                  ? title
+                  : "X11 Application");
+    if (surface->window == NB_WINDOW_ID_NONE) {
+        map_surface(surface);
+    } else if (!nb_desktop_set_window_title(&server->shell->desktop,
+                                            surface->window,
+                                            surface->title)) {
+        return false;
+    }
+    server->redraw_pending = true;
+    return true;
+}
+
+bool nb_wayland_server_update_xwayland_title(
+    struct nb_wayland_server *server,
+    uint32_t xwindow,
+    const char *title)
+{
+    struct nb_wayland_surface *surface;
+
+    if (server == NULL || server->destroying || xwindow == 0) {
+        return false;
+    }
+    surface = find_surface_by_xwayland_window(server, xwindow);
+    if (surface == NULL) {
+        return false;
+    }
+    copy_text(surface->title,
+              sizeof(surface->title),
+              title != NULL && title[0] != '\0'
+                  ? title
+                  : "X11 Application");
+    if (surface->window != NB_WINDOW_ID_NONE &&
+        !nb_desktop_set_window_title(&server->shell->desktop,
+                                     surface->window,
+                                     surface->title)) {
+        return false;
+    }
+    server->redraw_pending = true;
+    return true;
+}
+
+bool nb_wayland_server_unmap_xwayland_window(
+    struct nb_wayland_server *server,
+    uint32_t xwindow)
+{
+    struct nb_wayland_surface *surface;
+
+    if (server == NULL || server->destroying || xwindow == 0) {
+        return false;
+    }
+    surface = find_surface_by_xwayland_window(server, xwindow);
+    if (surface == NULL) {
+        return false;
+    }
+    unmap_surface(surface, true);
+    return true;
+}
+
 static struct nb_wayland_surface *pointer_hover_surface(
     struct nb_wayland_server *server,
     nb_window_id hover_window)
@@ -4897,7 +5067,8 @@ static struct nb_wayland_surface *pointer_hover_surface(
         find_surface_by_window(server, hover_window);
 
     if (surface == NULL ||
-        surface->role != NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL ||
+        (surface->role != NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL &&
+         surface->role != NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL) ||
         surface->surface_resource == NULL || surface->pixels == NULL) {
         return NULL;
     }
@@ -5058,7 +5229,8 @@ bool nb_wayland_server_keyboard_focus(
     }
     surface = find_surface_by_window(server, window);
     if (surface != NULL &&
-        (surface->role != NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL ||
+        ((surface->role != NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL &&
+          surface->role != NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL) ||
          surface->pixels == NULL)) {
         surface = NULL;
     }
@@ -5211,12 +5383,19 @@ bool nb_wayland_server_request_close(struct nb_wayland_server *server,
         return false;
     }
     surface = find_surface_by_window(server, window);
-    if (surface == NULL || surface->toplevel_resource == NULL) {
+    if (surface == NULL) {
         return false;
     }
-    xdg_toplevel_send_close(surface->toplevel_resource);
-    wl_display_flush_clients(server->display);
-    return true;
+    if (surface->toplevel_resource != NULL) {
+        xdg_toplevel_send_close(surface->toplevel_resource);
+        wl_display_flush_clients(server->display);
+        return true;
+    }
+    return surface->role == NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL &&
+           server->xwayland_interface.close_window != NULL &&
+           server->xwayland_interface.close_window(
+               server->xwayland_context,
+               surface->xwayland_window);
 }
 
 bool nb_wayland_server_window_resized(struct nb_wayland_server *server,
@@ -5231,7 +5410,9 @@ bool nb_wayland_server_window_resized(struct nb_wayland_server *server,
         return false;
     }
     surface = find_surface_by_window(server, window);
-    if (surface == NULL || surface->toplevel_resource == NULL) {
+    if (surface == NULL ||
+        (surface->toplevel_resource == NULL &&
+         surface->role != NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL)) {
         return false;
     }
     host_window = nb_desktop_find_window(&server->shell->desktop, window);
@@ -5252,8 +5433,19 @@ bool nb_wayland_server_window_resized(struct nb_wayland_server *server,
     if (desired_width == surface->width && desired_height == surface->height) {
         return true;
     }
-    send_toplevel_configure(surface, desired_width, desired_height);
-    wl_display_flush_clients(server->display);
+    if (surface->role == NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL) {
+        if (server->xwayland_interface.configure_window == NULL ||
+            !server->xwayland_interface.configure_window(
+                server->xwayland_context,
+                surface->xwayland_window,
+                desired_width,
+                desired_height)) {
+            return false;
+        }
+    } else {
+        send_toplevel_configure(surface, desired_width, desired_height);
+        wl_display_flush_clients(server->display);
+    }
     server->redraw_pending = true;
     return true;
 }

@@ -205,6 +205,19 @@ bool nb_desktop_destroy_window(struct nb_desktop *desktop, nb_window_id id)
     return true;
 }
 
+bool nb_desktop_set_window_title(struct nb_desktop *desktop,
+                                 nb_window_id id,
+                                 const char *title)
+{
+    const size_t slot_index = find_slot_by_id(desktop, id);
+
+    if (slot_index == no_slot) {
+        return false;
+    }
+    nb_window_set_title(&desktop->slots[slot_index].window, title);
+    return true;
+}
+
 bool nb_desktop_raise_window(struct nb_desktop *desktop, nb_window_id id)
 {
     const size_t slot_index = find_slot_by_id(desktop, id);

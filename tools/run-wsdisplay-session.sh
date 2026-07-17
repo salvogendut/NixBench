@@ -58,6 +58,7 @@ fi
 application=${NIXBENCH_APPLICATION:-}
 trace_wayland=${NIXBENCH_TRACE_WAYLAND:-}
 trace_wayland_log=${NIXBENCH_TRACE_WAYLAND_LOG:-}
+xwayland_rootless=${NIXBENCH_XWAYLAND_ROOTLESS:-0}
 gtk_menu_bridge=${NIXBENCH_GTK_MENU_BRIDGE:-0}
 case "$gtk_menu_bridge" in
     0|1) ;;
@@ -84,6 +85,7 @@ if [ -n "$application" ]; then
     fi
 fi
 unset NIXBENCH_TRACE_WAYLAND NIXBENCH_TRACE_WAYLAND_LOG
+unset NIXBENCH_XWAYLAND_ROOTLESS
 
 script_path=$0
 case "$script_path" in
@@ -387,6 +389,7 @@ run_privileged_session()
                 sudo -n env \
                     NIXBENCH_TRACE_WAYLAND="$trace_wayland" \
                     NIXBENCH_GTK_MENU_BRIDGE="$gtk_menu_bridge" \
+                    NIXBENCH_XWAYLAND_ROOTLESS="$xwayland_rootless" \
                     NIXBENCH_TRACE_WAYLAND_LOG="$trace_wayland_log" \
                     "$staged_session" --acknowledge-console-takeover \
                     --core "$core" --application "$application" "$@"
@@ -394,12 +397,14 @@ run_privileged_session()
                 sudo -n env \
                     NIXBENCH_TRACE_WAYLAND="$trace_wayland" \
                     NIXBENCH_GTK_MENU_BRIDGE="$gtk_menu_bridge" \
+                    NIXBENCH_XWAYLAND_ROOTLESS="$xwayland_rootless" \
                     "$staged_session" --acknowledge-console-takeover \
                     --core "$core" --application "$application" "$@"
             fi
         else
             sudo -n env \
                 NIXBENCH_GTK_MENU_BRIDGE="$gtk_menu_bridge" \
+                NIXBENCH_XWAYLAND_ROOTLESS="$xwayland_rootless" \
                 "$staged_session" --acknowledge-console-takeover \
                 --core "$core" --application "$application" "$@"
         fi
@@ -409,6 +414,7 @@ run_privileged_session()
                 sudo -n env \
                     NIXBENCH_TRACE_WAYLAND="$trace_wayland" \
                     NIXBENCH_GTK_MENU_BRIDGE="$gtk_menu_bridge" \
+                    NIXBENCH_XWAYLAND_ROOTLESS="$xwayland_rootless" \
                     NIXBENCH_TRACE_WAYLAND_LOG="$trace_wayland_log" \
                     "$staged_session" --acknowledge-console-takeover \
                     --core "$core" "$@"
@@ -416,12 +422,14 @@ run_privileged_session()
                 sudo -n env \
                     NIXBENCH_TRACE_WAYLAND="$trace_wayland" \
                     NIXBENCH_GTK_MENU_BRIDGE="$gtk_menu_bridge" \
+                    NIXBENCH_XWAYLAND_ROOTLESS="$xwayland_rootless" \
                     "$staged_session" --acknowledge-console-takeover \
                     --core "$core" "$@"
             fi
         else
             sudo -n env \
                 NIXBENCH_GTK_MENU_BRIDGE="$gtk_menu_bridge" \
+                NIXBENCH_XWAYLAND_ROOTLESS="$xwayland_rootless" \
                 "$staged_session" --acknowledge-console-takeover \
                 --core "$core" "$@"
         fi

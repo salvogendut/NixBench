@@ -58,8 +58,10 @@ toolkits while NixBench owns window management and composition:
   The first GTK slice bridges `GtkApplication` menubars and `app-menu` models,
   plus classic GTK3 `GtkMenuBar` widget trees and detached application popup
   menus such as Sakura's.
-- Xaw and other X11-only applications remain candidates for a later, optional
-  Xwayland compatibility service.
+- Xaw and other X11-only applications use an optional rootless Xwayland
+  compatibility service. NixBench owns the unprivileged XWM connection and
+  adopts each X11 top-level's `WL_SURFACE_ID` as an independent native frame;
+  the older rootful probe remains available as a diagnostic checkpoint.
 - Moving the outer display from SDL/Xorg to NetBSD KMS changes the physical
   output backend, not the client protocol or application toolkit.
 

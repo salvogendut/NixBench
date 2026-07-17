@@ -20,6 +20,7 @@
 #include <unistd.h>
 
 #include "host_backend.h"
+#include "host_fd_wait.h"
 #include "privsep_protocol.h"
 
 enum {
@@ -1035,7 +1036,8 @@ static int poll_timeout_remaining(uint64_t start,
 
 static enum nb_host_event_status privsep_wait_event_internal(
     struct nb_host_privsep_client_context *context,
-    int wake_descriptor,
+    const int *wake_descriptors,
+    size_t wake_descriptor_count,
     uint32_t timeout_milliseconds,
     struct nb_host_event *event)
 {
@@ -1043,10 +1045,12 @@ static enum nb_host_event_status privsep_wait_event_internal(
     bool first = true;
 
     for (;;) {
-        struct pollfd descriptors[2];
-        const nfds_t descriptor_count = wake_descriptor >= 0 ? 2 : 1;
+        struct pollfd descriptors[1 + NB_HOST_FD_WAIT_MAX_EXTERNAL];
+        const nfds_t descriptor_count =
+            (nfds_t)(1U + wake_descriptor_count);
         enum nb_host_event_status status =
             service_nonblocking(context, event);
+        size_t index;
         int timeout;
         int result;
 
@@ -1074,10 +1078,10 @@ static enum nb_host_event_status privsep_wait_event_internal(
             descriptors[0].events |= POLLOUT;
         }
         descriptors[0].revents = 0;
-        if (wake_descriptor >= 0) {
-            descriptors[1].fd = wake_descriptor;
-            descriptors[1].events = POLLIN;
-            descriptors[1].revents = 0;
+        for (index = 0; index < wake_descriptor_count; ++index) {
+            descriptors[index + 1U].fd = wake_descriptors[index];
+            descriptors[index + 1U].events = POLLIN;
+            descriptors[index + 1U].revents = 0;
         }
         do {
             result = poll(descriptors, descriptor_count, timeout);
@@ -1095,17 +1099,22 @@ static enum nb_host_event_status privsep_wait_event_internal(
                         EIO);
             return pop_event(context, event);
         }
-        if (wake_descriptor >= 0 &&
-            (descriptors[1].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
-            fail_client(context,
-                        "Compositor event descriptor failed",
-                        EIO);
-            return pop_event(context, event);
+        for (index = 0; index < wake_descriptor_count; ++index) {
+            if ((descriptors[index + 1U].revents &
+                 (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+                fail_client(context,
+                            "Compositor event descriptor failed",
+                            EIO);
+                return pop_event(context, event);
+            }
         }
-        if (wake_descriptor >= 0 && descriptors[0].revents == 0 &&
-            (descriptors[1].revents & POLLIN) != 0) {
-            memset(event, 0, sizeof(*event));
-            return NB_HOST_EVENT_STATUS_EMPTY;
+        if (wake_descriptor_count != 0 && descriptors[0].revents == 0) {
+            for (index = 0; index < wake_descriptor_count; ++index) {
+                if ((descriptors[index + 1U].revents & POLLIN) != 0) {
+                    memset(event, 0, sizeof(*event));
+                    return NB_HOST_EVENT_STATUS_EMPTY;
+                }
+            }
         }
         /* POLLHUP is intentionally serviced through read() so queued bytes
          * are parsed before EOF becomes a failure. */
@@ -1118,7 +1127,8 @@ static enum nb_host_event_status privsep_wait_event(
     struct nb_host_event *event)
 {
     return privsep_wait_event_internal(opaque,
-                                       -1,
+                                       NULL,
+                                       0,
                                        timeout_milliseconds,
                                        event);
 }
@@ -1424,8 +1434,56 @@ nb_host_privsep_client_wait_event_with_descriptor(
         errno = EINVAL;
         return NB_HOST_EVENT_STATUS_ERROR;
     }
+    return nb_host_privsep_client_wait_event_with_descriptors(
+        host,
+        &wake_descriptor,
+        1,
+        timeout_milliseconds,
+        event);
+}
+
+enum nb_host_event_status
+nb_host_privsep_client_wait_event_with_descriptors(
+    struct nb_host *host,
+    const int *wake_descriptors,
+    size_t wake_descriptor_count,
+    uint32_t timeout_milliseconds,
+    struct nb_host_event *event)
+{
+    struct nb_host_privsep_client_context *context =
+        nb_host_backend_context(host, &privsep_client_operations);
+    size_t first;
+    size_t second;
+
+    if (context == NULL || event == NULL ||
+        wake_descriptor_count > NB_HOST_FD_WAIT_MAX_EXTERNAL ||
+        (wake_descriptor_count != 0 && wake_descriptors == NULL)) {
+        if (event != NULL) {
+            memset(event, 0, sizeof(*event));
+        }
+        errno = EINVAL;
+        return NB_HOST_EVENT_STATUS_ERROR;
+    }
+    for (first = 0; first < wake_descriptor_count; ++first) {
+        if (wake_descriptors[first] < 0 ||
+            wake_descriptors[first] == context->descriptor) {
+            memset(event, 0, sizeof(*event));
+            errno = EINVAL;
+            return NB_HOST_EVENT_STATUS_ERROR;
+        }
+        for (second = first + 1U;
+             second < wake_descriptor_count;
+             ++second) {
+            if (wake_descriptors[first] == wake_descriptors[second]) {
+                memset(event, 0, sizeof(*event));
+                errno = EINVAL;
+                return NB_HOST_EVENT_STATUS_ERROR;
+            }
+        }
+    }
     return privsep_wait_event_internal(context,
-                                       wake_descriptor,
+                                       wake_descriptors,
+                                       wake_descriptor_count,
                                        timeout_milliseconds,
                                        event);
 }

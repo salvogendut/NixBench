@@ -16,6 +16,14 @@
  */
 struct nb_desktop_runtime;
 
+struct nb_desktop_xwayland_interface {
+    bool (*configure_window)(void *context,
+                             uint32_t xwindow,
+                             int width,
+                             int height);
+    bool (*close_window)(void *context, uint32_t xwindow);
+};
+
 enum nb_desktop_launch_request {
     NB_DESKTOP_LAUNCH_NONE = 0,
     NB_DESKTOP_LAUNCH_NIXCLOCK,
@@ -130,6 +138,24 @@ bool nb_desktop_runtime_quit_requested(
 /* Borrowed display name, or NULL when no Wayland socket is published. */
 const char *nb_desktop_runtime_wayland_display_name(
     const struct nb_desktop_runtime *runtime);
+
+/* Unprivileged XWM integration for rootless Xwayland. */
+bool nb_desktop_runtime_set_xwayland_interface(
+    struct nb_desktop_runtime *runtime,
+    const struct nb_desktop_xwayland_interface *interface,
+    void *context);
+bool nb_desktop_runtime_associate_xwayland_surface(
+    struct nb_desktop_runtime *runtime,
+    uint32_t surface_resource_id,
+    uint32_t xwindow,
+    const char *title);
+bool nb_desktop_runtime_update_xwayland_title(
+    struct nb_desktop_runtime *runtime,
+    uint32_t xwindow,
+    const char *title);
+bool nb_desktop_runtime_unmap_xwayland_window(
+    struct nb_desktop_runtime *runtime,
+    uint32_t xwindow);
 
 /* Read-only state seams for deterministic runtime integration tests. */
 size_t nb_desktop_runtime_window_count(

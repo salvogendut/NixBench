@@ -79,6 +79,7 @@ struct nb_window {
 void nb_window_init(struct nb_window *window,
                     const char *title,
                     struct nb_rect frame);
+void nb_window_set_title(struct nb_window *window, const char *title);
 void nb_window_set_controls(struct nb_window *window,
                             bool minimize_gadget_visible,
                             bool maximize_gadget_visible,

@@ -65,20 +65,11 @@ void nb_window_init(struct nb_window *window,
                     const char *title,
                     struct nb_rect frame)
 {
-    size_t title_index = 0;
-
     window->frame = frame;
     window->frame.width = maximum(window->frame.width, NB_WINDOW_MIN_WIDTH);
     window->frame.height = maximum(window->frame.height,
                                    NB_WINDOW_MIN_HEIGHT);
-    if (title != NULL) {
-        while (title_index + 1 < NB_WINDOW_TITLE_CAPACITY &&
-               title[title_index] != '\0') {
-            window->title[title_index] = title[title_index];
-            ++title_index;
-        }
-    }
-    window->title[title_index] = '\0';
+    nb_window_set_title(window, title);
     window->visible = true;
     window->active = false;
     window->pointer_mode = NB_WINDOW_POINTER_IDLE;
@@ -96,6 +87,23 @@ void nb_window_init(struct nb_window *window,
     window->minimize_gadget_visible = true;
     window->maximize_gadget_visible = true;
     window->control_layout = NB_WINDOW_CONTROLS_RIGHT;
+}
+
+void nb_window_set_title(struct nb_window *window, const char *title)
+{
+    size_t title_index = 0;
+
+    if (window == NULL) {
+        return;
+    }
+    if (title != NULL) {
+        while (title_index + 1 < NB_WINDOW_TITLE_CAPACITY &&
+               title[title_index] != '\0') {
+            window->title[title_index] = title[title_index];
+            ++title_index;
+        }
+    }
+    window->title[title_index] = '\0';
 }
 
 void nb_window_set_controls(struct nb_window *window,

@@ -1726,6 +1726,92 @@ const char *nb_desktop_runtime_wayland_display_name(
 #endif
 }
 
+bool nb_desktop_runtime_set_xwayland_interface(
+    struct nb_desktop_runtime *runtime,
+    const struct nb_desktop_xwayland_interface *interface,
+    void *context)
+{
+#if NIXBENCH_HAS_WAYLAND
+    struct nb_wayland_xwayland_interface wayland_interface;
+
+    if (runtime == NULL || runtime->wayland == NULL) {
+        return false;
+    }
+    if (interface == NULL) {
+        nb_wayland_server_set_xwayland_interface(runtime->wayland,
+                                                 NULL,
+                                                 NULL);
+        return true;
+    }
+    wayland_interface.configure_window = interface->configure_window;
+    wayland_interface.close_window = interface->close_window;
+    nb_wayland_server_set_xwayland_interface(runtime->wayland,
+                                             &wayland_interface,
+                                             context);
+    return true;
+#else
+    (void)runtime;
+    (void)interface;
+    (void)context;
+    return false;
+#endif
+}
+
+bool nb_desktop_runtime_associate_xwayland_surface(
+    struct nb_desktop_runtime *runtime,
+    uint32_t surface_resource_id,
+    uint32_t xwindow,
+    const char *title)
+{
+#if NIXBENCH_HAS_WAYLAND
+    return runtime != NULL && runtime->wayland != NULL &&
+           nb_wayland_server_associate_xwayland_surface(
+               runtime->wayland,
+               surface_resource_id,
+               xwindow,
+               title);
+#else
+    (void)runtime;
+    (void)surface_resource_id;
+    (void)xwindow;
+    (void)title;
+    return false;
+#endif
+}
+
+bool nb_desktop_runtime_update_xwayland_title(
+    struct nb_desktop_runtime *runtime,
+    uint32_t xwindow,
+    const char *title)
+{
+#if NIXBENCH_HAS_WAYLAND
+    return runtime != NULL && runtime->wayland != NULL &&
+           nb_wayland_server_update_xwayland_title(runtime->wayland,
+                                                   xwindow,
+                                                   title);
+#else
+    (void)runtime;
+    (void)xwindow;
+    (void)title;
+    return false;
+#endif
+}
+
+bool nb_desktop_runtime_unmap_xwayland_window(
+    struct nb_desktop_runtime *runtime,
+    uint32_t xwindow)
+{
+#if NIXBENCH_HAS_WAYLAND
+    return runtime != NULL && runtime->wayland != NULL &&
+           nb_wayland_server_unmap_xwayland_window(runtime->wayland,
+                                                   xwindow);
+#else
+    (void)runtime;
+    (void)xwindow;
+    return false;
+#endif
+}
+
 size_t nb_desktop_runtime_window_count(
     const struct nb_desktop_runtime *runtime)
 {

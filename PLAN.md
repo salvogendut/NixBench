@@ -577,6 +577,17 @@ Deliverables:
 - Clear diagnostics and isolation when the compatibility service is unavailable
   or crashes.
 
+Current implementation checkpoint:
+
+- The patched NetBSD Xwayland package and rootful shared-memory probe are
+  verified on physical wsdisplay hardware.
+- The ordinary-user session core now has an event-driven rootless Xwayland/XCB
+  XWM path. It passes a private XWM socket, redirects top-level pixels with the
+  Composite extension, correlates `WL_SURFACE_ID` messages with compositor
+  surfaces, and maps each X11 top-level into an independent NixBench frame.
+- Configure, title, close, unmap, and shutdown paths are integrated without
+  extending the privileged helper's device-only responsibility.
+
 Exit criteria:
 
 - A representative set of unmodified X11 applications can be launched and
