@@ -1369,6 +1369,7 @@ static void test_wayland_surface_lifecycle(void)
     const struct nb_window *host_window;
     struct nb_window *resized_host_window;
     struct nb_rect content;
+    struct nb_rect redraw_damage;
     nb_window_id window = NB_WINDOW_ID_NONE;
     uint32_t parent_pixel_under_popup = 0;
     uint64_t root_revision_before_popup = 0;
@@ -1724,6 +1725,36 @@ static void test_wayland_surface_lifecycle(void)
                                                window,
                                                &snapshot));
     CHECK(snapshot.revision == 2);
+    host_window = nb_desktop_find_window(&shell.desktop, window);
+    REQUIRE(host_window != NULL);
+    content = nb_window_content_rect(host_window);
+    {
+        const size_t damaged_index =
+            (size_t)12 * (size_t)INITIAL_WIDTH + (size_t)10;
+        const uint32_t retained_pixel = snapshot.pixels[0];
+
+        pixels[0] ^= UINT32_C(0x00ffffff);
+        pixels[damaged_index] = UINT32_C(0xff123456);
+        client.buffer_released = false;
+        wl_surface_attach(surface, buffer, 0, 0);
+        wl_surface_damage(surface, 10, 12, 3, 2);
+        wl_surface_commit(surface);
+        REQUIRE(pump_barrier(server, display));
+        CHECK(client.buffer_released);
+        CHECK(nb_wayland_server_take_redraw_damage(server,
+                                                    &redraw_damage));
+        CHECK(redraw_damage.x == content.x + 10);
+        CHECK(redraw_damage.y == content.y + 12);
+        CHECK(redraw_damage.width == 3);
+        CHECK(redraw_damage.height == 2);
+        CHECK(!nb_wayland_server_take_redraw(server));
+        REQUIRE(nb_wayland_server_surface_snapshot(server,
+                                                   window,
+                                                   &snapshot));
+        CHECK(snapshot.revision == 3);
+        CHECK(snapshot.pixels[0] == retained_pixel);
+        CHECK(snapshot.pixels[damaged_index] == UINT32_C(0xff123456));
+    }
     parent_pixel_under_popup =
         snapshot.pixels[(size_t)POPUP_EXPECTED_Y * (size_t)INITIAL_WIDTH +
                         (size_t)POPUP_EXPECTED_X];
