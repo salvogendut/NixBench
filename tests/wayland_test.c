@@ -1732,7 +1732,7 @@ static void test_wayland_surface_lifecycle(void)
         const size_t damaged_index =
             (size_t)12 * (size_t)INITIAL_WIDTH + (size_t)10;
         const size_t second_damaged_index =
-            (size_t)40 * (size_t)INITIAL_WIDTH + (size_t)30;
+            (size_t)40 * (size_t)INITIAL_WIDTH + (size_t)50;
         const uint32_t retained_pixel = snapshot.pixels[0];
 
         pixels[0] ^= UINT32_C(0x00ffffff);
@@ -1741,7 +1741,7 @@ static void test_wayland_surface_lifecycle(void)
         client.buffer_released = false;
         wl_surface_attach(surface, buffer, 0, 0);
         wl_surface_damage(surface, 10, 12, 3, 2);
-        wl_surface_damage(surface, 30, 40, 2, 3);
+        wl_surface_damage(surface, 50, 40, 2, 3);
         wl_surface_commit(surface);
         REQUIRE(pump_barrier(server, display));
         CHECK(client.buffer_released);
@@ -1749,14 +1749,14 @@ static void test_wayland_surface_lifecycle(void)
                                                     &redraw_region));
         CHECK(!redraw_region.full);
         CHECK(redraw_region.count == 2);
-        CHECK(redraw_region.rects[0].x == content.x + 10);
-        CHECK(redraw_region.rects[0].y == content.y + 12);
-        CHECK(redraw_region.rects[0].width == 1);
-        CHECK(redraw_region.rects[0].height == 1);
-        CHECK(redraw_region.rects[1].x == content.x + 30);
-        CHECK(redraw_region.rects[1].y == content.y + 40);
-        CHECK(redraw_region.rects[1].width == 1);
-        CHECK(redraw_region.rects[1].height == 1);
+        CHECK(redraw_region.rects[0].x == content.x);
+        CHECK(redraw_region.rects[0].y == content.y);
+        CHECK(redraw_region.rects[0].width == 32);
+        CHECK(redraw_region.rects[0].height == 32);
+        CHECK(redraw_region.rects[1].x == content.x + 32);
+        CHECK(redraw_region.rects[1].y == content.y + 32);
+        CHECK(redraw_region.rects[1].width == 32);
+        CHECK(redraw_region.rects[1].height == 32);
         CHECK(!nb_wayland_server_take_redraw(server));
         REQUIRE(nb_wayland_server_surface_snapshot(server,
                                                    window,

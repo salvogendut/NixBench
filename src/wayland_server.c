@@ -51,6 +51,8 @@ enum {
     NB_WAYLAND_APPLICATION_MENU_VERSION = 1
 };
 
+enum { NB_WAYLAND_DAMAGE_TILE_SIZE = 32 };
+
 enum nb_wayland_surface_role {
     NB_WAYLAND_SURFACE_ROLE_NONE,
     NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL,
@@ -1964,7 +1966,11 @@ static bool copy_shm_buffer(struct nb_wayland_surface *surface,
     size_t pixel_count;
     uint32_t *pixels;
     const unsigned char *source;
+    unsigned char *changed_tiles = NULL;
     size_t damage_index;
+    size_t tile_columns = 0;
+    size_t tile_rows = 0;
+    size_t tile_count = 0;
     bool new_allocation;
 
     if (buffer == NULL) {
@@ -2039,6 +2045,25 @@ static bool copy_shm_buffer(struct nb_wayland_surface *surface,
     }
 
     nb_damage_region_clear(&changed_damage);
+    if (!new_allocation && damage.count != 0) {
+        tile_columns = ((size_t)width + NB_WAYLAND_DAMAGE_TILE_SIZE - 1U) /
+                       NB_WAYLAND_DAMAGE_TILE_SIZE;
+        tile_rows = ((size_t)height + NB_WAYLAND_DAMAGE_TILE_SIZE - 1U) /
+                    NB_WAYLAND_DAMAGE_TILE_SIZE;
+        if (tile_columns == 0 || tile_rows == 0 ||
+            tile_columns > SIZE_MAX / tile_rows) {
+            wl_client_post_implementation_error(
+                wl_resource_get_client(surface->surface_resource),
+                "wl_shm damage tile grid is too large");
+            return false;
+        }
+        tile_count = tile_columns * tile_rows;
+        changed_tiles = calloc(tile_count, sizeof(*changed_tiles));
+        if (changed_tiles == NULL) {
+            wl_resource_post_no_memory(surface->surface_resource);
+            return false;
+        }
+    }
     if (damage.count != 0) {
         wl_shm_buffer_begin_access(buffer);
         source = wl_shm_buffer_get_data(buffer);
@@ -2050,8 +2075,6 @@ static bool copy_shm_buffer(struct nb_wayland_surface *surface,
         for (y = rect.y; y < rect.y + rect.height; ++y) {
             const unsigned char *row =
                 source + ((size_t)y * (size_t)stride);
-            int first_changed = -1;
-            int last_changed = -1;
             int x;
 
             for (x = rect.x; x < rect.x + rect.width; ++x) {
@@ -2067,29 +2090,75 @@ static bool copy_shm_buffer(struct nb_wayland_surface *surface,
                 }
                 if (new_allocation || pixels[destination_index] != pixel) {
                     pixels[destination_index] = pixel;
-                    if (first_changed < 0) {
-                        first_changed = x;
+                    if (changed_tiles != NULL) {
+                        const size_t tile_x =
+                            (size_t)x / NB_WAYLAND_DAMAGE_TILE_SIZE;
+                        const size_t tile_y =
+                            (size_t)y / NB_WAYLAND_DAMAGE_TILE_SIZE;
+
+                        changed_tiles[tile_y * tile_columns + tile_x] = 1;
                     }
-                    last_changed = x;
                 }
-            }
-            if (first_changed >= 0) {
-                (void)nb_damage_region_add(
-                    &changed_damage,
-                    (struct nb_damage_rect){first_changed,
-                                             y,
-                                             last_changed -
-                                                     first_changed +
-                                                 1,
-                                             1},
-                    width,
-                    height);
             }
         }
     }
     if (damage.count != 0) {
         wl_shm_buffer_end_access(buffer);
     }
+
+    if (new_allocation && damage.count != 0) {
+        (void)nb_damage_region_add(
+            &changed_damage,
+            (struct nb_damage_rect){0, 0, width, height},
+            width,
+            height);
+    } else if (changed_tiles != NULL) {
+        size_t tile_y;
+
+        for (tile_y = 0; tile_y < tile_rows; ++tile_y) {
+            size_t tile_x = 0;
+
+            while (tile_x < tile_columns) {
+                size_t first_tile;
+                int x;
+                int y;
+                int right;
+                int bottom;
+
+                while (tile_x < tile_columns &&
+                       changed_tiles[tile_y * tile_columns + tile_x] == 0) {
+                    ++tile_x;
+                }
+                if (tile_x == tile_columns) {
+                    break;
+                }
+                first_tile = tile_x;
+                while (tile_x < tile_columns &&
+                       changed_tiles[tile_y * tile_columns + tile_x] != 0) {
+                    ++tile_x;
+                }
+                x = (int)(first_tile * NB_WAYLAND_DAMAGE_TILE_SIZE);
+                y = (int)(tile_y * NB_WAYLAND_DAMAGE_TILE_SIZE);
+                right = (int)(tile_x * NB_WAYLAND_DAMAGE_TILE_SIZE);
+                bottom = y + NB_WAYLAND_DAMAGE_TILE_SIZE;
+                if (right > width) {
+                    right = width;
+                }
+                if (bottom > height) {
+                    bottom = height;
+                }
+                (void)nb_damage_region_add(
+                    &changed_damage,
+                    (struct nb_damage_rect){x,
+                                             y,
+                                             right - x,
+                                             bottom - y},
+                    width,
+                    height);
+            }
+        }
+    }
+    free(changed_tiles);
 
     *copied_pixels = pixels;
     *copied_width = width;
