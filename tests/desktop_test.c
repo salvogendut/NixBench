@@ -277,7 +277,8 @@ static void test_resize_capture_routing(void)
                                   close_x,
                                   close_y,
                                   bounds));
-    CHECK(window_a->frame.width == NB_WINDOW_MIN_WIDTH);
+    CHECK(window_a->frame.width ==
+          close_x + window_a->pointer_offset_x - window_a->frame.x);
     CHECK(window_a->frame.height == NB_WINDOW_MIN_HEIGHT);
     CHECK(window_b->frame.width == 300);
     CHECK(window_b->frame.height == 220);
@@ -361,9 +362,8 @@ static void test_minimize_capture_and_focus(void)
     CHECK(nb_desktop_toggle_window_minimized(&fixture.desktop, fixture.b));
     CHECK(window_b->minimized);
     CHECK(nb_desktop_active_window_id(&fixture.desktop) == fixture.a);
-    CHECK(nb_desktop_pointer_down(&fixture.desktop,
-                                  minimize_x,
-                                  minimize_y) == NB_WINDOW_HIT_NONE);
+    CHECK(nb_window_hit_test(window_b, minimize_x, minimize_y) ==
+          NB_WINDOW_HIT_NONE);
 
     CHECK(nb_desktop_toggle_window_minimized(&fixture.desktop, fixture.b));
     CHECK(!window_b->minimized);

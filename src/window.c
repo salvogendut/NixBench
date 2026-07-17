@@ -192,7 +192,7 @@ struct nb_rect nb_window_close_rect(const struct nb_window *window)
     int x = title.x + NB_WINDOW_GADGET_MARGIN;
     struct nb_rect close;
 
-    if (window->control_layout == NB_WINDOW_CONTROLS_RIGHT) {
+    if (window->control_layout != NB_WINDOW_CONTROLS_LEFT) {
         x = title.x + title.width - NB_WINDOW_GADGET_MARGIN - size;
     }
     close = (struct nb_rect){
@@ -218,11 +218,10 @@ struct nb_rect nb_window_minimize_rect(const struct nb_window *window)
     }
     if (window->control_layout == NB_WINDOW_CONTROLS_LEFT) {
         x = close.x + close.width + NB_WINDOW_GADGET_MARGIN;
+    } else if (window->control_layout == NB_WINDOW_CONTROLS_SPLIT) {
+        x = title.x + NB_WINDOW_GADGET_MARGIN;
     } else {
         x = close.x - NB_WINDOW_GADGET_MARGIN - size;
-        if (window->control_layout == NB_WINDOW_CONTROLS_SPLIT) {
-            x = title.x + title.width - NB_WINDOW_GADGET_MARGIN - size;
-        }
         if (window->maximize_gadget_visible) {
             x -= size + NB_WINDOW_GADGET_MARGIN;
         }
@@ -256,9 +255,6 @@ struct nb_rect nb_window_maximize_rect(const struct nb_window *window)
         }
     } else {
         x = close.x - NB_WINDOW_GADGET_MARGIN - size;
-        if (window->control_layout == NB_WINDOW_CONTROLS_SPLIT) {
-            x = title.x + title.width - NB_WINDOW_GADGET_MARGIN - size;
-        }
     }
     maximize = (struct nb_rect){
         x,

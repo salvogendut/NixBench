@@ -483,6 +483,10 @@ live and saved atomically. The current panel provides:
 - minimize- and maximize-gadget visibility, with split, left, or right
   window-gadget placement.
 
+The default split layout keeps minimize on the left and groups maximize with
+close on the right, with close as the rightmost gadget. The left and right
+layouts group all visible gadgets on their named side.
+
 The version-2 file also reserves `desktop.wallpaper`, `desktop.theme`, and
 `windows.theme` keys for future wallpaper and skinning work. Version-1 files
 used `windows.minimize` as an inactive placeholder; that old value is ignored

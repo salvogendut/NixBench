@@ -32,6 +32,8 @@ static void test_geometry_and_hit_testing(void)
     const struct nb_rect content = nb_window_content_rect(&window);
     const struct nb_rect footer = nb_window_footer_rect(&window);
     const struct nb_rect close = nb_window_close_rect(&window);
+    const struct nb_rect minimize = nb_window_minimize_rect(&window);
+    const struct nb_rect maximize = nb_window_maximize_rect(&window);
     const struct nb_rect resize = nb_window_resize_rect(&window);
 
     CHECK(title.x == 103);
@@ -46,19 +48,24 @@ static void test_geometry_and_hit_testing(void)
     CHECK(footer.y == 277);
     CHECK(footer.width == 314);
     CHECK(footer.height == 20);
-    CHECK(close.x == 107);
+    CHECK(close.x == 397);
     CHECK(close.y == 87);
     CHECK(close.width == 16);
     CHECK(close.height == 16);
+    CHECK(minimize.x == 107);
+    CHECK(minimize.y == 87);
+    CHECK(maximize.x == 377);
+    CHECK(maximize.y == 87);
+    CHECK(maximize.x + maximize.width + NB_WINDOW_GADGET_MARGIN == close.x);
     CHECK(resize.x == 397);
     CHECK(resize.y == 277);
     CHECK(resize.width == 20);
     CHECK(resize.height == 20);
 
-    CHECK(nb_window_hit_test(&window, 110, 90) == NB_WINDOW_HIT_CLOSE);
-    CHECK(nb_window_hit_test(&window, 122, 102) == NB_WINDOW_HIT_CLOSE);
-    CHECK(nb_window_hit_test(&window, 123, 102) == NB_WINDOW_HIT_TITLE);
-    CHECK(nb_window_hit_test(&window, 122, 103) == NB_WINDOW_HIT_TITLE);
+    CHECK(nb_window_hit_test(&window, 400, 90) == NB_WINDOW_HIT_CLOSE);
+    CHECK(nb_window_hit_test(&window, 412, 102) == NB_WINDOW_HIT_CLOSE);
+    CHECK(nb_window_hit_test(&window, 396, 102) == NB_WINDOW_HIT_TITLE);
+    CHECK(nb_window_hit_test(&window, 412, 103) == NB_WINDOW_HIT_TITLE);
     CHECK(nb_window_hit_test(&window, 150, 90) == NB_WINDOW_HIT_TITLE);
     CHECK(nb_window_hit_test(&window, 150, 120) == NB_WINDOW_HIT_CONTENT);
     CHECK(nb_window_hit_test(&window, 397, 277) == NB_WINDOW_HIT_RESIZE);
@@ -152,7 +159,7 @@ static void test_maximize_toggle(void)
     const int maximize_y = maximize.y + (maximize.height / 2);
 
     CHECK(title.width == 314);
-    CHECK(maximize.x == 397);
+    CHECK(maximize.x == 377);
     CHECK(maximize.y == 87);
     CHECK(nb_window_hit_test(&window, maximize_x, maximize_y) ==
           NB_WINDOW_HIT_MAXIMIZE);
@@ -201,7 +208,7 @@ static void test_minimize_toggle(void)
     const int minimize_x = minimize.x + (minimize.width / 2);
     const int minimize_y = minimize.y + (minimize.height / 2);
 
-    CHECK(minimize.x == 377);
+    CHECK(minimize.x == 107);
     CHECK(minimize.y == 87);
     CHECK(nb_window_hit_test(&window, minimize_x, minimize_y) ==
           NB_WINDOW_HIT_MINIMIZE);
@@ -377,26 +384,33 @@ static void test_close_tracking(void)
 {
     struct nb_window window = make_window();
     const struct nb_rect bounds = {0, 0, 800, 600};
+    const struct nb_rect close = nb_window_close_rect(&window);
+    const int close_x = close.x + (close.width / 2);
+    const int close_y = close.y + (close.height / 2);
 
-    CHECK(nb_window_pointer_down(&window, 110, 90) == NB_WINDOW_HIT_CLOSE);
+    CHECK(nb_window_pointer_down(&window, close_x, close_y) ==
+          NB_WINDOW_HIT_CLOSE);
     CHECK(window.pointer_mode == NB_WINDOW_POINTER_CLOSE);
     CHECK(window.close_pressed);
     CHECK(nb_window_pointer_move(&window, 150, 90, bounds));
     CHECK(!window.close_pressed);
-    CHECK(nb_window_pointer_move(&window, 110, 90, bounds));
+    CHECK(nb_window_pointer_move(&window, close_x, close_y, bounds));
     CHECK(window.close_pressed);
-    CHECK(nb_window_pointer_up(&window, 110, 90) ==
+    CHECK(nb_window_pointer_up(&window, close_x, close_y) ==
           NB_WINDOW_ACTION_CLOSE_REQUESTED);
     CHECK(window.pointer_mode == NB_WINDOW_POINTER_IDLE);
     CHECK(!window.close_pressed);
 
-    CHECK(nb_window_pointer_down(&window, 110, 90) == NB_WINDOW_HIT_CLOSE);
+    CHECK(nb_window_pointer_down(&window, close_x, close_y) ==
+          NB_WINDOW_HIT_CLOSE);
     CHECK(nb_window_pointer_up(&window, 150, 90) == NB_WINDOW_ACTION_NONE);
 
     CHECK(nb_window_pointer_down(&window, 150, 90) == NB_WINDOW_HIT_TITLE);
-    CHECK(nb_window_pointer_up(&window, 110, 90) == NB_WINDOW_ACTION_NONE);
+    CHECK(nb_window_pointer_up(&window, close_x, close_y) ==
+          NB_WINDOW_ACTION_NONE);
 
-    CHECK(nb_window_pointer_up(&window, 110, 90) == NB_WINDOW_ACTION_NONE);
+    CHECK(nb_window_pointer_up(&window, close_x, close_y) ==
+          NB_WINDOW_ACTION_NONE);
     CHECK(nb_window_pointer_down(&window, 150, 120) == NB_WINDOW_HIT_CONTENT);
     CHECK(window.pointer_mode == NB_WINDOW_POINTER_IDLE);
 }
@@ -405,16 +419,22 @@ static void test_cancel_and_repeated_down(void)
 {
     struct nb_window window = make_window();
     const struct nb_rect bounds = {0, 0, 800, 600};
+    const struct nb_rect close = nb_window_close_rect(&window);
+    const int close_x = close.x + (close.width / 2);
+    const int close_y = close.y + (close.height / 2);
 
     CHECK(nb_window_pointer_down(&window, 150, 90) == NB_WINDOW_HIT_TITLE);
-    CHECK(nb_window_pointer_down(&window, 110, 90) == NB_WINDOW_HIT_NONE);
+    CHECK(nb_window_pointer_down(&window, close_x, close_y) ==
+          NB_WINDOW_HIT_NONE);
     nb_window_pointer_cancel(&window);
     CHECK(window.pointer_mode == NB_WINDOW_POINTER_IDLE);
     CHECK(!nb_window_pointer_move(&window, 300, 300, bounds));
 
-    CHECK(nb_window_pointer_down(&window, 110, 90) == NB_WINDOW_HIT_CLOSE);
+    CHECK(nb_window_pointer_down(&window, close_x, close_y) ==
+          NB_WINDOW_HIT_CLOSE);
     window.visible = false;
-    CHECK(nb_window_pointer_up(&window, 110, 90) == NB_WINDOW_ACTION_NONE);
+    CHECK(nb_window_pointer_up(&window, close_x, close_y) ==
+          NB_WINDOW_ACTION_NONE);
 }
 
 int main(void)
