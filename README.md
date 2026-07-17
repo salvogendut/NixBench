@@ -666,8 +666,12 @@ launches the selected initial application, with the matching
 `XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY`. It explicitly fixes
 `EGL_PLATFORM=wayland` so NetBSD libEGL does not select its X11 default in the
 standalone session. Once the core and application process group are gone, the
-worker asks the ordinary-user sentinel to remove direct
-runtime entries and the directory. Privileged code never performs a filesystem
+worker asks the ordinary-user sentinel to remove the bounded, user-owned
+runtime subtree and its directory. The descriptor-relative traversal never
+follows symbolic links, never crosses to another filesystem, and rejects
+unexpected ownership or excessive nesting. This accommodates application
+runtime paths such as GTK's `dbus-1/services` and `at-spi` directories without
+weakening the privilege boundary. Privileged code never performs a filesystem
 operation on the reported user-owned path. NixClock participates in the normal
 global-menu path. No selected application receives the helper protocol
 descriptor or any console capability.

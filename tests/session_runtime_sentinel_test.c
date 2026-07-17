@@ -217,10 +217,13 @@ static void test_controller_eof_cleanup(void)
     }
 }
 
-static void test_nested_directory_fails_closed(void)
+static void test_nested_runtime_directories_cleanup(void)
 {
     char path[NB_SESSION_RUNTIME_SENTINEL_PATH_CAPACITY];
-    char nested_path[NB_SESSION_RUNTIME_SENTINEL_PATH_CAPACITY];
+    char dbus_path[NB_SESSION_RUNTIME_SENTINEL_PATH_CAPACITY];
+    char services_path[NB_SESSION_RUNTIME_SENTINEL_PATH_CAPACITY];
+    char at_spi_path[NB_SESSION_RUNTIME_SENTINEL_PATH_CAPACITY];
+    char transient_path[NB_SESSION_RUNTIME_SENTINEL_PATH_CAPACITY];
     char error[NB_SESSION_RUNTIME_SENTINEL_ERROR_CAPACITY];
     struct stat status;
     pid_t child;
@@ -237,20 +240,22 @@ static void test_nested_directory_fails_closed(void)
         CHECK(wait_for_child(child, &child_status));
         return;
     }
-    CHECK(form_child_path(path, "nested", nested_path));
-    CHECK(mkdir(nested_path, S_IRUSR | S_IWUSR | S_IXUSR) == 0);
-    CHECK(!nb_session_runtime_sentinel_request_cleanup(controller,
-                                                       2000,
-                                                       error));
-    CHECK(error[0] != '\0');
+    CHECK(form_child_path(path, "dbus-1", dbus_path));
+    CHECK(mkdir(dbus_path, S_IRUSR | S_IWUSR | S_IXUSR) == 0);
+    CHECK(form_child_path(dbus_path, "services", services_path));
+    CHECK(mkdir(services_path, S_IRUSR | S_IWUSR | S_IXUSR) == 0);
+    CHECK(form_child_path(services_path, "transient", transient_path));
+    CHECK(create_regular_file(transient_path));
+    CHECK(form_child_path(path, "at-spi", at_spi_path));
+    CHECK(mkdir(at_spi_path, S_IRUSR | S_IWUSR | S_IXUSR) == 0);
+    CHECK(nb_session_runtime_sentinel_request_cleanup(controller,
+                                                      2000,
+                                                      error));
     CHECK(close(controller) == 0);
     CHECK(wait_for_child(child, &child_status));
     CHECK(WIFEXITED(child_status));
-    CHECK(WEXITSTATUS(child_status) != 0);
-    CHECK(lstat(path, &status) == 0 && S_ISDIR(status.st_mode));
-    CHECK(lstat(nested_path, &status) == 0 && S_ISDIR(status.st_mode));
-    CHECK(rmdir(nested_path) == 0);
-    CHECK(rmdir(path) == 0);
+    CHECK(WEXITSTATUS(child_status) == 0);
+    CHECK(lstat(path, &status) != 0 && errno == ENOENT);
 }
 
 static void test_defensive_arguments(void)
@@ -278,7 +283,7 @@ int main(void)
     }
     test_explicit_cleanup();
     test_controller_eof_cleanup();
-    test_nested_directory_fails_closed();
+    test_nested_runtime_directories_cleanup();
     test_defensive_arguments();
 
     if (failures != 0) {

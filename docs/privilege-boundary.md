@@ -28,9 +28,12 @@ operation. A separately dropped sibling of the same
 internal executable is the ordinary-user runtime sentinel: it owns the private
 runtime directory. On the verified worker path it removes that directory only
 after the complete core/application process group is contained; controller
-loss also triggers its unprivileged cleanup fallback. Device-free tests
-exercise the split, heartbeat timeout, sentinel cleanup, and exact crash/hang
-gate policy.
+loss also triggers its unprivileged cleanup fallback. Nested application
+runtime directories are removed through retained directory descriptors with a
+fixed depth bound. The sentinel does not follow symbolic links, cross a mount
+boundary, or accept directories owned by another user. Device-free tests
+exercise the split, heartbeat timeout, nested sentinel cleanup, and exact
+crash/hang gate policy.
 Physical takeover, normal exit, VT 1 -> 2 -> 1, and supervised-SIGTERM recovery
 have completed, and both physical core-failure gates now pass. The remaining
 failure-injection and repeated-session matrix is still pending, so this is not

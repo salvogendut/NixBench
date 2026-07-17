@@ -28,7 +28,8 @@ enum {
     NB_RUNTIME_SENTINEL_WIRE_CLEAN = 2,
     NB_RUNTIME_SENTINEL_WIRE_CLEANED = 3,
     NB_RUNTIME_SENTINEL_WIRE_FAILED = 4,
-    NB_RUNTIME_SENTINEL_BASENAME_CAPACITY = 128
+    NB_RUNTIME_SENTINEL_BASENAME_CAPACITY = 128,
+    NB_RUNTIME_SENTINEL_MAX_DIRECTORY_DEPTH = 8
 };
 
 static const uint32_t runtime_sentinel_magic = UINT32_C(0x4e425253);
@@ -425,10 +426,37 @@ static int duplicate_cloexec(int descriptor)
     return duplicate;
 }
 
-static bool remove_direct_entries(
-    const struct runtime_sentinel_directory *directory)
+static int open_child_directory(int parent_fd, const char *name)
 {
-    int scan_fd = duplicate_cloexec(directory->directory_fd);
+    int flags = O_RDONLY;
+    int descriptor;
+
+#if defined(O_DIRECTORY)
+    flags |= O_DIRECTORY;
+#endif
+#if defined(O_CLOEXEC)
+    flags |= O_CLOEXEC;
+#endif
+#if defined(O_NOFOLLOW)
+    flags |= O_NOFOLLOW;
+#endif
+    descriptor = openat(parent_fd, name, flags);
+    if (descriptor >= 0 && !set_cloexec(descriptor)) {
+        const int saved_error = errno;
+
+        (void)close(descriptor);
+        errno = saved_error;
+        return -1;
+    }
+    return descriptor;
+}
+
+static bool remove_directory_entries(int directory_fd,
+                                     uid_t owner,
+                                     dev_t device,
+                                     unsigned int depth)
+{
+    int scan_fd = duplicate_cloexec(directory_fd);
     DIR *stream;
     struct dirent *entry;
     bool success = true;
@@ -452,7 +480,7 @@ static bool remove_direct_entries(
             strcmp(entry->d_name, "..") == 0) {
             continue;
         }
-        if (fstatat(directory->directory_fd,
+        if (fstatat(directory_fd,
                     entry->d_name,
                     &status,
                     AT_SYMLINK_NOFOLLOW) != 0) {
@@ -464,12 +492,48 @@ static bool remove_direct_entries(
             break;
         }
         if (S_ISDIR(status.st_mode)) {
-            errno = ENOTEMPTY;
-            success = false;
-            break;
-        }
-        if (unlinkat(directory->directory_fd, entry->d_name, 0) != 0 &&
-            errno != ENOENT) {
+            struct stat opened;
+            struct stat remaining;
+            int child_fd;
+
+            if (depth >= NB_RUNTIME_SENTINEL_MAX_DIRECTORY_DEPTH) {
+                errno = ELOOP;
+                success = false;
+                break;
+            }
+            child_fd = open_child_directory(directory_fd, entry->d_name);
+            if (child_fd < 0 || fstat(child_fd, &opened) != 0 ||
+                !S_ISDIR(opened.st_mode) || opened.st_uid != owner ||
+                opened.st_dev != device ||
+                !same_identity(&status, &opened) ||
+                !remove_directory_entries(child_fd,
+                                          owner,
+                                          device,
+                                          depth + 1U) ||
+                fstatat(directory_fd,
+                        entry->d_name,
+                        &remaining,
+                        AT_SYMLINK_NOFOLLOW) != 0 ||
+                !S_ISDIR(remaining.st_mode) || remaining.st_uid != owner ||
+                !same_identity(&opened, &remaining)) {
+                const int saved_error = errno != 0 ? errno : EPERM;
+
+                if (child_fd >= 0) {
+                    (void)close(child_fd);
+                }
+                errno = saved_error;
+                success = false;
+                break;
+            }
+            if (close(child_fd) != 0 ||
+                unlinkat(directory_fd,
+                         entry->d_name,
+                         AT_REMOVEDIR) != 0) {
+                success = false;
+                break;
+            }
+        } else if (unlinkat(directory_fd, entry->d_name, 0) != 0 &&
+                   errno != ENOENT) {
             success = false;
             break;
         }
@@ -496,7 +560,10 @@ static bool directory_cleanup(struct runtime_sentinel_directory *directory)
                                      directory->identity.st_uid) ||
         !same_identity(&open_identity, &directory->identity) ||
         !named_directory_matches(directory) ||
-        !remove_direct_entries(directory) ||
+        !remove_directory_entries(directory->directory_fd,
+                                  directory->identity.st_uid,
+                                  directory->identity.st_dev,
+                                  0) ||
         !named_directory_matches(directory) ||
         unlinkat(directory->parent_fd,
                  directory->basename,
