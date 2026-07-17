@@ -52,6 +52,8 @@ struct nb_xwayland_rootless {
     xcb_atom_t wm_name;
     xcb_atom_t wm_protocols;
     xcb_atom_t wm_delete_window;
+    xcb_atom_t wm_selection;
+    xcb_window_t wm_window;
     xcb_connection_t *pending_connection;
     pthread_t connector_thread;
     int startup_pipe[2];
@@ -458,10 +460,12 @@ static bool initialize_xwm(struct nb_xwayland_rootless *service)
 {
     xcb_screen_iterator_t screens;
     xcb_composite_query_version_reply_t *composite_reply;
+    xcb_get_selection_owner_reply_t *selection_reply;
     const uint32_t root_event_mask =
         XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
         XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY |
         XCB_EVENT_MASK_PROPERTY_CHANGE;
+    const uint32_t support_event_mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
 
     if (xcb_connection_has_error(service->connection) != 0) {
         return false;
@@ -515,6 +519,49 @@ static bool initialize_xwm(struct nb_xwayland_rootless *service)
     service->wm_delete_window = intern_atom(service->connection,
                                             "WM_DELETE_WINDOW",
                                             false);
+    service->wm_selection = intern_atom(service->connection,
+                                        "WM_S0",
+                                        false);
+    service->wm_window = xcb_generate_id(service->connection);
+    if (service->wm_selection == XCB_ATOM_NONE ||
+        service->wm_window == XCB_WINDOW_NONE ||
+        !checked_request_succeeded(
+            service->connection,
+            xcb_create_window_checked(service->connection,
+                                      XCB_COPY_FROM_PARENT,
+                                      service->wm_window,
+                                      service->screen->root,
+                                      0,
+                                      0,
+                                      1,
+                                      1,
+                                      0,
+                                      XCB_WINDOW_CLASS_INPUT_OUTPUT,
+                                      service->screen->root_visual,
+                                      XCB_CW_EVENT_MASK,
+                                      &support_event_mask),
+            "create the XWM support window") ||
+        !checked_request_succeeded(
+            service->connection,
+            xcb_set_selection_owner_checked(service->connection,
+                                            service->wm_window,
+                                            service->wm_selection,
+                                            XCB_CURRENT_TIME),
+            "claim the WM_S0 selection")) {
+        return false;
+    }
+    selection_reply = xcb_get_selection_owner_reply(
+        service->connection,
+        xcb_get_selection_owner(service->connection,
+                                service->wm_selection),
+        NULL);
+    if (selection_reply == NULL ||
+        selection_reply->owner != service->wm_window) {
+        free(selection_reply);
+        fputs("Rootless XWM did not retain the WM_S0 selection\n", stderr);
+        return false;
+    }
+    free(selection_reply);
     return service->wl_surface_id != XCB_ATOM_NONE &&
            service->wm_protocols != XCB_ATOM_NONE &&
            service->wm_delete_window != XCB_ATOM_NONE &&
