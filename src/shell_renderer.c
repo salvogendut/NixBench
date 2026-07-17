@@ -3,6 +3,35 @@
 #include "desktop_renderer.h"
 #include "menu_renderer.h"
 
+static bool render_minimized_windows(SDL_Renderer *renderer,
+                                     const struct nb_shell *shell,
+                                     struct nb_rect viewport)
+{
+    size_t index;
+
+    for (index = 0;
+         index < nb_desktop_window_count(&shell->desktop);
+         ++index) {
+        const nb_window_id id =
+            nb_desktop_window_id_at(&shell->desktop, index);
+        const struct nb_window *window =
+            nb_desktop_window_at(&shell->desktop, index);
+
+        if (window != NULL && window->visible && window->minimized &&
+            !nb_menu_render_window_button(
+                renderer,
+                nb_shell_minimized_window_rect(shell, viewport, id),
+                window->title,
+                shell->pointer_owner ==
+                        NB_SHELL_POINTER_MINIMIZED_WINDOW &&
+                    shell->minimized_pointer_window == id &&
+                    shell->minimized_pointer_pressed)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool nb_shell_render_with_content(
     SDL_Renderer *renderer,
     const struct nb_shell *shell,
@@ -15,7 +44,8 @@ bool nb_shell_render_with_content(
                                           &shell->desktop,
                                           render_content,
                                           context) &&
-           nb_menu_render(renderer, &shell->menu, viewport, clock_text);
+           nb_menu_render(renderer, &shell->menu, viewport, clock_text) &&
+           render_minimized_windows(renderer, shell, viewport);
 }
 
 bool nb_shell_render(SDL_Renderer *renderer,

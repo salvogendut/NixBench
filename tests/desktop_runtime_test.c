@@ -484,8 +484,17 @@ static void test_settings_and_application_pins(void)
                            milliseconds);
     milliseconds += 2;
     CHECK(update.preferences_changed);
+    CHECK(!update.preferences.minimize_gadget_visible);
+
+    update = click_runtime(runtime,
+                           content.x + 20,
+                           content.y + 375,
+                           milliseconds);
+    milliseconds += 2;
+    CHECK(update.preferences_changed);
     CHECK(!update.preferences.maximize_gadget_visible);
     CHECK(nb_desktop_runtime_get_preferences(runtime, &preferences));
+    CHECK(!preferences.minimize_gadget_visible);
     CHECK(!preferences.maximize_gadget_visible);
     CHECK(preferences.backdrop_gradient_enabled);
 

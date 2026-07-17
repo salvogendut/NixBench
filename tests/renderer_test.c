@@ -235,6 +235,17 @@ static void test_content_callback_and_clip_restoration(void)
     CHECK(rects_equal(state.clips[0], sdl_rect(state.contents[0])));
     CHECK(rects_equal(state.clips[1], sdl_rect(state.contents[1])));
     CHECK(!SDL_RenderClipEnabled(renderer));
+
+    CHECK(nb_desktop_toggle_window_minimized(&desktop, first));
+    reset_callback(&state, 0);
+    CHECK(nb_desktop_render_with_content(renderer,
+                                         &desktop,
+                                         record_content,
+                                         &state));
+    CHECK(state.call_count == 1);
+    CHECK(state.ids[0] == second);
+    CHECK(nb_desktop_toggle_window_minimized(&desktop, first));
+
     CHECK(nb_desktop_render_with_content(renderer,
                                          &desktop,
                                          NULL,

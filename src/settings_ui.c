@@ -258,9 +258,12 @@ enum nb_settings_action nb_settings_hit_test(struct nb_rect content,
         return NB_SETTINGS_ACTION_TOGGLE_MIDORI_PIN;
     }
     if (contains(full_row(content, 346), x, y)) {
-        return NB_SETTINGS_ACTION_TOGGLE_MAXIMIZE;
+        return NB_SETTINGS_ACTION_TOGGLE_MINIMIZE;
     }
     if (contains(full_row(content, 370), x, y)) {
+        return NB_SETTINGS_ACTION_TOGGLE_MAXIMIZE;
+    }
+    if (contains(full_row(content, 394), x, y)) {
         return NB_SETTINGS_ACTION_CYCLE_CONTROL_LAYOUT;
     }
     return NB_SETTINGS_ACTION_NONE;
@@ -347,6 +350,10 @@ bool nb_settings_render(SDL_Renderer *renderer,
         !render_heading(renderer, content, 326, "Windows") ||
         !render_checkbox(renderer,
                          full_row(content, 346),
+                         "Show minimize gadget",
+                         preferences->minimize_gadget_visible) ||
+        !render_checkbox(renderer,
+                         full_row(content, 370),
                          "Show maximize gadget",
                          preferences->maximize_gadget_visible)) {
         return false;
@@ -355,11 +362,11 @@ bool nb_settings_render(SDL_Renderer *renderer,
                    sizeof(label),
                    "Window gadget placement: %s",
                    layout_name(preferences->window_control_layout));
-    if (!render_button(renderer, full_row(content, 370), label, false) ||
-        !render_heading(renderer, content, 410, "Appearance (reserved)") ||
+    if (!render_button(renderer, full_row(content, 394), label, false) ||
+        !render_heading(renderer, content, 434, "Appearance (reserved)") ||
         !render_text(renderer,
                      content.x + SETTINGS_PADDING,
-                     content.y + 430,
+                     content.y + 454,
                      content.x + content.width - SETTINGS_PADDING,
                      "Wallpaper and skinnable themes are recorded in .nixbenchrc.",
                      muted_text)) {
@@ -372,7 +379,7 @@ bool nb_settings_render(SDL_Renderer *renderer,
                    preferences->window_theme);
     return render_text(renderer,
                        content.x + SETTINGS_PADDING,
-                       content.y + 450,
+                       content.y + 474,
                        content.x + content.width - SETTINGS_PADDING,
                        label,
                        muted_text);

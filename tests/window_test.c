@@ -193,36 +193,85 @@ static void test_maximize_toggle(void)
     CHECK(window.frame.height == 220);
 }
 
+static void test_minimize_toggle(void)
+{
+    struct nb_window window = make_window();
+    const struct nb_rect original = window.frame;
+    const struct nb_rect minimize = nb_window_minimize_rect(&window);
+    const int minimize_x = minimize.x + (minimize.width / 2);
+    const int minimize_y = minimize.y + (minimize.height / 2);
+
+    CHECK(minimize.x == 377);
+    CHECK(minimize.y == 87);
+    CHECK(nb_window_hit_test(&window, minimize_x, minimize_y) ==
+          NB_WINDOW_HIT_MINIMIZE);
+    CHECK(nb_window_pointer_down(&window, minimize_x, minimize_y) ==
+          NB_WINDOW_HIT_MINIMIZE);
+    CHECK(window.pointer_mode == NB_WINDOW_POINTER_MINIMIZE);
+    CHECK(window.minimize_pressed);
+    CHECK(nb_window_pointer_up(&window, minimize_x, minimize_y) ==
+          NB_WINDOW_ACTION_MINIMIZE_TOGGLED);
+    CHECK(!window.minimize_pressed);
+    CHECK(!window.minimized);
+
+    CHECK(nb_window_toggle_minimized(&window));
+    CHECK(window.minimized);
+    CHECK(window.frame.x == original.x);
+    CHECK(window.frame.y == original.y);
+    CHECK(window.frame.width == original.width);
+    CHECK(window.frame.height == original.height);
+    CHECK(nb_window_hit_test(&window, minimize_x, minimize_y) ==
+          NB_WINDOW_HIT_NONE);
+    CHECK(nb_window_toggle_minimized(&window));
+    CHECK(!window.minimized);
+}
+
 static void test_window_control_preferences(void)
 {
     struct nb_window window = make_window();
     struct nb_rect close;
     struct nb_rect maximize;
 
-    nb_window_set_controls(&window, true, NB_WINDOW_CONTROLS_LEFT);
+    struct nb_rect minimize;
+
+    nb_window_set_controls(&window, true, true, NB_WINDOW_CONTROLS_LEFT);
     close = nb_window_close_rect(&window);
+    minimize = nb_window_minimize_rect(&window);
     maximize = nb_window_maximize_rect(&window);
     CHECK(close.x == 107);
-    CHECK(maximize.x == 127);
+    CHECK(minimize.x == 127);
+    CHECK(maximize.x == 147);
     CHECK(nb_window_hit_test(&window,
                              maximize.x + 1,
                              maximize.y + 1) == NB_WINDOW_HIT_MAXIMIZE);
 
-    nb_window_set_controls(&window, true, NB_WINDOW_CONTROLS_RIGHT);
+    nb_window_set_controls(&window, true, true, NB_WINDOW_CONTROLS_RIGHT);
     close = nb_window_close_rect(&window);
+    minimize = nb_window_minimize_rect(&window);
     maximize = nb_window_maximize_rect(&window);
     CHECK(close.x == 397);
+    CHECK(minimize.x == 357);
     CHECK(maximize.x == 377);
 
     CHECK(nb_window_pointer_down(&window,
                                  maximize.x + 1,
                                  maximize.y + 1) ==
           NB_WINDOW_HIT_MAXIMIZE);
-    nb_window_set_controls(&window, false, NB_WINDOW_CONTROLS_RIGHT);
+    nb_window_set_controls(&window, true, false, NB_WINDOW_CONTROLS_RIGHT);
     maximize = nb_window_maximize_rect(&window);
     CHECK(maximize.width == 0);
     CHECK(maximize.height == 0);
     CHECK(window.pointer_mode == NB_WINDOW_POINTER_IDLE);
+    minimize = nb_window_minimize_rect(&window);
+    CHECK(minimize.x == 377);
+    CHECK(nb_window_hit_test(&window, 380, 90) == NB_WINDOW_HIT_MINIMIZE);
+    CHECK(nb_window_pointer_down(&window,
+                                 minimize.x + 1,
+                                 minimize.y + 1) ==
+          NB_WINDOW_HIT_MINIMIZE);
+    nb_window_set_controls(&window, false, false, NB_WINDOW_CONTROLS_RIGHT);
+    CHECK(window.pointer_mode == NB_WINDOW_POINTER_IDLE);
+    CHECK(nb_window_minimize_rect(&window).width == 0);
     CHECK(nb_window_hit_test(&window, 380, 90) == NB_WINDOW_HIT_TITLE);
     close = nb_window_close_rect(&window);
     CHECK(nb_window_hit_test(&window, close.x + 1, close.y + 1) ==
@@ -375,6 +424,7 @@ int main(void)
     test_dragging();
     test_clamping();
     test_maximize_toggle();
+    test_minimize_toggle();
     test_window_control_preferences();
     test_resizing();
     test_close_tracking();

@@ -174,6 +174,21 @@ static bool render_bar(SDL_Renderer *renderer,
                        true);
 }
 
+bool nb_menu_render_window_button(SDL_Renderer *renderer,
+                                  struct nb_rect rect,
+                                  const char *title,
+                                  bool pressed)
+{
+    return fill_rect(renderer, rect, panel_color) &&
+           render_bevel(renderer, rect, pressed) &&
+           render_text(renderer,
+                       rect,
+                       6,
+                       text_color,
+                       title,
+                       false);
+}
+
 static bool render_separator(SDL_Renderer *renderer, struct nb_rect rect)
 {
     const float left = (float)(rect.x + 5);

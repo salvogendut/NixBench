@@ -480,15 +480,16 @@ live and saved atomically. The current panel provides:
 - an optional vertical, horizontal, or diagonal gradient from color 1 to
   color 2;
 - persistent pins for NixClock, Sakura, and Midori; and
-- maximize-gadget visibility and split, left, or right window-gadget
-  placement.
+- minimize- and maximize-gadget visibility, with split, left, or right
+  window-gadget placement.
 
 The version-1 file also reserves `desktop.wallpaper`, `desktop.theme`,
-`windows.theme`, and `windows.minimize` keys. They make future wallpaper,
-skinning, and minimize work forward-compatible, but changing those keys does
-not yet change rendering or add a minimize gadget. Unknown keys are ignored so
-newer configurations remain readable by older builds. A malformed known value
-is reported and the session uses safe defaults without giving the file to the
+and `windows.theme` keys for future wallpaper and skinning work. Minimizing a
+window hides it from the desktop without changing its geometry and creates a
+compact, titled button in the global bar. Clicking that button restores,
+raises, and focuses the window. Unknown keys are ignored so newer
+configurations remain readable by older builds. A malformed known value is
+reported and the session uses safe defaults without giving the file to the
 privileged helper.
 
 For a package-style NetBSD installation, configure the standard pkgsrc prefix,

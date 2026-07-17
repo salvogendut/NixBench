@@ -87,6 +87,7 @@ int main(void)
     CHECK(preferences.pinned_applications[NB_PINNED_APPLICATION_NIXCLOCK]);
     CHECK(preferences.backdrop_primary.red == 24);
     CHECK(!preferences.backdrop_gradient_enabled);
+    CHECK(preferences.minimize_gadget_visible);
     CHECK(preferences.maximize_gadget_visible);
 
     preferences.pinned_applications[NB_PINNED_APPLICATION_SAKURA] = false;
@@ -95,6 +96,7 @@ int main(void)
     preferences.backdrop_gradient_enabled = true;
     preferences.backdrop_gradient_direction =
         NB_BACKDROP_GRADIENT_DIAGONAL;
+    preferences.minimize_gadget_visible = false;
     preferences.maximize_gadget_visible = false;
     preferences.window_control_layout = NB_WINDOW_CONTROLS_RIGHT;
     CHECK(nb_user_config_save(path,
@@ -114,6 +116,7 @@ int main(void)
     CHECK(loaded.backdrop_gradient_enabled);
     CHECK(loaded.backdrop_gradient_direction ==
           NB_BACKDROP_GRADIENT_DIAGONAL);
+    CHECK(!loaded.minimize_gadget_visible);
     CHECK(!loaded.maximize_gadget_visible);
     CHECK(loaded.window_control_layout == NB_WINDOW_CONTROLS_RIGHT);
 

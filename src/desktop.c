@@ -74,9 +74,12 @@ static struct nb_window *find_window_mutable(struct nb_desktop *desktop,
 
 static void set_active_window(struct nb_desktop *desktop, nb_window_id id)
 {
+    const size_t requested_slot = find_slot_by_id(desktop, id);
     size_t index;
 
-    if (find_slot_by_id(desktop, id) == no_slot) {
+    if (requested_slot == no_slot ||
+        (id != NB_WINDOW_ID_NONE &&
+         desktop->slots[requested_slot].window.minimized)) {
         id = NB_WINDOW_ID_NONE;
     }
 
@@ -87,6 +90,23 @@ static void set_active_window(struct nb_desktop *desktop, nb_window_id id)
 
         slot->window.active = slot->id == id;
     }
+}
+
+static nb_window_id topmost_available_window(
+    const struct nb_desktop *desktop)
+{
+    size_t index = desktop->window_count;
+
+    while (index > 0) {
+        const struct nb_desktop_slot *slot =
+            &desktop->slots[desktop->stack[--index]];
+
+        if (slot->occupied && slot->window.visible &&
+            !slot->window.minimized) {
+            return slot->id;
+        }
+    }
+    return NB_WINDOW_ID_NONE;
 }
 
 static size_t topmost_slot_at(const struct nb_desktop *desktop, int x, int y)
@@ -179,14 +199,7 @@ bool nb_desktop_destroy_window(struct nb_desktop *desktop, nb_window_id id)
     --desktop->window_count;
 
     if (was_active) {
-        if (desktop->window_count == 0) {
-            set_active_window(desktop, NB_WINDOW_ID_NONE);
-        } else {
-            const size_t top_slot =
-                desktop->stack[desktop->window_count - 1];
-
-            set_active_window(desktop, desktop->slots[top_slot].id);
-        }
+        set_active_window(desktop, topmost_available_window(desktop));
     }
 
     return true;
@@ -216,12 +229,36 @@ bool nb_desktop_raise_window(struct nb_desktop *desktop, nb_window_id id)
 
 bool nb_desktop_activate_window(struct nb_desktop *desktop, nb_window_id id)
 {
+    const struct nb_window *window = nb_desktop_find_window(desktop, id);
+
+    if (window == NULL || window->minimized) {
+        return false;
+    }
     if (!nb_desktop_raise_window(desktop, id)) {
         return false;
     }
 
     set_active_window(desktop, id);
     return true;
+}
+
+bool nb_desktop_toggle_window_minimized(struct nb_desktop *desktop,
+                                        nb_window_id id)
+{
+    struct nb_window *window = find_window_mutable(desktop, id);
+    const bool was_active = desktop != NULL &&
+                            desktop->active_window == id;
+
+    if (window == NULL || !nb_window_toggle_minimized(window)) {
+        return false;
+    }
+    if (window->minimized) {
+        if (was_active) {
+            set_active_window(desktop, topmost_available_window(desktop));
+        }
+        return true;
+    }
+    return nb_desktop_activate_window(desktop, id);
 }
 
 bool nb_desktop_toggle_window_maximized(struct nb_desktop *desktop,
@@ -238,6 +275,7 @@ bool nb_desktop_toggle_window_maximized(struct nb_desktop *desktop,
 }
 
 void nb_desktop_set_window_controls(struct nb_desktop *desktop,
+                                    bool minimize_gadget_visible,
                                     bool maximize_gadget_visible,
                                     enum nb_window_control_layout layout)
 {
@@ -251,6 +289,7 @@ void nb_desktop_set_window_controls(struct nb_desktop *desktop,
             &desktop->slots[desktop->stack[index]];
 
         nb_window_set_controls(&slot->window,
+                               minimize_gadget_visible,
                                maximize_gadget_visible,
                                layout);
     }

@@ -536,12 +536,22 @@ static bool apply_settings_action(struct nb_desktop_runtime *runtime,
                 NB_PINNED_APPLICATION_MIDORI];
         changed = true;
         rebuild_launcher_menu(runtime);
+    } else if (action == NB_SETTINGS_ACTION_TOGGLE_MINIMIZE) {
+        runtime->preferences.minimize_gadget_visible =
+            !runtime->preferences.minimize_gadget_visible;
+        changed = true;
+        nb_shell_set_window_controls(
+            &runtime->shell,
+            runtime->preferences.minimize_gadget_visible,
+            runtime->preferences.maximize_gadget_visible,
+            runtime->preferences.window_control_layout);
     } else if (action == NB_SETTINGS_ACTION_TOGGLE_MAXIMIZE) {
         runtime->preferences.maximize_gadget_visible =
             !runtime->preferences.maximize_gadget_visible;
         changed = true;
         nb_shell_set_window_controls(
             &runtime->shell,
+            runtime->preferences.minimize_gadget_visible,
             runtime->preferences.maximize_gadget_visible,
             runtime->preferences.window_control_layout);
     } else if (action == NB_SETTINGS_ACTION_CYCLE_CONTROL_LAYOUT) {
@@ -551,6 +561,7 @@ static bool apply_settings_action(struct nb_desktop_runtime *runtime,
         changed = true;
         nb_shell_set_window_controls(
             &runtime->shell,
+            runtime->preferences.minimize_gadget_visible,
             runtime->preferences.maximize_gadget_visible,
             runtime->preferences.window_control_layout);
     } else if (action != NB_SETTINGS_ACTION_NONE) {
@@ -657,6 +668,16 @@ static bool apply_shell_action(struct nb_desktop_runtime *runtime,
                     "Ignored close request for unowned window %llu",
                     (unsigned long long)action.window);
         return true;
+    }
+    if (action.type == NB_SHELL_ACTION_WINDOW_MINIMIZE_TOGGLED) {
+        if (!nb_shell_toggle_window_minimized(&runtime->shell,
+                                              action.window)) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Could not toggle minimize for window %llu",
+                        (unsigned long long)action.window);
+            return false;
+        }
+        return sync_application_focus(runtime);
     }
     if (action.type == NB_SHELL_ACTION_WINDOW_MAXIMIZE_TOGGLED) {
         const struct nb_rect bounds = nb_menu_work_area(runtime->viewport);
@@ -1351,6 +1372,7 @@ struct nb_desktop_runtime *nb_desktop_runtime_create(
                   &desktop_menu_model);
     nb_shell_set_window_controls(
         &runtime->shell,
+        runtime->preferences.minimize_gadget_visible,
         runtime->preferences.maximize_gadget_visible,
         runtime->preferences.window_control_layout);
     rebuild_launcher_menu(runtime);

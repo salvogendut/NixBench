@@ -339,6 +339,49 @@ static void test_maximize_capture_routing(void)
     check_invariants(&fixture.desktop);
 }
 
+static void test_minimize_capture_and_focus(void)
+{
+    struct fixture fixture = make_fixture();
+    const struct nb_window *window_b =
+        nb_desktop_find_window(&fixture.desktop, fixture.b);
+    const struct nb_rect minimize = nb_window_minimize_rect(window_b);
+    struct nb_desktop_action action;
+    const int minimize_x = minimize.x + (minimize.width / 2);
+    const int minimize_y = minimize.y + (minimize.height / 2);
+
+    CHECK(nb_desktop_pointer_down(&fixture.desktop,
+                                  minimize_x,
+                                  minimize_y) ==
+          NB_WINDOW_HIT_MINIMIZE);
+    action = nb_desktop_pointer_up(&fixture.desktop,
+                                   minimize_x,
+                                   minimize_y);
+    CHECK(action.type == NB_WINDOW_ACTION_MINIMIZE_TOGGLED);
+    CHECK(action.window == fixture.b);
+    CHECK(nb_desktop_toggle_window_minimized(&fixture.desktop, fixture.b));
+    CHECK(window_b->minimized);
+    CHECK(nb_desktop_active_window_id(&fixture.desktop) == fixture.a);
+    CHECK(nb_desktop_pointer_down(&fixture.desktop,
+                                  minimize_x,
+                                  minimize_y) == NB_WINDOW_HIT_NONE);
+
+    CHECK(nb_desktop_toggle_window_minimized(&fixture.desktop, fixture.b));
+    CHECK(!window_b->minimized);
+    CHECK(nb_desktop_active_window_id(&fixture.desktop) == fixture.b);
+    CHECK(nb_desktop_window_id_at(&fixture.desktop, 1) == fixture.b);
+
+    CHECK(nb_desktop_toggle_window_minimized(&fixture.desktop, fixture.a));
+    CHECK(nb_desktop_toggle_window_minimized(&fixture.desktop, fixture.b));
+    CHECK(nb_desktop_active_window_id(&fixture.desktop) ==
+          NB_WINDOW_ID_NONE);
+    CHECK(nb_desktop_destroy_window(&fixture.desktop, fixture.b));
+    CHECK(nb_desktop_active_window_id(&fixture.desktop) ==
+          NB_WINDOW_ID_NONE);
+    CHECK(nb_desktop_toggle_window_minimized(&fixture.desktop, fixture.a));
+    CHECK(nb_desktop_active_window_id(&fixture.desktop) == fixture.a);
+    check_invariants(&fixture.desktop);
+}
+
 static void test_active_fallback(void)
 {
     struct fixture fixture = make_fixture();
@@ -524,6 +567,7 @@ int main(void)
     test_close_request_and_lifecycle();
     test_resize_capture_routing();
     test_maximize_capture_routing();
+    test_minimize_capture_and_focus();
     test_active_fallback();
     test_explicit_activation();
     test_clamp_all();

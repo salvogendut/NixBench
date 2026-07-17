@@ -1216,6 +1216,8 @@ nb_application_host_dispatch_shell_action(
         }
     } else if (action.type == NB_SHELL_ACTION_WINDOW_RESIZED) {
         result = NB_APPLICATION_DISPATCH_UNHANDLED;
+    } else if (action.type == NB_SHELL_ACTION_WINDOW_MINIMIZE_TOGGLED) {
+        result = NB_APPLICATION_DISPATCH_UNHANDLED;
     } else if (action.type == NB_SHELL_ACTION_WINDOW_MAXIMIZE_TOGGLED) {
         result = NB_APPLICATION_DISPATCH_UNHANDLED;
     } else {

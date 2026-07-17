@@ -73,7 +73,7 @@ bool nb_desktop_render_with_content(
         if (window == NULL || id == NB_WINDOW_ID_NONE) {
             return false;
         }
-        if (!window->visible) {
+        if (!window->visible || window->minimized) {
             continue;
         }
         if (render_content == NULL) {

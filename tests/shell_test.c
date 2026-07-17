@@ -159,6 +159,58 @@ static void test_active_application_menu(void)
     CHECK(action.window == fixture.b);
 }
 
+static void test_minimized_window_bar(void)
+{
+    const struct nb_rect viewport = {0, 0, 800, 600};
+    struct fixture fixture = make_fixture();
+    const struct nb_window *window_b =
+        nb_desktop_find_window(&fixture.shell.desktop, fixture.b);
+    const struct nb_rect minimize = nb_window_minimize_rect(window_b);
+    struct nb_rect button;
+    struct nb_shell_action action;
+
+    CHECK(nb_shell_pointer_down(&fixture.shell,
+                                minimize.x + minimize.width / 2,
+                                minimize.y + minimize.height / 2,
+                                viewport));
+    action = nb_shell_pointer_up(&fixture.shell,
+                                 minimize.x + minimize.width / 2,
+                                 minimize.y + minimize.height / 2,
+                                 viewport);
+    CHECK(action.type == NB_SHELL_ACTION_WINDOW_MINIMIZE_TOGGLED);
+    CHECK(action.window == fixture.b);
+    CHECK(nb_shell_toggle_window_minimized(&fixture.shell, fixture.b));
+    CHECK(window_b->minimized);
+    CHECK(nb_desktop_active_window_id(&fixture.shell.desktop) == fixture.a);
+    CHECK(fixture.shell.menu.model == &model_a);
+
+    button = nb_shell_minimized_window_rect(&fixture.shell,
+                                            viewport,
+                                            fixture.b);
+    CHECK(button.width > 0);
+    CHECK(button.height == 20);
+    CHECK(button.x + button.width <= nb_menu_clock_rect(viewport).x);
+    CHECK(nb_shell_pointer_down(&fixture.shell,
+                                button.x + button.width / 2,
+                                button.y + button.height / 2,
+                                viewport));
+    CHECK(fixture.shell.pointer_owner ==
+          NB_SHELL_POINTER_MINIMIZED_WINDOW);
+    action = nb_shell_pointer_up(&fixture.shell,
+                                 button.x + button.width / 2,
+                                 button.y + button.height / 2,
+                                 viewport);
+    CHECK(action.type == NB_SHELL_ACTION_WINDOW_MINIMIZE_TOGGLED);
+    CHECK(action.window == fixture.b);
+    CHECK(nb_shell_toggle_window_minimized(&fixture.shell, fixture.b));
+    CHECK(!window_b->minimized);
+    CHECK(nb_desktop_active_window_id(&fixture.shell.desktop) == fixture.b);
+    CHECK(fixture.shell.menu.model == &model_b);
+    CHECK(nb_shell_minimized_window_rect(&fixture.shell,
+                                         viewport,
+                                         fixture.b).width == 0);
+}
+
 static void test_menu_routing_and_actions(void)
 {
     const struct nb_rect viewport = {0, 0, 800, 600};
@@ -461,6 +513,7 @@ static void test_cancel_and_clamp(void)
 int main(void)
 {
     test_active_application_menu();
+    test_minimized_window_bar();
     test_menu_routing_and_actions();
     test_shared_application_menu_source();
     test_per_window_menu_rebinding();

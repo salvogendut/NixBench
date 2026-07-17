@@ -3,6 +3,13 @@
 #include <stddef.h>
 #include <string.h>
 
+enum {
+    MINIMIZED_BUTTON_GAP = 4,
+    MINIMIZED_BUTTON_MIN_WIDTH = 48,
+    MINIMIZED_BUTTON_MAX_WIDTH = 144,
+    MINIMIZED_BUTTON_INSET_Y = 2
+};
+
 static struct nb_shell_action no_action(void)
 {
     const struct nb_shell_action action = {
@@ -153,6 +160,9 @@ void nb_shell_init(struct nb_shell *shell,
     shell->active_menu_source = NB_MENU_SOURCE_NONE;
     shell->active_menu_window = NB_WINDOW_ID_NONE;
     shell->pointer_owner = NB_SHELL_POINTER_NONE;
+    shell->minimized_pointer_window = NB_WINDOW_ID_NONE;
+    shell->minimized_pointer_pressed = false;
+    shell->minimize_gadget_visible = true;
     shell->maximize_gadget_visible = true;
     shell->window_control_layout = NB_WINDOW_CONTROLS_SPLIT;
     sync_active_menu(shell);
@@ -172,6 +182,7 @@ void nb_shell_set_menu_overlay(struct nb_shell *shell,
 }
 
 void nb_shell_set_window_controls(struct nb_shell *shell,
+                                  bool minimize_gadget_visible,
                                   bool maximize_gadget_visible,
                                   enum nb_window_control_layout layout)
 {
@@ -179,9 +190,11 @@ void nb_shell_set_window_controls(struct nb_shell *shell,
         layout > NB_WINDOW_CONTROLS_RIGHT) {
         return;
     }
+    shell->minimize_gadget_visible = minimize_gadget_visible;
     shell->maximize_gadget_visible = maximize_gadget_visible;
     shell->window_control_layout = layout;
     nb_desktop_set_window_controls(&shell->desktop,
+                                   minimize_gadget_visible,
                                    maximize_gadget_visible,
                                    layout);
 }
@@ -212,6 +225,7 @@ nb_window_id nb_shell_open_window(struct nb_shell *shell,
         return NB_WINDOW_ID_NONE;
     }
     nb_desktop_set_window_controls(&shell->desktop,
+                                   shell->minimize_gadget_visible,
                                    shell->maximize_gadget_visible,
                                    shell->window_control_layout);
 
@@ -226,6 +240,10 @@ bool nb_shell_destroy_window(struct nb_shell *shell, nb_window_id id)
 {
     const size_t binding_index = find_binding(shell, id);
 
+    if (shell->pointer_owner == NB_SHELL_POINTER_MINIMIZED_WINDOW &&
+        shell->minimized_pointer_window == id) {
+        nb_shell_pointer_cancel(shell);
+    }
     if (binding_index == NB_DESKTOP_MAX_WINDOWS ||
         !nb_desktop_destroy_window(&shell->desktop, id)) {
         return false;
@@ -252,6 +270,145 @@ bool nb_shell_activate_window(struct nb_shell *shell, nb_window_id id)
     }
     sync_active_menu(shell);
     return true;
+}
+
+bool nb_shell_toggle_window_minimized(struct nb_shell *shell,
+                                      nb_window_id id)
+{
+    if (shell == NULL ||
+        !nb_desktop_toggle_window_minimized(&shell->desktop, id)) {
+        return false;
+    }
+    sync_active_menu(shell);
+    return true;
+}
+
+static size_t minimized_window_count(const struct nb_shell *shell)
+{
+    size_t index;
+    size_t count = 0;
+
+    for (index = 0;
+         index < nb_desktop_window_count(&shell->desktop);
+         ++index) {
+        const struct nb_window *window =
+            nb_desktop_window_at(&shell->desktop, index);
+
+        if (window != NULL && window->visible && window->minimized) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+struct nb_rect nb_shell_minimized_window_rect(
+    const struct nb_shell *shell,
+    struct nb_rect viewport,
+    nb_window_id window_id)
+{
+    const struct nb_rect bar = nb_menu_bar_rect(viewport);
+    const struct nb_rect clock = nb_menu_clock_rect(viewport);
+    size_t count;
+    size_t menu_count = 0;
+    size_t index;
+    size_t minimized_index = 0;
+    int menu_right = bar.x + MINIMIZED_BUTTON_GAP;
+    int left;
+    int right = clock.x - MINIMIZED_BUTTON_GAP;
+    int available;
+    int width;
+
+    if (shell == NULL || window_id == NB_WINDOW_ID_NONE) {
+        return (struct nb_rect){bar.x, bar.y, 0, 0};
+    }
+    count = minimized_window_count(shell);
+    if (count == 0) {
+        return (struct nb_rect){bar.x, bar.y, 0, 0};
+    }
+    if (shell->menu.model != NULL) {
+        menu_count = shell->menu.model->menu_count < NB_MENU_MAX_MENUS
+                         ? shell->menu.model->menu_count
+                         : NB_MENU_MAX_MENUS;
+    }
+    for (index = 0; index < menu_count; ++index) {
+        const struct nb_rect label =
+            nb_menu_label_rect(&shell->menu, viewport, index);
+        const int label_right = label.x + label.width;
+
+        if (label_right > menu_right) {
+            menu_right = label_right;
+        }
+    }
+    left = menu_right + MINIMIZED_BUTTON_GAP;
+    available = right - left - ((int)count - 1) * MINIMIZED_BUTTON_GAP;
+    width = available / (int)count;
+    if (width < MINIMIZED_BUTTON_MIN_WIDTH) {
+        left = bar.x + MINIMIZED_BUTTON_GAP;
+        available = right - left -
+                    ((int)count - 1) * MINIMIZED_BUTTON_GAP;
+        width = available / (int)count;
+    }
+    if (width > MINIMIZED_BUTTON_MAX_WIDTH) {
+        width = MINIMIZED_BUTTON_MAX_WIDTH;
+    }
+    if (width <= 0) {
+        return (struct nb_rect){bar.x, bar.y, 0, 0};
+    }
+
+    for (index = 0;
+         index < nb_desktop_window_count(&shell->desktop);
+         ++index) {
+        const nb_window_id current_id =
+            nb_desktop_window_id_at(&shell->desktop, index);
+        const struct nb_window *window =
+            nb_desktop_window_at(&shell->desktop, index);
+
+        if (window == NULL || !window->visible || !window->minimized) {
+            continue;
+        }
+        if (current_id == window_id) {
+            return (struct nb_rect){
+                left + (int)minimized_index *
+                           (width + MINIMIZED_BUTTON_GAP),
+                bar.y + MINIMIZED_BUTTON_INSET_Y,
+                width,
+                bar.height - (2 * MINIMIZED_BUTTON_INSET_Y)
+            };
+        }
+        ++minimized_index;
+    }
+    return (struct nb_rect){bar.x, bar.y, 0, 0};
+}
+
+static bool rect_contains(struct nb_rect rect, int x, int y)
+{
+    return rect.width > 0 && rect.height > 0 &&
+           x >= rect.x && y >= rect.y &&
+           x < rect.x + rect.width && y < rect.y + rect.height;
+}
+
+static nb_window_id minimized_window_at(const struct nb_shell *shell,
+                                        int x,
+                                        int y,
+                                        struct nb_rect viewport)
+{
+    size_t index;
+
+    for (index = 0;
+         index < nb_desktop_window_count(&shell->desktop);
+         ++index) {
+        const nb_window_id id =
+            nb_desktop_window_id_at(&shell->desktop, index);
+
+        if (rect_contains(nb_shell_minimized_window_rect(shell,
+                                                         viewport,
+                                                         id),
+                          x,
+                          y)) {
+            return id;
+        }
+    }
+    return NB_WINDOW_ID_NONE;
 }
 
 bool nb_shell_update_menu_source(struct nb_shell *shell,
@@ -361,8 +518,19 @@ bool nb_shell_pointer_down(struct nb_shell *shell,
                            struct nb_rect viewport)
 {
     enum nb_window_hit window_hit;
+    nb_window_id minimized_window;
 
     if (shell->pointer_owner != NB_SHELL_POINTER_NONE) {
+        return true;
+    }
+
+    minimized_window = nb_menu_is_open(&shell->menu)
+                           ? NB_WINDOW_ID_NONE
+                           : minimized_window_at(shell, x, y, viewport);
+    if (minimized_window != NB_WINDOW_ID_NONE) {
+        shell->pointer_owner = NB_SHELL_POINTER_MINIMIZED_WINDOW;
+        shell->minimized_pointer_window = minimized_window;
+        shell->minimized_pointer_pressed = true;
         return true;
     }
 
@@ -394,6 +562,18 @@ bool nb_shell_pointer_move(struct nb_shell *shell,
                            int y,
                            struct nb_rect viewport)
 {
+    if (shell->pointer_owner == NB_SHELL_POINTER_MINIMIZED_WINDOW) {
+        const bool was_pressed = shell->minimized_pointer_pressed;
+
+        shell->minimized_pointer_pressed = rect_contains(
+            nb_shell_minimized_window_rect(
+                shell,
+                viewport,
+                shell->minimized_pointer_window),
+            x,
+            y);
+        return was_pressed != shell->minimized_pointer_pressed;
+    }
     if (shell->pointer_owner == NB_SHELL_POINTER_MENU ||
         (shell->pointer_owner == NB_SHELL_POINTER_NONE &&
          nb_menu_is_open(&shell->menu))) {
@@ -415,7 +595,21 @@ struct nb_shell_action nb_shell_pointer_up(struct nb_shell *shell,
 {
     struct nb_shell_action action = no_action();
 
-    if (shell->pointer_owner == NB_SHELL_POINTER_MENU) {
+    if (shell->pointer_owner == NB_SHELL_POINTER_MINIMIZED_WINDOW) {
+        if (shell->minimized_pointer_pressed &&
+            rect_contains(nb_shell_minimized_window_rect(
+                              shell,
+                              viewport,
+                              shell->minimized_pointer_window),
+                          x,
+                          y)) {
+            action.type = NB_SHELL_ACTION_WINDOW_MINIMIZE_TOGGLED;
+            action.window = shell->minimized_pointer_window;
+        }
+        shell->pointer_owner = NB_SHELL_POINTER_NONE;
+        shell->minimized_pointer_window = NB_WINDOW_ID_NONE;
+        shell->minimized_pointer_pressed = false;
+    } else if (shell->pointer_owner == NB_SHELL_POINTER_MENU) {
         const nb_menu_command command =
             nb_menu_pointer_up(&shell->menu, x, y, viewport);
 
@@ -435,6 +629,10 @@ struct nb_shell_action nb_shell_pointer_up(struct nb_shell *shell,
             action.type = NB_SHELL_ACTION_WINDOW_CLOSE_REQUESTED;
             action.window = desktop_action.window;
         } else if (desktop_action.type ==
+                   NB_WINDOW_ACTION_MINIMIZE_TOGGLED) {
+            action.type = NB_SHELL_ACTION_WINDOW_MINIMIZE_TOGGLED;
+            action.window = desktop_action.window;
+        } else if (desktop_action.type ==
                    NB_WINDOW_ACTION_MAXIMIZE_TOGGLED) {
             action.type = NB_SHELL_ACTION_WINDOW_MAXIMIZE_TOGGLED;
             action.window = desktop_action.window;
@@ -452,7 +650,8 @@ struct nb_shell_action nb_shell_menu_key_press(struct nb_shell *shell,
     struct nb_shell_action action = no_action();
     nb_menu_command command;
 
-    if (shell->pointer_owner == NB_SHELL_POINTER_WINDOW) {
+    if (shell->pointer_owner == NB_SHELL_POINTER_WINDOW ||
+        shell->pointer_owner == NB_SHELL_POINTER_MINIMIZED_WINDOW) {
         return action;
     }
 
@@ -475,6 +674,8 @@ void nb_shell_pointer_cancel(struct nb_shell *shell)
     nb_menu_cancel(&shell->menu);
     nb_desktop_pointer_cancel(&shell->desktop);
     shell->pointer_owner = NB_SHELL_POINTER_NONE;
+    shell->minimized_pointer_window = NB_WINDOW_ID_NONE;
+    shell->minimized_pointer_pressed = false;
 }
 
 bool nb_shell_has_pointer_interaction(const struct nb_shell *shell)

@@ -212,6 +212,11 @@ static void apply_action(struct nb_desktop_preview *preview,
         }
         return;
     }
+    if (action.type == NB_SHELL_ACTION_WINDOW_MINIMIZE_TOGGLED) {
+        (void)nb_shell_toggle_window_minimized(&preview->shell,
+                                               action.window);
+        return;
+    }
     if (action.type == NB_SHELL_ACTION_WINDOW_MAXIMIZE_TOGGLED) {
         (void)nb_desktop_toggle_window_maximized(&preview->shell.desktop,
                                                  action.window,

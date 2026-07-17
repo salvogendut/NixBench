@@ -161,11 +161,40 @@ static bool render_maximize_gadget(SDL_Renderer *renderer,
                           bottom - 3.0f);
 }
 
+static bool render_minimize_gadget(SDL_Renderer *renderer,
+                                   const struct nb_window *window)
+{
+    const struct nb_rect minimize = nb_window_minimize_rect(window);
+    const bool pressed =
+        window->pointer_mode == NB_WINDOW_POINTER_MINIMIZE;
+    const float inset = pressed ? 1.0f : 0.0f;
+
+    if (!window->minimize_gadget_visible || minimize.width <= 0 ||
+        minimize.height <= 0) {
+        return true;
+    }
+    if (!fill_rect(renderer, minimize, frame_color) ||
+        !render_bevel(renderer, minimize, pressed)) {
+        return false;
+    }
+    if (minimize.width < 8 || minimize.height < 8) {
+        return true;
+    }
+    return set_color(renderer, text_color) &&
+           SDL_RenderLine(
+               renderer,
+               (float)(minimize.x + 3) + inset,
+               (float)(minimize.y + minimize.height - 4) + inset,
+               (float)(minimize.x + minimize.width - 4) + inset,
+               (float)(minimize.y + minimize.height - 4) + inset);
+}
+
 static bool render_title(SDL_Renderer *renderer,
                          const struct nb_window *window)
 {
     const struct nb_rect title = nb_window_title_rect(window);
     const struct nb_rect close = nb_window_close_rect(window);
+    const struct nb_rect minimize = nb_window_minimize_rect(window);
     const struct nb_rect maximize = nb_window_maximize_rect(window);
     const char *text = window->title;
     int text_left = title.x + 8;
@@ -190,12 +219,22 @@ static bool render_title(SDL_Renderer *renderer,
             text_right = maximize.x - 8;
         }
     }
+    if (minimize.width > 0) {
+        if (minimize.x < title.x + (title.width / 2)) {
+            if (minimize.x + minimize.width + 8 > text_left) {
+                text_left = minimize.x + minimize.width + 8;
+            }
+        } else if (minimize.x - 8 < text_right) {
+            text_right = minimize.x - 8;
+        }
+    }
     text_x = (float)text_left;
 
     if (!fill_rect(renderer,
                    title,
                    window->active ? active_title_color : inactive_title_color) ||
         !render_close_gadget(renderer, window) ||
+        !render_minimize_gadget(renderer, window) ||
         !render_maximize_gadget(renderer, window) ||
         !set_color(renderer, title_text_color)) {
         return false;
@@ -333,7 +372,7 @@ static bool render_footer(SDL_Renderer *renderer,
 bool nb_window_render_base(SDL_Renderer *renderer,
                            const struct nb_window *window)
 {
-    if (!window->visible) {
+    if (!window->visible || window->minimized) {
         return true;
     }
 
@@ -347,7 +386,7 @@ bool nb_window_render_base(SDL_Renderer *renderer,
 
 bool nb_window_render(SDL_Renderer *renderer, const struct nb_window *window)
 {
-    if (!window->visible) {
+    if (!window->visible || window->minimized) {
         return true;
     }
 

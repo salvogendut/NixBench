@@ -20,12 +20,14 @@ typedef uint64_t nb_menu_source_id;
 enum nb_shell_pointer_owner {
     NB_SHELL_POINTER_NONE,
     NB_SHELL_POINTER_MENU,
-    NB_SHELL_POINTER_WINDOW
+    NB_SHELL_POINTER_WINDOW,
+    NB_SHELL_POINTER_MINIMIZED_WINDOW
 };
 
 enum nb_shell_action_type {
     NB_SHELL_ACTION_NONE,
     NB_SHELL_ACTION_WINDOW_CLOSE_REQUESTED,
+    NB_SHELL_ACTION_WINDOW_MINIMIZE_TOGGLED,
     NB_SHELL_ACTION_WINDOW_MAXIMIZE_TOGGLED,
     NB_SHELL_ACTION_WINDOW_RESIZED,
     NB_SHELL_ACTION_MENU_COMMAND
@@ -63,6 +65,9 @@ struct nb_shell {
     nb_menu_source_id active_menu_source;
     nb_window_id active_menu_window;
     enum nb_shell_pointer_owner pointer_owner;
+    nb_window_id minimized_pointer_window;
+    bool minimized_pointer_pressed;
+    bool minimize_gadget_visible;
     bool maximize_gadget_visible;
     enum nb_window_control_layout window_control_layout;
 };
@@ -75,6 +80,7 @@ void nb_shell_init(struct nb_shell *shell,
 void nb_shell_set_menu_overlay(struct nb_shell *shell,
                                const struct nb_menu_model *menu_overlay_model);
 void nb_shell_set_window_controls(struct nb_shell *shell,
+                                  bool minimize_gadget_visible,
                                   bool maximize_gadget_visible,
                                   enum nb_window_control_layout layout);
 
@@ -86,6 +92,8 @@ nb_window_id nb_shell_open_window(struct nb_shell *shell,
 /* State-changing calls may end a grab; adapters recheck this afterwards. */
 bool nb_shell_destroy_window(struct nb_shell *shell, nb_window_id id);
 bool nb_shell_activate_window(struct nb_shell *shell, nb_window_id id);
+bool nb_shell_toggle_window_minimized(struct nb_shell *shell,
+                                      nb_window_id id);
 bool nb_shell_update_menu_source(struct nb_shell *shell,
                                  nb_menu_source_id menu_source,
                                  const struct nb_menu_model *menu_model);
@@ -104,6 +112,10 @@ struct nb_shell_pointer_target nb_shell_pointer_target_at(
     int x,
     int y,
     struct nb_rect viewport);
+struct nb_rect nb_shell_minimized_window_rect(
+    const struct nb_shell *shell,
+    struct nb_rect viewport,
+    nb_window_id window);
 bool nb_shell_pointer_down(struct nb_shell *shell,
                            int x,
                            int y,

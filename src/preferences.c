@@ -23,6 +23,7 @@ void nb_user_preferences_init(struct nb_user_preferences *preferences)
     preferences->backdrop_secondary = (struct nb_color){43, 113, 137};
     preferences->backdrop_gradient_direction =
         NB_BACKDROP_GRADIENT_VERTICAL;
+    preferences->minimize_gadget_visible = true;
     preferences->maximize_gadget_visible = true;
     preferences->window_control_layout = NB_WINDOW_CONTROLS_SPLIT;
     (void)snprintf(preferences->desktop_theme,
