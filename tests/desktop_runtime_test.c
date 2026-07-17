@@ -521,6 +521,7 @@ static void test_screenshot_countdown(void)
     uint64_t initial_hash;
     uint64_t second_hash;
     uint64_t milliseconds = 100;
+    const uint64_t runtime_clock = UINT64_C(1000000);
 
     CHECK(runtime != NULL);
     if (runtime == NULL) {
@@ -541,12 +542,15 @@ static void test_screenshot_countdown(void)
     event = key_event("RTRN", true, ++milliseconds);
     CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
     CHECK(update.redraw);
-    CHECK(nb_desktop_runtime_timer_timeout(runtime, milliseconds) <= 1000);
+    CHECK(nb_desktop_runtime_timer_timeout(runtime, runtime_clock) == 0);
+    CHECK(nb_desktop_runtime_tick(runtime, runtime_clock, &update));
+    CHECK(update.redraw);
+    CHECK(nb_desktop_runtime_timer_timeout(runtime, runtime_clock) <= 1000);
 
     CHECK(nb_desktop_runtime_render(runtime, "12:34", 1, &frame));
     initial_hash = frame_hash(&frame);
     CHECK(nb_desktop_runtime_tick(runtime,
-                                  milliseconds + 1000,
+                                  runtime_clock + 1000,
                                   &update));
     CHECK(update.redraw);
     CHECK(nb_desktop_runtime_render(runtime, "12:34", 2, &frame));
@@ -554,7 +558,7 @@ static void test_screenshot_countdown(void)
     CHECK(second_hash != initial_hash);
 
     CHECK(nb_desktop_runtime_tick(runtime,
-                                  milliseconds + 5000,
+                                  runtime_clock + 5000,
                                   &update));
     CHECK(update.redraw);
     nb_desktop_runtime_destroy(runtime);

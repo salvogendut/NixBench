@@ -1,5 +1,6 @@
 #include "desktop_runtime.h"
 
+#include <limits.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -169,9 +170,14 @@ struct nb_desktop_runtime {
     bool pointer_visible;
     bool quit_requested;
     uint64_t screenshot_deadline;
+    uint64_t screenshot_notice_deadline;
     unsigned int screenshot_countdown;
+    bool screenshot_start_pending;
     bool screenshot_countdown_active;
     bool screenshot_capture_pending;
+    bool screenshot_notice_pending;
+    bool screenshot_notice_active;
+    bool screenshot_notice_success;
     enum nb_desktop_launch_request pending_launch_request;
     bool render_damage_valid;
     struct nb_damage_region render_damage;
@@ -647,8 +653,7 @@ static bool open_nixinfo(struct nb_desktop_runtime *runtime)
 }
 
 static bool apply_shell_action(struct nb_desktop_runtime *runtime,
-                               struct nb_shell_action action,
-                               uint64_t milliseconds)
+                               struct nb_shell_action action)
 {
     if (action.type == NB_SHELL_ACTION_MENU_COMMAND) {
         if (action.menu_command ==
@@ -782,13 +787,11 @@ static bool apply_shell_action(struct nb_desktop_runtime *runtime,
             return show_settings_window(runtime);
         }
         if (action.menu_command == NIXBENCH_DESKTOP_COMMAND_SCREENSHOT) {
-            runtime->screenshot_deadline =
-                milliseconds > UINT64_MAX - UINT64_C(5000)
-                    ? UINT64_MAX
-                    : milliseconds + UINT64_C(5000);
-            runtime->screenshot_countdown = 5;
-            runtime->screenshot_countdown_active = true;
+            runtime->screenshot_start_pending = true;
+            runtime->screenshot_countdown_active = false;
             runtime->screenshot_capture_pending = false;
+            runtime->screenshot_notice_pending = false;
+            runtime->screenshot_notice_active = false;
             return true;
         }
         if (action.menu_command == NIXBENCH_DESKTOP_COMMAND_QUIT) {
@@ -1073,9 +1076,7 @@ static bool process_pointer_event(const struct nb_host_event *event,
                                         y,
                                         runtime->viewport);
 
-                if (!apply_shell_action(runtime,
-                                        action,
-                                        event->milliseconds)) {
+                if (!apply_shell_action(runtime, action)) {
                     return false;
                 }
             }
@@ -1271,7 +1272,7 @@ static bool process_key_event(const struct nb_host_event *event,
             capture_shell_key(runtime, key_name);
         }
 #endif
-        return apply_shell_action(runtime, action, event->milliseconds);
+        return apply_shell_action(runtime, action);
     }
 
     if (menu_open) {
@@ -1374,6 +1375,99 @@ static bool render_software_pointer(SDL_Renderer *renderer,
         }
     }
     return true;
+}
+
+static bool render_screenshot_status(
+    SDL_Renderer *renderer,
+    const struct nb_desktop_runtime *runtime)
+{
+    char countdown[32];
+    const char *text = NULL;
+    Uint8 red = 34;
+    Uint8 green = 76;
+    Uint8 blue = 94;
+    size_t text_length;
+    int text_width;
+    int width;
+    int height = 58;
+    int x;
+    int y;
+    SDL_FRect panel;
+
+    if (runtime->screenshot_countdown_active) {
+        (void)snprintf(countdown,
+                       sizeof(countdown),
+                       "SCREENSHOT IN %u",
+                       runtime->screenshot_countdown);
+        text = countdown;
+    } else if (runtime->screenshot_notice_active) {
+        text = runtime->screenshot_notice_success
+                   ? "SCREENSHOT SAVED"
+                   : "SCREENSHOT FAILED";
+        if (runtime->screenshot_notice_success) {
+            red = 37;
+            green = 112;
+            blue = 78;
+        } else {
+            red = 142;
+            green = 47;
+            blue = 39;
+        }
+    }
+    if (text == NULL) {
+        return true;
+    }
+    text_length = strlen(text);
+    text_width = text_length > (size_t)(INT_MAX / 8)
+                     ? INT_MAX
+                     : (int)text_length * 8;
+    width = text_width + 36;
+    if (width > runtime->viewport.width - 24) {
+        width = runtime->viewport.width - 24;
+    }
+    if (height > runtime->viewport.height - 24) {
+        height = runtime->viewport.height - 24;
+    }
+    if (width <= 4 || height <= 4) {
+        return true;
+    }
+    x = runtime->viewport.x + (runtime->viewport.width - width) / 2;
+    y = runtime->viewport.y + (runtime->viewport.height - height) / 2;
+    panel = (SDL_FRect){(float)x, (float)y, (float)width, (float)height};
+
+    return SDL_SetRenderDrawColor(renderer,
+                                  red,
+                                  green,
+                                  blue,
+                                  SDL_ALPHA_OPAQUE) &&
+           SDL_RenderFillRect(renderer, &panel) &&
+           SDL_SetRenderDrawColor(renderer, 242, 246, 238, SDL_ALPHA_OPAQUE) &&
+           SDL_RenderLine(renderer,
+                          (float)x,
+                          (float)(y + height - 1),
+                          (float)x,
+                          (float)y) &&
+           SDL_RenderLine(renderer,
+                          (float)x,
+                          (float)y,
+                          (float)(x + width - 1),
+                          (float)y) &&
+           SDL_SetRenderDrawColor(renderer, 20, 30, 34, SDL_ALPHA_OPAQUE) &&
+           SDL_RenderLine(renderer,
+                          (float)(x + width - 1),
+                          (float)y,
+                          (float)(x + width - 1),
+                          (float)(y + height - 1)) &&
+           SDL_RenderLine(renderer,
+                          (float)(x + width - 1),
+                          (float)(y + height - 1),
+                          (float)x,
+                          (float)(y + height - 1)) &&
+           SDL_SetRenderDrawColor(renderer, 255, 255, 255, SDL_ALPHA_OPAQUE) &&
+           SDL_RenderDebugText(renderer,
+                               (float)(x + (width - text_width) / 2),
+                               (float)(y + (height - 8) / 2),
+                               text);
 }
 
 void nb_desktop_runtime_options_init(
@@ -1748,6 +1842,16 @@ bool nb_desktop_runtime_tick(
         return false;
     }
     clear_update(update);
+    if (runtime->screenshot_start_pending) {
+        runtime->screenshot_start_pending = false;
+        runtime->screenshot_deadline =
+            milliseconds > UINT64_MAX - UINT64_C(5000)
+                ? UINT64_MAX
+                : milliseconds + UINT64_C(5000);
+        runtime->screenshot_countdown = 5;
+        runtime->screenshot_countdown_active = true;
+        update->redraw = true;
+    }
     seconds = screenshot_seconds_remaining(runtime, milliseconds);
     if (runtime->screenshot_countdown_active && seconds == 0) {
         runtime->screenshot_countdown_active = false;
@@ -1756,6 +1860,19 @@ bool nb_desktop_runtime_tick(
         update->redraw = true;
     } else if (seconds != 0 && seconds != runtime->screenshot_countdown) {
         runtime->screenshot_countdown = seconds;
+        update->redraw = true;
+    }
+    if (runtime->screenshot_notice_pending) {
+        runtime->screenshot_notice_pending = false;
+        runtime->screenshot_notice_active = true;
+        runtime->screenshot_notice_deadline =
+            milliseconds > UINT64_MAX - UINT64_C(2500)
+                ? UINT64_MAX
+                : milliseconds + UINT64_C(2500);
+        update->redraw = true;
+    } else if (runtime->screenshot_notice_active &&
+               milliseconds >= runtime->screenshot_notice_deadline) {
+        runtime->screenshot_notice_active = false;
         update->redraw = true;
     }
     if (nb_nixinfo_tick(&runtime->nixinfo, milliseconds)) {
@@ -1781,6 +1898,25 @@ uint32_t nb_desktop_runtime_timer_timeout(
     }
     nixinfo_timeout = nb_nixinfo_timer_timeout(&runtime->nixinfo,
                                                milliseconds);
+    if (runtime->screenshot_start_pending ||
+        runtime->screenshot_notice_pending) {
+        return 0;
+    }
+    if (runtime->screenshot_notice_active) {
+        uint64_t notice_remaining;
+        uint32_t notice_timeout;
+
+        if (milliseconds >= runtime->screenshot_notice_deadline) {
+            return 0;
+        }
+        notice_remaining = runtime->screenshot_notice_deadline - milliseconds;
+        notice_timeout = notice_remaining > UINT32_MAX
+                             ? UINT32_MAX
+                             : (uint32_t)notice_remaining;
+        if (notice_timeout < nixinfo_timeout) {
+            nixinfo_timeout = notice_timeout;
+        }
+    }
     if (!runtime->screenshot_countdown_active) {
         return nixinfo_timeout;
     }
@@ -1908,6 +2044,7 @@ bool nb_desktop_runtime_render_region(
                                             bar_text,
                                             render_window_content,
                                             runtime) &&
+               render_screenshot_status(renderer, runtime) &&
                (!runtime->pointer_visible ||
                 render_software_pointer(renderer,
                                         runtime->pointer_x,
@@ -1938,8 +2075,12 @@ bool nb_desktop_runtime_render_region(
                                     sizeof(saved_path),
                                     error,
                                     sizeof(error))) {
+            runtime->screenshot_notice_success = true;
+            runtime->screenshot_notice_pending = true;
             SDL_Log("NixBench screenshot saved: %s", saved_path);
         } else {
+            runtime->screenshot_notice_success = false;
+            runtime->screenshot_notice_pending = true;
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                          "Could not save NixBench screenshot: %s",
                          error);

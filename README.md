@@ -477,9 +477,11 @@ resolved from the build tree or installed prefix; the GTK entries currently use
 menus into the bar as well, start the session with
 `NIXBENCH_GTK_MENU_BRIDGE=1`.
 
-The shell's **NixBench > Take Screenshot** command shows `SHOT 5` through
-`SHOT 1` in the clock area, then captures the next complete desktop frame after
-the countdown has disappeared. It writes a mode-`0600` PNG as
+The shell's **NixBench > Take Screenshot** command shows a centered
+`SCREENSHOT IN 5` through `SCREENSHOT IN 1` panel, then captures the next
+complete desktop frame after the countdown has disappeared. A short saved or
+failed panel confirms the result without appearing in the PNG. Successful
+captures are mode-`0600` files named
 `~/nixbench-USER-PID-YYYYMMDD-HHMMSS.png`; a numeric suffix prevents an
 existing same-second file from being replaced.
 
