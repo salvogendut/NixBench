@@ -1410,11 +1410,13 @@ static gboolean publish_window_menu(struct nb_gtk_menu_window_state *state)
     }
 
     nixbench_application_menu_v1_commit(state->menu);
-    g_printerr("NixBench GTK menu bridge: published %zu menu(s) and %zu "
-               "command(s) from %s\n",
-               state->menu_count,
-               state->command_count,
-               source);
+    if (state->bridge->debug) {
+        g_printerr("NixBench GTK menu bridge: published %zu menu(s) and %zu "
+                   "command(s) from %s\n",
+                   state->menu_count,
+                   state->command_count,
+                   source);
+    }
     return TRUE;
 }
 
@@ -1839,10 +1841,12 @@ G_MODULE_EXPORT void gtk_module_init(gint *argc, gchar ***argv)
         return;
     }
 
-    g_printerr("NixBench GTK menu bridge: loaded\n");
     global_bridge = bridge_create();
     global_bridge->debug =
         g_strcmp0(g_getenv("NIXBENCH_GTK_MENU_BRIDGE_DEBUG"), "1") == 0;
+    if (global_bridge->debug) {
+        g_printerr("NixBench GTK menu bridge: loaded\n");
+    }
     default_application = g_application_get_default();
     if (default_application != NULL &&
         GTK_IS_APPLICATION(default_application)) {

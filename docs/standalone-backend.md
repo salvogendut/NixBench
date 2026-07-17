@@ -561,7 +561,10 @@ Set `NIXBENCH_GTK_MENU_BRIDGE=1` when running the GTK probes if you want them
 to load the optional NixBench GTK menu bridge. The probe scripts look for the
 module in the local build tree at `build/gtk-modules/` and add it to
 `GTK3_MODULES`. A requested bridge that was not built is reported as an error
-instead of silently starting the application without menu integration.
+instead of silently starting the application without menu integration. Normal
+bridge discovery and publication are silent. Set
+`NIXBENCH_GTK_MENU_BRIDGE_DEBUG=1` on a GTK process only when those diagnostics
+are needed; errors remain visible without it.
 Use `./tools/run-clean-env.sh` before rerunning tests after one of those
 probes; it clears the `NIXBENCH_*` launch variables first.
 
