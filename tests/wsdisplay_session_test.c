@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -256,7 +257,7 @@ static void test_x11_socket_directory(void)
     CHECK(error[0] != '\0');
     CHECK(rmdir(path) == 0);
 
-    CHECK(symlink("/tmp", path) == 0);
+    CHECK(symlinkat("/tmp", AT_FDCWD, path) == 0);
     CHECK(!nb_wsdisplay_session_prepare_x11_socket_directory(path, error));
     CHECK(error[0] != '\0');
     CHECK(unlink(path) == 0);
