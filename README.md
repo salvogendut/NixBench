@@ -10,6 +10,12 @@ designed specifically for NixBench and traditional Unix GUI applications. The
 project is in its bootstrap stage. The runnable prototype opens an SDL3 desktop
 screen under a host window system and draws NixBench-managed windows inside it.
 
+![NixBench running NixInfo, Sakura, NixClock, and xclock](docs/images/nixbench-desktop.png)
+
+*NixBench running directly on NetBSD with native NixInfo, a GTK3/Wayland
+Sakura terminal, native Wayland NixClock, and X11 xclock through rootless
+Xwayland.*
+
 ## Goals
 
 - Make NetBSD a first-class development and runtime platform.
