@@ -238,6 +238,10 @@ struct nb_wayland_server {
     struct nb_wayland_xwayland_interface xwayland_interface;
     void *xwayland_context;
     pid_t xwayland_client_pid;
+#if NIXBENCH_HAS_XWAYLAND_SHELL
+    struct wl_client *xwayland_client;
+    struct wl_listener xwayland_client_destroy;
+#endif
     char display_name[NB_WAYLAND_DISPLAY_NAME_CAPACITY];
 };
 
@@ -4736,6 +4740,17 @@ xwayland_shell_implementation = {
     .get_xwayland_surface = xwayland_shell_get_surface
 };
 
+static void xwayland_client_destroyed(struct wl_listener *listener,
+                                      void *data)
+{
+    struct nb_wayland_server *server =
+        wl_container_of(listener, server, xwayland_client_destroy);
+
+    (void)data;
+    server->xwayland_client = NULL;
+    server->xwayland_client_pid = 0;
+}
+
 static void bind_xwayland_shell(struct wl_client *client,
                                 void *data,
                                 uint32_t version,
@@ -4746,6 +4761,7 @@ static void bind_xwayland_shell(struct wl_client *client,
     pid_t process = -1;
     uid_t user = (uid_t)-1;
     gid_t group = (gid_t)-1;
+    bool authorized;
 
     wl_client_get_credentials(client, &process, &user, &group);
     resource = wl_resource_create(client,
@@ -4760,11 +4776,25 @@ static void bind_xwayland_shell(struct wl_client *client,
                                    &xwayland_shell_implementation,
                                    server,
                                    NULL);
-    if (server->xwayland_client_pid <= 0 ||
-        process != server->xwayland_client_pid) {
+    authorized = server->xwayland_client_pid > 0 &&
+                 (server->xwayland_client == client ||
+                  (server->xwayland_client == NULL &&
+                   ((process > 0 &&
+                     process == server->xwayland_client_pid) ||
+                    (process <= 0 && user == geteuid()))));
+    if (!authorized) {
         wl_resource_post_error(resource,
                                XWAYLAND_SHELL_V1_ERROR_ROLE,
                                "client is not the authorized Xwayland server");
+        return;
+    }
+    if (server->xwayland_client == NULL) {
+        server->xwayland_client = client;
+        server->xwayland_client_destroy.notify =
+            xwayland_client_destroyed;
+        wl_client_add_destroy_listener(
+            client,
+            &server->xwayland_client_destroy);
     }
     (void)user;
     (void)group;
