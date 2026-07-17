@@ -1708,6 +1708,9 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(snapshot.stride == INITIAL_WIDTH * BYTES_PER_PIXEL);
     CHECK(snapshot.revision == 1);
     CHECK(memcmp(snapshot.pixels, pixels, buffer_size) == 0);
+    /* Discard menu-publication damage before isolating the hidden commit. */
+    (void)nb_wayland_server_take_redraw(server);
+    CHECK(!nb_wayland_server_take_redraw(server));
     CHECK(nb_shell_toggle_window_minimized(&shell, window));
     client.buffer_released = false;
     wl_surface_attach(surface, buffer, 0, 0);
