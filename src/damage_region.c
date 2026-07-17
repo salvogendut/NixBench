@@ -108,56 +108,35 @@ static void remove_rect(struct nb_damage_region *region, size_t index)
  * less destructive than turning a sparse animation into full-screen damage.
  */
 static void compact_for_rect(struct nb_damage_region *region,
-                             struct nb_damage_rect *rect,
-                             int bounds_width,
-                             int bounds_height)
+                             struct nb_damage_rect *rect)
 {
-    const size_t incoming = region->count;
-    size_t best_left = 0;
-    size_t best_right = 1;
+    size_t best_index = 0;
     uint64_t best_extra = UINT64_MAX;
     uint64_t best_union_area = UINT64_MAX;
-    size_t left;
-    size_t right;
-    struct nb_damage_rect merged;
+    size_t index;
 
-    for (left = 0; left <= incoming; ++left) {
-        const struct nb_damage_rect left_rect =
-            left == incoming ? *rect : region->rects[left];
+    /*
+     * Only compare the incoming span with the retained rectangles. This is
+     * linear in the fixed capacity; an all-pairs search on every animated
+     * scanline made bookkeeping more expensive than drawing the frame.
+     */
+    for (index = 0; index < region->count; ++index) {
+        const struct nb_damage_rect united =
+            rect_union(region->rects[index], *rect);
+        const uint64_t union_area = rect_area(united);
+        const uint64_t extra = union_area -
+                               rect_area(region->rects[index]) -
+                               rect_area(*rect);
 
-        for (right = left + 1; right <= incoming; ++right) {
-            const struct nb_damage_rect right_rect =
-                right == incoming ? *rect : region->rects[right];
-            const struct nb_damage_rect united =
-                rect_union(left_rect, right_rect);
-            const uint64_t union_area = rect_area(united);
-            const uint64_t extra =
-                union_area - rect_area(left_rect) - rect_area(right_rect);
-
-            if (extra < best_extra ||
-                (extra == best_extra && union_area < best_union_area)) {
-                best_left = left;
-                best_right = right;
-                best_extra = extra;
-                best_union_area = union_area;
-            }
+        if (extra < best_extra ||
+            (extra == best_extra && union_area < best_union_area)) {
+            best_index = index;
+            best_extra = extra;
+            best_union_area = union_area;
         }
     }
-
-    if (best_right == incoming) {
-        *rect = rect_union(region->rects[best_left], *rect);
-        remove_rect(region, best_left);
-        return;
-    }
-
-    merged = rect_union(region->rects[best_left],
-                        region->rects[best_right]);
-    remove_rect(region, best_right);
-    remove_rect(region, best_left);
-    (void)nb_damage_region_add(region,
-                               merged,
-                               bounds_width,
-                               bounds_height);
+    *rect = rect_union(region->rects[best_index], *rect);
+    remove_rect(region, best_index);
 }
 
 bool nb_damage_region_add(struct nb_damage_region *region,
@@ -187,7 +166,7 @@ merge_again:
         index = 0;
     }
     if (region->count == NB_DAMAGE_REGION_CAPACITY) {
-        compact_for_rect(region, &rect, bounds_width, bounds_height);
+        compact_for_rect(region, &rect);
         goto merge_again;
     }
     region->rects[region->count++] = rect;
