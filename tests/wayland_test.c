@@ -1751,12 +1751,12 @@ static void test_wayland_surface_lifecycle(void)
         CHECK(redraw_region.count == 2);
         CHECK(redraw_region.rects[0].x == content.x + 10);
         CHECK(redraw_region.rects[0].y == content.y + 12);
-        CHECK(redraw_region.rects[0].width == 3);
-        CHECK(redraw_region.rects[0].height == 2);
+        CHECK(redraw_region.rects[0].width == 1);
+        CHECK(redraw_region.rects[0].height == 1);
         CHECK(redraw_region.rects[1].x == content.x + 30);
         CHECK(redraw_region.rects[1].y == content.y + 40);
-        CHECK(redraw_region.rects[1].width == 2);
-        CHECK(redraw_region.rects[1].height == 3);
+        CHECK(redraw_region.rects[1].width == 1);
+        CHECK(redraw_region.rects[1].height == 1);
         CHECK(!nb_wayland_server_take_redraw(server));
         REQUIRE(nb_wayland_server_surface_snapshot(server,
                                                    window,

@@ -1959,11 +1959,13 @@ static bool copy_shm_buffer(struct nb_wayland_surface *surface,
     int height;
     int stride;
     struct nb_damage_region damage;
+    struct nb_damage_region changed_damage;
     size_t row_bytes;
     size_t pixel_count;
     uint32_t *pixels;
     const unsigned char *source;
     size_t damage_index;
+    bool new_allocation;
 
     if (buffer == NULL) {
         wl_client_post_implementation_error(
@@ -1999,8 +2001,9 @@ static bool copy_shm_buffer(struct nb_wayland_surface *surface,
         return false;
     }
 
-    if (surface->pixels == NULL || surface->width != width ||
-        surface->height != height) {
+    new_allocation = surface->pixels == NULL || surface->width != width ||
+                     surface->height != height;
+    if (new_allocation) {
         pixel_count = (size_t)width * (size_t)height;
         pixels = malloc(pixel_count * sizeof(*pixels));
         if (pixels == NULL) {
@@ -2035,6 +2038,7 @@ static bool copy_shm_buffer(struct nb_wayland_surface *surface,
         }
     }
 
+    nb_damage_region_clear(&changed_damage);
     if (damage.count != 0) {
         wl_shm_buffer_begin_access(buffer);
         source = wl_shm_buffer_get_data(buffer);
@@ -2046,10 +2050,14 @@ static bool copy_shm_buffer(struct nb_wayland_surface *surface,
         for (y = rect.y; y < rect.y + rect.height; ++y) {
             const unsigned char *row =
                 source + ((size_t)y * (size_t)stride);
+            int first_changed = -1;
+            int last_changed = -1;
             int x;
 
             for (x = rect.x; x < rect.x + rect.width; ++x) {
                 uint32_t pixel;
+                const size_t destination_index =
+                    (size_t)y * (size_t)width + (size_t)x;
 
                 memcpy(&pixel,
                        row + ((size_t)x * sizeof(pixel)),
@@ -2057,7 +2065,25 @@ static bool copy_shm_buffer(struct nb_wayland_surface *surface,
                 if (format == WL_SHM_FORMAT_XRGB8888) {
                     pixel |= UINT32_C(0xff000000);
                 }
-                pixels[(size_t)y * (size_t)width + (size_t)x] = pixel;
+                if (new_allocation || pixels[destination_index] != pixel) {
+                    pixels[destination_index] = pixel;
+                    if (first_changed < 0) {
+                        first_changed = x;
+                    }
+                    last_changed = x;
+                }
+            }
+            if (first_changed >= 0) {
+                (void)nb_damage_region_add(
+                    &changed_damage,
+                    (struct nb_damage_rect){first_changed,
+                                             y,
+                                             last_changed -
+                                                     first_changed +
+                                                 1,
+                                             1},
+                    width,
+                    height);
             }
         }
     }
@@ -2068,8 +2094,24 @@ static bool copy_shm_buffer(struct nb_wayland_surface *surface,
     *copied_pixels = pixels;
     *copied_width = width;
     *copied_height = height;
-    *copied_damage = damage;
-    *pixels_changed = damage.count != 0;
+    /*
+     * A frame callback still needs one presentation when a client damages
+     * pixels whose visible values did not change. Keep that no-op redraw
+     * microscopic rather than reusing the client's broad declaration.
+     */
+    if (changed_damage.count == 0 && damage.count != 0) {
+        (void)nb_damage_region_add(
+            &changed_damage,
+            (struct nb_damage_rect){damage.rects[0].x,
+                                     damage.rects[0].y,
+                                     1,
+                                     1},
+            width,
+            height);
+    }
+
+    *copied_damage = changed_damage;
+    *pixels_changed = changed_damage.count != 0;
     return true;
 }
 

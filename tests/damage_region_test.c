@@ -44,7 +44,18 @@ int main(void)
             200,
             80));
     }
-    CHECK(region.full && region.count == 0);
+    CHECK(!region.full);
+    CHECK(region.count <= NB_DAMAGE_REGION_CAPACITY);
+    CHECK(nb_damage_region_is_valid(&region, 200, 80));
+
+    nb_damage_region_clear(&region);
+    CHECK(nb_damage_region_add(
+        &region, (struct nb_damage_rect){4, 8, 3, 1}, 100, 80));
+    CHECK(nb_damage_region_add(
+        &region, (struct nb_damage_rect){7, 8, 5, 1}, 100, 80));
+    CHECK(region.count == 1);
+    CHECK(region.rects[0].x == 4 && region.rects[0].y == 8 &&
+          region.rects[0].width == 8 && region.rects[0].height == 1);
 
     nb_damage_region_clear(&other);
     CHECK(nb_damage_region_add(
@@ -53,7 +64,7 @@ int main(void)
     CHECK(other.rects[0].x == 0 && other.rects[0].y == 0 &&
           other.rects[0].width == 3 && other.rects[0].height == 4);
     CHECK(nb_damage_region_merge(&region, &other, 100, 80));
-    CHECK(region.full);
+    CHECK(!region.full);
 
     if (failures != 0) {
         fprintf(stderr, "damage region tests: %d failure(s)\n", failures);

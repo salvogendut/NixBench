@@ -1,5 +1,6 @@
 #include "damage_region.h"
 
+#include <stdint.h>
 #include <string.h>
 
 void nb_damage_region_clear(struct nb_damage_region *region)
@@ -75,6 +76,90 @@ static struct nb_damage_rect rect_union(struct nb_damage_rect left,
                                    maximum_y - y};
 }
 
+static bool rects_merge_without_extra(struct nb_damage_rect left,
+                                      struct nb_damage_rect right)
+{
+    if (nb_damage_rect_intersects(left, right)) {
+        return true;
+    }
+    return (left.y == right.y && left.height == right.height &&
+            (left.x + left.width == right.x ||
+             right.x + right.width == left.x)) ||
+           (left.x == right.x && left.width == right.width &&
+            (left.y + left.height == right.y ||
+             right.y + right.height == left.y));
+}
+
+static uint64_t rect_area(struct nb_damage_rect rect)
+{
+    return (uint64_t)(unsigned int)rect.width *
+           (uint64_t)(unsigned int)rect.height;
+}
+
+static void remove_rect(struct nb_damage_region *region, size_t index)
+{
+    --region->count;
+    region->rects[index] = region->rects[region->count];
+}
+
+/*
+ * Preserve a bounded approximation when a client supplies more rectangles
+ * than the wire protocol can retain.  Collapsing the cheapest pair is much
+ * less destructive than turning a sparse animation into full-screen damage.
+ */
+static void compact_for_rect(struct nb_damage_region *region,
+                             struct nb_damage_rect *rect,
+                             int bounds_width,
+                             int bounds_height)
+{
+    const size_t incoming = region->count;
+    size_t best_left = 0;
+    size_t best_right = 1;
+    uint64_t best_extra = UINT64_MAX;
+    uint64_t best_union_area = UINT64_MAX;
+    size_t left;
+    size_t right;
+    struct nb_damage_rect merged;
+
+    for (left = 0; left <= incoming; ++left) {
+        const struct nb_damage_rect left_rect =
+            left == incoming ? *rect : region->rects[left];
+
+        for (right = left + 1; right <= incoming; ++right) {
+            const struct nb_damage_rect right_rect =
+                right == incoming ? *rect : region->rects[right];
+            const struct nb_damage_rect united =
+                rect_union(left_rect, right_rect);
+            const uint64_t union_area = rect_area(united);
+            const uint64_t extra =
+                union_area - rect_area(left_rect) - rect_area(right_rect);
+
+            if (extra < best_extra ||
+                (extra == best_extra && union_area < best_union_area)) {
+                best_left = left;
+                best_right = right;
+                best_extra = extra;
+                best_union_area = union_area;
+            }
+        }
+    }
+
+    if (best_right == incoming) {
+        *rect = rect_union(region->rects[best_left], *rect);
+        remove_rect(region, best_left);
+        return;
+    }
+
+    merged = rect_union(region->rects[best_left],
+                        region->rects[best_right]);
+    remove_rect(region, best_right);
+    remove_rect(region, best_left);
+    (void)nb_damage_region_add(region,
+                               merged,
+                               bounds_width,
+                               bounds_height);
+}
+
 bool nb_damage_region_add(struct nb_damage_region *region,
                           struct nb_damage_rect rect,
                           int bounds_width,
@@ -89,20 +174,21 @@ bool nb_damage_region_add(struct nb_damage_region *region,
         return true;
     }
 
-    /* Collapse actual overlaps, but preserve disjoint animation spans. */
+merge_again:
+    index = 0;
+    /* Collapse overlaps and perfectly adjacent spans without adding area. */
     while (index < region->count) {
-        if (!nb_damage_rect_intersects(region->rects[index], rect)) {
+        if (!rects_merge_without_extra(region->rects[index], rect)) {
             ++index;
             continue;
         }
         rect = rect_union(region->rects[index], rect);
-        --region->count;
-        region->rects[index] = region->rects[region->count];
+        remove_rect(region, index);
         index = 0;
     }
     if (region->count == NB_DAMAGE_REGION_CAPACITY) {
-        nb_damage_region_set_full(region);
-        return true;
+        compact_for_rect(region, &rect, bounds_width, bounds_height);
+        goto merge_again;
     }
     region->rects[region->count++] = rect;
     return true;

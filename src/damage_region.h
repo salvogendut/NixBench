@@ -15,7 +15,8 @@ struct nb_damage_rect {
 
 /*
  * A bounded set of non-overlapping damaged rectangles. full is an explicit
- * fallback used when damage is unknown or the bounded list overflows. An
+ * fallback used when damage is unknown. When the bounded list fills, the
+ * least-expensive pair is coalesced instead of degrading to full damage. An
  * empty, non-full region means that no pixels changed.
  */
 struct nb_damage_region {
