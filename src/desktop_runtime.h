@@ -42,6 +42,8 @@ struct nb_desktop_runtime_options {
 
 struct nb_desktop_runtime_update {
     bool redraw;
+    struct nb_damage_region damage_region;
+    /* Legacy bounding rectangle retained for hosted/runtime callers. */
     bool damage_valid;
     struct nb_rect damage;
     bool quit_requested;
@@ -133,6 +135,12 @@ bool nb_desktop_runtime_render_damage(
     const char *clock_text,
     uint64_t serial,
     const struct nb_rect *damage,
+    struct nb_host_frame *frame);
+bool nb_desktop_runtime_render_region(
+    struct nb_desktop_runtime *runtime,
+    const char *clock_text,
+    uint64_t serial,
+    const struct nb_damage_region *damage,
     struct nb_host_frame *frame);
 
 /* Notify optional compositor services only after an accepted frame completes. */

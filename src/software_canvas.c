@@ -83,5 +83,7 @@ bool nb_software_canvas_finish(struct nb_software_canvas *canvas,
     frame->damage_y = 0;
     frame->damage_width = 0;
     frame->damage_height = 0;
+    frame->damage_rects = NULL;
+    frame->damage_count = 0;
     return nb_host_frame_is_valid(frame);
 }

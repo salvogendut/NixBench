@@ -51,10 +51,9 @@ struct nb_privsep_helper {
     uint64_t frame_serial;
     uint32_t frame_expected;
     uint32_t frame_received;
-    uint32_t frame_damage_x;
-    uint32_t frame_damage_y;
-    uint32_t frame_damage_width;
-    uint32_t frame_damage_height;
+    size_t frame_damage_count;
+    struct nb_damage_rect
+        frame_damage_rects[NB_PRIVSEP_MAX_DAMAGE_RECTS];
 
     bool presentation_pending;
     uint64_t presentation_generation;
@@ -263,49 +262,82 @@ static void clear_frame(struct nb_privsep_helper *helper)
     helper->frame_serial = 0;
     helper->frame_expected = 0;
     helper->frame_received = 0;
-    helper->frame_damage_x = 0;
-    helper->frame_damage_y = 0;
-    helper->frame_damage_width = 0;
-    helper->frame_damage_height = 0;
+    helper->frame_damage_count = 0;
+    memset(helper->frame_damage_rects,
+           0,
+           sizeof(helper->frame_damage_rects));
 }
 
 static bool handle_frame_begin(struct nb_privsep_helper *helper,
                                const struct nb_privsep_frame_begin *begin)
 {
-    uint32_t damage_x = begin->damage_x;
-    uint32_t damage_y = begin->damage_y;
-    uint32_t damage_width = begin->damage_width;
-    uint32_t damage_height = begin->damage_height;
-    uint64_t expected;
+    size_t damage_count = begin->damage_count;
+    uint64_t expected = 0;
+    size_t index;
 
-    if (damage_width == 0 && damage_height == 0) {
-        damage_x = 0;
-        damage_y = 0;
-        damage_width = helper->output.pixel_width;
-        damage_height = helper->output.pixel_height;
+    if (damage_count == 0) {
+        damage_count = 1;
     }
-    expected = (uint64_t)damage_width * (uint64_t)damage_height *
-               UINT64_C(4);
     if (!helper->ready_sent || helper->frame_open ||
         helper->presentation_pending ||
         begin->generation != helper->generation ||
         helper->suspended ||
         begin->serial <= helper->last_submitted_serial ||
-        damage_x >= helper->output.pixel_width ||
-        damage_y >= helper->output.pixel_height ||
-        damage_width == 0 || damage_height == 0 ||
-        damage_width > helper->output.pixel_width - damage_x ||
-        damage_height > helper->output.pixel_height - damage_y ||
-        expected != begin->frame_bytes ||
-        (!helper->staging_valid &&
-         (damage_x != 0 || damage_y != 0 ||
-          damage_width != helper->output.pixel_width ||
-          damage_height != helper->output.pixel_height))) {
+        damage_count > NB_PRIVSEP_MAX_DAMAGE_RECTS) {
         return fail_helper(helper,
                            NB_PRIVSEP_HELPER_ERROR_PROTOCOL,
                            NB_PRIVSEP_FATAL_PROTOCOL,
                            0,
                            "out-of-order FRAME_BEGIN");
+    }
+    for (index = 0; index < damage_count; ++index) {
+        const uint32_t damage_x = begin->damage_count != 0
+                                      ? begin->damage_rects[index].x
+                                      : 0;
+        const uint32_t damage_y = begin->damage_count != 0
+                                      ? begin->damage_rects[index].y
+                                      : 0;
+        const uint32_t damage_width =
+            begin->damage_count != 0
+                ? begin->damage_rects[index].width
+                : helper->output.pixel_width;
+        const uint32_t damage_height =
+            begin->damage_count != 0
+                ? begin->damage_rects[index].height
+                : helper->output.pixel_height;
+
+        if (damage_x >= helper->output.pixel_width ||
+            damage_y >= helper->output.pixel_height ||
+            damage_width == 0 || damage_height == 0 ||
+            damage_width > helper->output.pixel_width - damage_x ||
+            damage_height > helper->output.pixel_height - damage_y) {
+            return fail_helper(helper,
+                               NB_PRIVSEP_HELPER_ERROR_PROTOCOL,
+                               NB_PRIVSEP_FATAL_PROTOCOL,
+                               0,
+                               "invalid FRAME_BEGIN damage rectangle");
+        }
+        expected += (uint64_t)damage_width *
+                    (uint64_t)damage_height * UINT64_C(4);
+        helper->frame_damage_rects[index] =
+            (struct nb_damage_rect){(int)damage_x,
+                                     (int)damage_y,
+                                     (int)damage_width,
+                                     (int)damage_height};
+    }
+    if (expected != begin->frame_bytes ||
+        (!helper->staging_valid &&
+         (damage_count != 1 || helper->frame_damage_rects[0].x != 0 ||
+          helper->frame_damage_rects[0].y != 0 ||
+          helper->frame_damage_rects[0].width !=
+              (int)helper->output.pixel_width ||
+          helper->frame_damage_rects[0].height !=
+              (int)helper->output.pixel_height))) {
+        return fail_helper(helper,
+                           NB_PRIVSEP_HELPER_ERROR_PROTOCOL,
+                           NB_PRIVSEP_FATAL_PROTOCOL,
+                           0,
+                           "FRAME_BEGIN size or initial damage is invalid");
     }
     helper->frame_open = true;
     helper->frame_stale = false;
@@ -313,10 +345,7 @@ static bool handle_frame_begin(struct nb_privsep_helper *helper,
     helper->frame_serial = begin->serial;
     helper->frame_expected = begin->frame_bytes;
     helper->frame_received = 0;
-    helper->frame_damage_x = damage_x;
-    helper->frame_damage_y = damage_y;
-    helper->frame_damage_width = damage_width;
-    helper->frame_damage_height = damage_height;
+    helper->frame_damage_count = damage_count;
     return true;
 }
 
@@ -344,23 +373,56 @@ static bool handle_frame_data(struct nb_privsep_helper *helper,
                            "FRAME_DATA exceeds declared frame size");
     }
     if (!helper->frame_stale) {
-        const size_t damage_stride =
-            (size_t)helper->frame_damage_width * 4U;
         size_t source_offset = 0;
         size_t packed_offset = helper->frame_received;
 
         while (source_offset < data->size) {
-            const size_t row = packed_offset / damage_stride;
-            const size_t row_offset = packed_offset % damage_stride;
-            const size_t available = damage_stride - row_offset;
-            const size_t remaining = data->size - source_offset;
-            const size_t amount = remaining < available
-                                      ? remaining
-                                      : available;
-            const size_t destination_offset =
-                ((size_t)helper->frame_damage_y + row) *
+            size_t damage_index;
+            size_t damage_base = 0;
+            const struct nb_damage_rect *damage = NULL;
+            size_t damage_stride;
+            size_t local_offset;
+            size_t row;
+            size_t row_offset;
+            size_t available;
+            size_t remaining;
+            size_t amount;
+            size_t destination_offset;
+
+            for (damage_index = 0;
+                 damage_index < helper->frame_damage_count;
+                 ++damage_index) {
+                const struct nb_damage_rect *candidate =
+                    &helper->frame_damage_rects[damage_index];
+                const size_t candidate_size =
+                    (size_t)candidate->width *
+                    (size_t)candidate->height * 4U;
+
+                if (packed_offset < damage_base + candidate_size) {
+                    damage = candidate;
+                    break;
+                }
+                damage_base += candidate_size;
+            }
+            if (damage == NULL) {
+                return fail_helper(
+                    helper,
+                    NB_PRIVSEP_HELPER_ERROR_PROTOCOL,
+                    NB_PRIVSEP_FATAL_PROTOCOL,
+                    0,
+                    "FRAME_DATA has no matching damage rectangle");
+            }
+            damage_stride = (size_t)damage->width * 4U;
+            local_offset = packed_offset - damage_base;
+            row = local_offset / damage_stride;
+            row_offset = local_offset % damage_stride;
+            available = damage_stride - row_offset;
+            remaining = data->size - source_offset;
+            amount = remaining < available ? remaining : available;
+            destination_offset =
+                ((size_t)damage->y + row) *
                     helper->output.stride +
-                (size_t)helper->frame_damage_x * 4U + row_offset;
+                (size_t)damage->x * 4U + row_offset;
 
             if (destination_offset > helper->staging_size ||
                 amount > helper->staging_size - destination_offset) {
@@ -425,10 +487,12 @@ static bool handle_frame_reference(
     frame.stride = helper->output.stride;
     frame.format = NB_HOST_PIXEL_FORMAT_XRGB8888;
     frame.serial = helper->frame_serial;
-    frame.damage_x = (int)helper->frame_damage_x;
-    frame.damage_y = (int)helper->frame_damage_y;
-    frame.damage_width = (int)helper->frame_damage_width;
-    frame.damage_height = (int)helper->frame_damage_height;
+    frame.damage_x = helper->frame_damage_rects[0].x;
+    frame.damage_y = helper->frame_damage_rects[0].y;
+    frame.damage_width = helper->frame_damage_rects[0].width;
+    frame.damage_height = helper->frame_damage_rects[0].height;
+    frame.damage_rects = helper->frame_damage_rects;
+    frame.damage_count = helper->frame_damage_count;
     if (!helper->present(helper->present_data,
                          helper->generation,
                          &frame)) {

@@ -149,8 +149,7 @@ struct nb_wayland_surface {
     struct wl_listener pending_buffer_destroy;
     bool pending_buffer_listener_attached;
     bool pending_attach;
-    bool pending_damage_valid;
-    struct nb_rect pending_damage;
+    struct nb_damage_region pending_damage;
     bool committed_once;
     uint32_t *pixels;
     uint32_t *composite_pixels;
@@ -234,8 +233,7 @@ struct nb_wayland_server {
     int output_refresh_millihertz;
     bool destroying;
     bool redraw_pending;
-    bool redraw_damage_valid;
-    struct nb_rect redraw_damage;
+    struct nb_damage_region redraw_damage;
     struct nb_wayland_surface surfaces[NB_WAYLAND_MAX_SURFACES];
     unsigned int next_window_position;
     uint64_t next_popup_sequence;
@@ -934,81 +932,28 @@ static void mark_redraw_full(struct nb_wayland_server *server)
 {
     if (server != NULL) {
         server->redraw_pending = true;
-        server->redraw_damage_valid = false;
-        server->redraw_damage = (struct nb_rect){0, 0, 0, 0};
+        nb_damage_region_set_full(&server->redraw_damage);
     }
 }
 
 static void mark_redraw_rect(struct nb_wayland_server *server,
                              struct nb_rect rect)
 {
-    int right;
-    int bottom;
-    int current_right;
-    int current_bottom;
-
     if (server == NULL || rect.width <= 0 || rect.height <= 0 ||
         server->output_width <= 0 || server->output_height <= 0) {
         return;
     }
-    if (rect.x < 0) {
-        rect.width += rect.x;
-        rect.x = 0;
-    }
-    if (rect.y < 0) {
-        rect.height += rect.y;
-        rect.y = 0;
-    }
-    if (rect.x >= server->output_width ||
-        rect.y >= server->output_height || rect.width <= 0 ||
-        rect.height <= 0) {
-        return;
-    }
-    if (rect.width > server->output_width - rect.x) {
-        rect.width = server->output_width - rect.x;
-    }
-    if (rect.height > server->output_height - rect.y) {
-        rect.height = server->output_height - rect.y;
-    }
-    if (server->redraw_pending && !server->redraw_damage_valid) {
-        /* An earlier unbounded shell change already requires a full frame. */
-        return;
-    }
-    if (!server->redraw_damage_valid) {
-        server->redraw_damage = rect;
-        server->redraw_damage_valid = true;
-        server->redraw_pending = true;
-        return;
-    }
-    right = rect.x + rect.width;
-    bottom = rect.y + rect.height;
-    current_right = server->redraw_damage.x +
-                    server->redraw_damage.width;
-    current_bottom = server->redraw_damage.y +
-                     server->redraw_damage.height;
-    if (rect.x < server->redraw_damage.x) {
-        server->redraw_damage.x = rect.x;
-    }
-    if (rect.y < server->redraw_damage.y) {
-        server->redraw_damage.y = rect.y;
-    }
-    if (right > current_right) {
-        current_right = right;
-    }
-    if (bottom > current_bottom) {
-        current_bottom = bottom;
-    }
-    server->redraw_damage.width =
-        current_right - server->redraw_damage.x;
-    server->redraw_damage.height =
-        current_bottom - server->redraw_damage.y;
+    (void)nb_damage_region_add(
+        &server->redraw_damage,
+        (struct nb_damage_rect){rect.x, rect.y, rect.width, rect.height},
+        server->output_width,
+        server->output_height);
     server->redraw_pending = true;
 }
 
 static void clear_pending_damage(struct nb_wayland_surface *surface)
 {
-    surface->pending_damage_valid = false;
-    surface->pending_damage = (struct nb_rect){0, 0, 0, 0};
+    nb_damage_region_clear(&surface->pending_damage);
 }
 
 static bool surface_damage_to_desktop(
@@ -1108,6 +1053,31 @@ static void surface_tree_changed(struct nb_wayland_surface *surface,
                                  bool root_revision_already_changed)
 {
     surface_tree_damaged(surface, root_revision_already_changed, NULL);
+}
+
+static void surface_tree_damage_region(
+    struct nb_wayland_surface *surface,
+    bool root_revision_already_changed,
+    const struct nb_damage_region *damage)
+{
+    size_t index;
+
+    if (damage == NULL || damage->full || damage->count == 0) {
+        surface_tree_damaged(surface,
+                             root_revision_already_changed,
+                             NULL);
+        return;
+    }
+    for (index = 0; index < damage->count; ++index) {
+        const struct nb_damage_rect rect = damage->rects[index];
+        const struct nb_rect surface_rect = {
+            rect.x, rect.y, rect.width, rect.height
+        };
+
+        surface_tree_damaged(surface,
+                             root_revision_already_changed || index != 0,
+                             &surface_rect);
+    }
 }
 
 static nb_menu_source_id application_menu_source_for_surface(
@@ -1975,11 +1945,11 @@ static void maybe_release_surface_slot(struct nb_wayland_surface *surface)
 
 static bool copy_shm_buffer(struct nb_wayland_surface *surface,
                             struct wl_resource *buffer_resource,
-                            const struct nb_rect *requested_damage,
+                            const struct nb_damage_region *requested_damage,
                             uint32_t **copied_pixels,
                             int *copied_width,
                             int *copied_height,
-                            struct nb_rect *copied_damage,
+                            struct nb_damage_region *copied_damage,
                             bool *pixels_changed)
 {
     struct wl_shm_buffer *buffer =
@@ -1988,12 +1958,12 @@ static bool copy_shm_buffer(struct nb_wayland_surface *surface,
     int width;
     int height;
     int stride;
-    struct nb_rect damage;
+    struct nb_damage_region damage;
     size_t row_bytes;
     size_t pixel_count;
     uint32_t *pixels;
     const unsigned char *source;
-    int y;
+    size_t damage_index;
 
     if (buffer == NULL) {
         wl_client_post_implementation_error(
@@ -2037,53 +2007,61 @@ static bool copy_shm_buffer(struct nb_wayland_surface *surface,
             wl_resource_post_no_memory(surface->surface_resource);
             return false;
         }
-        damage = (struct nb_rect){0, 0, width, height};
+        nb_damage_region_clear(&damage);
+        (void)nb_damage_region_add(
+            &damage,
+            (struct nb_damage_rect){0, 0, width, height},
+            width,
+            height);
     } else {
         pixels = surface->pixels;
-        damage = requested_damage != NULL
-                     ? *requested_damage
-                     : (struct nb_rect){0, 0, 0, 0};
-        if (damage.x < 0) {
-            damage.width += damage.x;
-            damage.x = 0;
-        }
-        if (damage.y < 0) {
-            damage.height += damage.y;
-            damage.y = 0;
-        }
-        if (damage.x >= width || damage.y >= height ||
-            damage.width <= 0 || damage.height <= 0) {
-            damage = (struct nb_rect){0, 0, 0, 0};
-        } else {
-            if (damage.width > width - damage.x) {
-                damage.width = width - damage.x;
-            }
-            if (damage.height > height - damage.y) {
-                damage.height = height - damage.y;
+        nb_damage_region_clear(&damage);
+        if (requested_damage != NULL && requested_damage->full) {
+            (void)nb_damage_region_add(
+                &damage,
+                (struct nb_damage_rect){0, 0, width, height},
+                width,
+                height);
+        } else if (requested_damage != NULL) {
+            for (damage_index = 0;
+                 damage_index < requested_damage->count;
+                 ++damage_index) {
+                (void)nb_damage_region_add(
+                    &damage,
+                    requested_damage->rects[damage_index],
+                    width,
+                    height);
             }
         }
     }
 
-    if (damage.width > 0 && damage.height > 0) {
+    if (damage.count != 0) {
         wl_shm_buffer_begin_access(buffer);
         source = wl_shm_buffer_get_data(buffer);
     }
-    for (y = damage.y; y < damage.y + damage.height; ++y) {
-        const unsigned char *row = source + ((size_t)y * (size_t)stride);
-        int x;
+    for (damage_index = 0; damage_index < damage.count; ++damage_index) {
+        const struct nb_damage_rect rect = damage.rects[damage_index];
+        int y;
 
-        for (x = damage.x; x < damage.x + damage.width; ++x) {
-            uint32_t pixel;
+        for (y = rect.y; y < rect.y + rect.height; ++y) {
+            const unsigned char *row =
+                source + ((size_t)y * (size_t)stride);
+            int x;
 
-            memcpy(&pixel, row + ((size_t)x * sizeof(pixel)),
-                   sizeof(pixel));
-            if (format == WL_SHM_FORMAT_XRGB8888) {
-                pixel |= UINT32_C(0xff000000);
+            for (x = rect.x; x < rect.x + rect.width; ++x) {
+                uint32_t pixel;
+
+                memcpy(&pixel,
+                       row + ((size_t)x * sizeof(pixel)),
+                       sizeof(pixel));
+                if (format == WL_SHM_FORMAT_XRGB8888) {
+                    pixel |= UINT32_C(0xff000000);
+                }
+                pixels[(size_t)y * (size_t)width + (size_t)x] = pixel;
             }
-            pixels[(size_t)y * (size_t)width + (size_t)x] = pixel;
         }
     }
-    if (damage.width > 0 && damage.height > 0) {
+    if (damage.count != 0) {
         wl_shm_buffer_end_access(buffer);
     }
 
@@ -2091,7 +2069,7 @@ static bool copy_shm_buffer(struct nb_wayland_surface *surface,
     *copied_width = width;
     *copied_height = height;
     *copied_damage = damage;
-    *pixels_changed = damage.width > 0 && damage.height > 0;
+    *pixels_changed = damage.count != 0;
     return true;
 }
 
@@ -2277,20 +2255,17 @@ static void surface_damage(struct wl_client *client,
 {
     struct nb_wayland_surface *surface =
         wl_resource_get_user_data(resource);
-    int64_t left;
-    int64_t top;
     int64_t right;
     int64_t bottom;
+    struct nb_damage_rect damage;
 
     (void)client;
     if (surface == NULL || width <= 0 || height <= 0) {
         return;
     }
-    left = x < 0 ? 0 : x;
-    top = y < 0 ? 0 : y;
     right = (int64_t)x + width;
     bottom = (int64_t)y + height;
-    if (right <= left || bottom <= top) {
+    if (right <= 0 || bottom <= 0) {
         return;
     }
     if (right > INT_MAX) {
@@ -2299,41 +2274,14 @@ static void surface_damage(struct wl_client *client,
     if (bottom > INT_MAX) {
         bottom = INT_MAX;
     }
-    if (!surface->pending_damage_valid) {
-        surface->pending_damage =
-            (struct nb_rect){(int)left,
-                             (int)top,
-                             (int)(right - left),
-                             (int)(bottom - top)};
-        surface->pending_damage_valid = true;
-        return;
-    }
-    {
-        const int64_t current_right =
-            (int64_t)surface->pending_damage.x +
-            surface->pending_damage.width;
-        const int64_t current_bottom =
-            (int64_t)surface->pending_damage.y +
-            surface->pending_damage.height;
-
-        if (left > surface->pending_damage.x) {
-            left = surface->pending_damage.x;
-        }
-        if (top > surface->pending_damage.y) {
-            top = surface->pending_damage.y;
-        }
-        if (right < current_right) {
-            right = current_right;
-        }
-        if (bottom < current_bottom) {
-            bottom = current_bottom;
-        }
-    }
-    surface->pending_damage =
-        (struct nb_rect){(int)left,
-                         (int)top,
-                         (int)(right - left),
-                         (int)(bottom - top)};
+    damage.x = x < 0 ? 0 : x;
+    damage.y = y < 0 ? 0 : y;
+    damage.width = (int)right - damage.x;
+    damage.height = (int)bottom - damage.y;
+    (void)nb_damage_region_add(&surface->pending_damage,
+                               damage,
+                               INT_MAX,
+                               INT_MAX);
 }
 
 static void surface_frame(struct wl_client *client,
@@ -2436,16 +2384,14 @@ static void surface_commit(struct wl_client *client,
         uint32_t *new_pixels = NULL;
         int new_width = 0;
         int new_height = 0;
-        struct nb_rect copied_damage = {0, 0, 0, 0};
+        struct nb_damage_region copied_damage;
         bool pixels_changed = false;
         const bool was_mapped = surface_is_mapped(surface);
 
         if (buffer != NULL &&
             !copy_shm_buffer(surface,
                              buffer,
-                             surface->pending_damage_valid
-                                 ? &surface->pending_damage
-                                 : NULL,
+                             &surface->pending_damage,
                              &new_pixels,
                              &new_width,
                              &new_height,
@@ -2491,12 +2437,12 @@ static void surface_commit(struct wl_client *client,
                 surface->role ==
                     NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL) {
                 map_surface(surface);
-                surface_tree_damaged(surface, true, &copied_damage);
+                surface_tree_damage_region(surface, true, &copied_damage);
             } else {
                 if (!was_mapped) {
                     surface_send_output_membership(surface, true);
                 }
-                surface_tree_damaged(surface, false, &copied_damage);
+                surface_tree_damage_region(surface, false, &copied_damage);
             }
         } else if (surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL ||
                    surface->role ==
@@ -5333,12 +5279,35 @@ bool nb_wayland_server_dispatch(struct nb_wayland_server *server)
 
 bool nb_wayland_server_take_redraw(struct nb_wayland_server *server)
 {
-    return nb_wayland_server_take_redraw_damage(server, NULL);
+    return nb_wayland_server_take_redraw_region(server, NULL);
 }
 
 bool nb_wayland_server_take_redraw_damage(
     struct nb_wayland_server *server,
     struct nb_rect *damage)
+{
+    struct nb_damage_region region;
+    struct nb_damage_rect bounds;
+
+    if (!nb_wayland_server_take_redraw_region(server, &region)) {
+        return false;
+    }
+    if (damage != NULL &&
+        nb_damage_region_bounds(&region,
+                                server->output_width,
+                                server->output_height,
+                                &bounds)) {
+        *damage = (struct nb_rect){bounds.x,
+                                   bounds.y,
+                                   bounds.width,
+                                   bounds.height};
+    }
+    return true;
+}
+
+bool nb_wayland_server_take_redraw_region(
+    struct nb_wayland_server *server,
+    struct nb_damage_region *damage)
 {
     bool redraw;
 
@@ -5347,18 +5316,10 @@ bool nb_wayland_server_take_redraw_damage(
     }
     redraw = server->redraw_pending;
     if (redraw && damage != NULL) {
-        if (server->redraw_damage_valid) {
-            *damage = server->redraw_damage;
-        } else {
-            *damage = (struct nb_rect){0,
-                                       0,
-                                       server->output_width,
-                                       server->output_height};
-        }
+        *damage = server->redraw_damage;
     }
     server->redraw_pending = false;
-    server->redraw_damage_valid = false;
-    server->redraw_damage = (struct nb_rect){0, 0, 0, 0};
+    nb_damage_region_clear(&server->redraw_damage);
     return redraw;
 }
 

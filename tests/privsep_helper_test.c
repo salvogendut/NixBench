@@ -37,6 +37,7 @@ struct presentation_capture {
     int damage_y;
     int damage_width;
     int damage_height;
+    size_t damage_count;
     unsigned int calls;
     bool succeed;
 };
@@ -65,6 +66,7 @@ static bool capture_present(void *data,
     capture->damage_y = frame->damage_y;
     capture->damage_width = frame->damage_width;
     capture->damage_height = frame->damage_height;
+    capture->damage_count = frame->damage_count;
     capture->bytes = bytes;
     if (bytes <= sizeof(capture->pixels)) {
         memcpy(capture->pixels, frame->pixels, bytes);
@@ -381,10 +383,15 @@ static void test_partial_frame_updates_staging(void)
     message.data.frame_begin.generation = 1;
     message.data.frame_begin.serial = 2;
     message.data.frame_begin.frame_bytes = sizeof(damage);
-    message.data.frame_begin.damage_x = 1;
-    message.data.frame_begin.damage_y = 0;
-    message.data.frame_begin.damage_width = 2;
-    message.data.frame_begin.damage_height = 2;
+    message.data.frame_begin.damage_count = 2;
+    message.data.frame_begin.damage_rects[0].x = 1;
+    message.data.frame_begin.damage_rects[0].y = 0;
+    message.data.frame_begin.damage_rects[0].width = 2;
+    message.data.frame_begin.damage_rects[0].height = 1;
+    message.data.frame_begin.damage_rects[1].x = 1;
+    message.data.frame_begin.damage_rects[1].y = 1;
+    message.data.frame_begin.damage_rects[1].width = 2;
+    message.data.frame_begin.damage_rects[1].height = 1;
     CHECK(send_core(&session, &message, 3));
     memset(&message, 0, sizeof(message));
     message.type = NB_PRIVSEP_MESSAGE_FRAME_DATA;
@@ -402,7 +409,8 @@ static void test_partial_frame_updates_staging(void)
     CHECK(session.presentation.damage_x == 1);
     CHECK(session.presentation.damage_y == 0);
     CHECK(session.presentation.damage_width == 2);
-    CHECK(session.presentation.damage_height == 2);
+    CHECK(session.presentation.damage_height == 1);
+    CHECK(session.presentation.damage_count == 2);
     CHECK(memcmp(session.presentation.pixels,
                  expected,
                  sizeof(expected)) == 0);

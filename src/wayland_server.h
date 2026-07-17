@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#include "damage_region.h"
 #include "shell.h"
 
 enum {
@@ -109,6 +110,10 @@ bool nb_wayland_server_take_redraw(struct nb_wayland_server *server);
 bool nb_wayland_server_take_redraw_damage(
     struct nb_wayland_server *server,
     struct nb_rect *damage);
+/* Consume redraw while preserving disjoint desktop damage rectangles. */
+bool nb_wayland_server_take_redraw_region(
+    struct nb_wayland_server *server,
+    struct nb_damage_region *damage);
 /* Update the single logical output; unchanged sizes are accepted silently. */
 bool nb_wayland_server_set_output_size(struct nb_wayland_server *server,
                                        int width,

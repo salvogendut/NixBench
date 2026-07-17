@@ -1369,7 +1369,7 @@ static void test_wayland_surface_lifecycle(void)
     const struct nb_window *host_window;
     struct nb_window *resized_host_window;
     struct nb_rect content;
-    struct nb_rect redraw_damage;
+    struct nb_damage_region redraw_region;
     nb_window_id window = NB_WINDOW_ID_NONE;
     uint32_t parent_pixel_under_popup = 0;
     uint64_t root_revision_before_popup = 0;
@@ -1731,22 +1731,32 @@ static void test_wayland_surface_lifecycle(void)
     {
         const size_t damaged_index =
             (size_t)12 * (size_t)INITIAL_WIDTH + (size_t)10;
+        const size_t second_damaged_index =
+            (size_t)40 * (size_t)INITIAL_WIDTH + (size_t)30;
         const uint32_t retained_pixel = snapshot.pixels[0];
 
         pixels[0] ^= UINT32_C(0x00ffffff);
         pixels[damaged_index] = UINT32_C(0xff123456);
+        pixels[second_damaged_index] = UINT32_C(0xff654321);
         client.buffer_released = false;
         wl_surface_attach(surface, buffer, 0, 0);
         wl_surface_damage(surface, 10, 12, 3, 2);
+        wl_surface_damage(surface, 30, 40, 2, 3);
         wl_surface_commit(surface);
         REQUIRE(pump_barrier(server, display));
         CHECK(client.buffer_released);
-        CHECK(nb_wayland_server_take_redraw_damage(server,
-                                                    &redraw_damage));
-        CHECK(redraw_damage.x == content.x + 10);
-        CHECK(redraw_damage.y == content.y + 12);
-        CHECK(redraw_damage.width == 3);
-        CHECK(redraw_damage.height == 2);
+        CHECK(nb_wayland_server_take_redraw_region(server,
+                                                    &redraw_region));
+        CHECK(!redraw_region.full);
+        CHECK(redraw_region.count == 2);
+        CHECK(redraw_region.rects[0].x == content.x + 10);
+        CHECK(redraw_region.rects[0].y == content.y + 12);
+        CHECK(redraw_region.rects[0].width == 3);
+        CHECK(redraw_region.rects[0].height == 2);
+        CHECK(redraw_region.rects[1].x == content.x + 30);
+        CHECK(redraw_region.rects[1].y == content.y + 40);
+        CHECK(redraw_region.rects[1].width == 2);
+        CHECK(redraw_region.rects[1].height == 3);
         CHECK(!nb_wayland_server_take_redraw(server));
         REQUIRE(nb_wayland_server_surface_snapshot(server,
                                                    window,
@@ -1754,6 +1764,8 @@ static void test_wayland_surface_lifecycle(void)
         CHECK(snapshot.revision == 3);
         CHECK(snapshot.pixels[0] == retained_pixel);
         CHECK(snapshot.pixels[damaged_index] == UINT32_C(0xff123456));
+        CHECK(snapshot.pixels[second_damaged_index] ==
+              UINT32_C(0xff654321));
     }
     parent_pixel_under_popup =
         snapshot.pixels[(size_t)POPUP_EXPECTED_Y * (size_t)INITIAL_WIDTH +

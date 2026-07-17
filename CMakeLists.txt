@@ -522,6 +522,13 @@ if(NIXBENCH_WAYLAND_ENABLED)
   nixbench_configure_c_target(nixbench_wayland)
 endif()
 
+add_library(nixbench_damage STATIC src/damage_region.c)
+target_include_directories(
+  nixbench_damage
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+nixbench_configure_c_target(nixbench_damage)
+
 set(NIXBENCH_WAYLAND_CLIENT_AVAILABLE FALSE)
 if(NIXBENCH_WAYLAND_ENABLED)
   find_path(
@@ -584,6 +591,7 @@ target_include_directories(
   nixbench_host
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
+target_link_libraries(nixbench_host PUBLIC nixbench_damage)
 nixbench_configure_c_target(nixbench_host)
 
 add_library(nixbench_host_fd_wait STATIC src/host_fd_wait.c)
@@ -832,7 +840,10 @@ if(NIXBENCH_BUILD_WSDISPLAY_SMOKE)
 endif()
 
 if(NIXBENCH_WAYLAND_ENABLED)
-  target_link_libraries(nixbench_wayland PUBLIC nixbench_model)
+  target_link_libraries(
+    nixbench_wayland
+    PUBLIC nixbench_model nixbench_damage
+  )
 endif()
 
 add_library(
@@ -1363,6 +1374,10 @@ if(NIXBENCH_BUILD_WSDISPLAY_SESSION)
 endif()
 
 if(BUILD_TESTING)
+  add_executable(nixbench_damage_tests tests/damage_region_test.c)
+  target_link_libraries(nixbench_damage_tests PRIVATE nixbench_damage)
+  nixbench_configure_c_target(nixbench_damage_tests)
+
   add_executable(
     nixbench_backend_probe_tests
     tests/backend_probe_test.c
@@ -1713,6 +1728,7 @@ if(BUILD_TESTING)
   endif()
 
   add_test(NAME nixbench.desktop.model COMMAND nixbench_desktop_tests)
+  add_test(NAME nixbench.damage.region COMMAND nixbench_damage_tests)
   add_test(NAME nixbench.host.contract COMMAND nixbench_host_tests)
   add_test(NAME nixbench.host.fd-wait COMMAND nixbench_host_fd_wait_tests)
   add_test(

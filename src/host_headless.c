@@ -13,6 +13,8 @@ struct nb_host_headless_context {
     uint64_t milliseconds;
     unsigned char *presented_pixels;
     struct nb_host_frame presented_frame;
+    struct nb_damage_rect
+        presented_damage[NB_DAMAGE_REGION_CAPACITY];
     size_t presentation_count;
     bool pointer_captured;
     enum nb_host_state state;
@@ -215,6 +217,15 @@ static enum nb_host_result headless_present(
     context->presented_frame = *frame;
     context->presented_frame.pixels = copy;
     context->presented_frame.stride = row_bytes;
+    if (frame->damage_count != 0) {
+        memcpy(context->presented_damage,
+               frame->damage_rects,
+               frame->damage_count * sizeof(frame->damage_rects[0]));
+        context->presented_frame.damage_rects =
+            context->presented_damage;
+    } else {
+        context->presented_frame.damage_rects = NULL;
+    }
     ++context->presentation_count;
     return NB_HOST_RESULT_OK;
 }

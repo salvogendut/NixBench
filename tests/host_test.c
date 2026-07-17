@@ -60,8 +60,17 @@ static void test_contract_validation(void)
         4 * sizeof(uint32_t),
         NB_HOST_PIXEL_FORMAT_XRGB8888,
         1,
-        0, 0, 0, 0
+        0, 0, 0, 0,
+        NULL, 0
     };
+    const struct nb_damage_rect multi_damage[] = {
+        {0, 0, 1, 1},
+        {2, 1, 2, 2}
+    };
+    int damage_x;
+    int damage_y;
+    int damage_width;
+    int damage_height;
     struct nb_host_event event = focus_event(true, 1);
 
     CHECK(nb_host_output_is_valid(&output));
@@ -96,6 +105,35 @@ static void test_contract_validation(void)
     frame.damage_x = 0;
     frame.damage_y = 0;
     CHECK(nb_host_frame_is_valid(&frame));
+    frame.damage_rects = multi_damage;
+    frame.damage_count =
+        sizeof(multi_damage) / sizeof(multi_damage[0]);
+    CHECK(nb_host_frame_is_valid(&frame));
+    CHECK(nb_host_frame_damage_count(&frame) == 2);
+    CHECK(nb_host_frame_damage(&frame,
+                               &damage_x,
+                               &damage_y,
+                               &damage_width,
+                               &damage_height));
+    CHECK(damage_x == 0 && damage_y == 0 && damage_width == 4 &&
+          damage_height == 3);
+    CHECK(nb_host_frame_damage_at(&frame,
+                                  1,
+                                  &damage_x,
+                                  &damage_y,
+                                  &damage_width,
+                                  &damage_height));
+    CHECK(damage_x == 2 && damage_y == 1 && damage_width == 2 &&
+          damage_height == 2);
+    CHECK(!nb_host_frame_damage_at(&frame,
+                                   2,
+                                   &damage_x,
+                                   &damage_y,
+                                   &damage_width,
+                                   &damage_height));
+    frame.damage_rects = NULL;
+    CHECK(!nb_host_frame_is_valid(&frame));
+    frame.damage_count = 0;
 
     CHECK(nb_host_event_is_valid(&event));
     event.type = NB_HOST_EVENT_NONE;
@@ -179,7 +217,8 @@ static void test_event_fifo_and_capacity(void)
         4 * sizeof(uint32_t),
         NB_HOST_PIXEL_FORMAT_XRGB8888,
         1,
-        0, 0, 0, 0
+        0, 0, 0, 0,
+        NULL, 0
     };
     size_t index;
 
@@ -262,7 +301,8 @@ static void test_present_copy_and_completion(void)
         sizeof(source[0]),
         NB_HOST_PIXEL_FORMAT_ARGB8888_PREMULTIPLIED,
         7,
-        0, 0, 0, 0
+        0, 0, 0, 0,
+        NULL, 0
     };
     struct nb_host_frame presented;
     struct nb_host_event event;
@@ -332,7 +372,8 @@ static void test_console_release_acquire_and_retry(void)
         4 * sizeof(uint32_t),
         NB_HOST_PIXEL_FORMAT_XRGB8888,
         1,
-        0, 0, 0, 0
+        0, 0, 0, 0,
+        NULL, 0
     };
     struct nb_host_event event;
     const struct nb_host_event queued_input = focus_event(false, 50);
@@ -400,7 +441,8 @@ static void test_lifecycle_priority_preserves_critical_events(void)
         4 * sizeof(uint32_t),
         NB_HOST_PIXEL_FORMAT_XRGB8888,
         9,
-        0, 0, 0, 0
+        0, 0, 0, 0,
+        NULL, 0
     };
     size_t index;
 
@@ -446,7 +488,8 @@ static void test_output_change_during_suspend(void)
         5 * sizeof(uint32_t),
         NB_HOST_PIXEL_FORMAT_XRGB8888,
         1,
-        0, 0, 0, 0
+        0, 0, 0, 0,
+        NULL, 0
     };
 
     CHECK(host != NULL);

@@ -154,6 +154,7 @@ struct nb_desktop_runtime {
     bool pending_preferences_changed;
 #if NIXBENCH_HAS_WAYLAND
     struct nb_wayland_server *wayland;
+    struct nb_wayland_renderer *wayland_renderer;
     bool host_keyboard_focused;
     char shell_key_capture[NIXBENCH_SHELL_KEY_CAPTURE_CAPACITY]
                           [NB_HOST_XKB_KEY_NAME_CAPACITY];
@@ -164,7 +165,7 @@ struct nb_desktop_runtime {
     bool quit_requested;
     enum nb_desktop_launch_request pending_launch_request;
     bool render_damage_valid;
-    struct nb_rect render_damage;
+    struct nb_damage_region render_damage;
 };
 
 static void clear_update(struct nb_desktop_runtime_update *update)
@@ -258,14 +259,23 @@ static bool render_window_content(SDL_Renderer *renderer,
                                   void *context)
 {
     struct nb_desktop_runtime *runtime = context;
-    const bool outside_damage =
-        runtime->render_damage_valid &&
-        (content_rect.x >= runtime->render_damage.x +
-                               runtime->render_damage.width ||
-         content_rect.y >= runtime->render_damage.y +
-                               runtime->render_damage.height ||
-         runtime->render_damage.x >= content_rect.x + content_rect.width ||
-         runtime->render_damage.y >= content_rect.y + content_rect.height);
+    bool outside_damage = runtime->render_damage_valid;
+    size_t damage_index;
+
+    for (damage_index = 0;
+         outside_damage && damage_index < runtime->render_damage.count;
+         ++damage_index) {
+        const struct nb_damage_rect damage =
+            runtime->render_damage.rects[damage_index];
+
+        outside_damage =
+            !nb_damage_rect_intersects(
+                damage,
+                (struct nb_damage_rect){content_rect.x,
+                                         content_rect.y,
+                                         content_rect.width,
+                                         content_rect.height});
+    }
 
     if (outside_damage) {
         return true;
@@ -278,7 +288,7 @@ static bool render_window_content(SDL_Renderer *renderer,
                                          id,
                                          window,
                                          content_rect,
-                                         runtime->wayland);
+                                         runtime->wayland_renderer);
     }
 #endif
     if (nb_application_host_window_owner(&runtime->applications, id) ==
@@ -363,6 +373,16 @@ static void start_wayland(struct nb_desktop_runtime *runtime)
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "Could not initialize the nested Wayland display; "
                     "continuing without Wayland clients");
+        return;
+    }
+    runtime->wayland_renderer =
+        nb_wayland_renderer_create(runtime->wayland);
+    if (runtime->wayland_renderer == NULL) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Could not initialize the Wayland texture cache; "
+                    "continuing without Wayland clients");
+        nb_wayland_server_destroy(runtime->wayland);
+        runtime->wayland = NULL;
         return;
     }
     if (!runtime->options.publish_wayland_socket) {
@@ -1427,6 +1447,8 @@ void nb_desktop_runtime_destroy(struct nb_desktop_runtime *runtime)
         return;
     }
 #if NIXBENCH_HAS_WAYLAND
+    nb_wayland_renderer_destroy(runtime->wayland_renderer);
+    runtime->wayland_renderer = NULL;
     nb_wayland_server_destroy(runtime->wayland);
     runtime->wayland = NULL;
 #endif
@@ -1486,6 +1508,9 @@ bool nb_desktop_runtime_set_output(
 #endif
     cancel_pointer_input(runtime, 0);
     nb_backdrop_cache_invalidate(runtime->backdrop_cache);
+#if NIXBENCH_HAS_WAYLAND
+    nb_wayland_renderer_reset(runtime->wayland_renderer);
+#endif
     nb_software_canvas_destroy(runtime->canvas);
     runtime->canvas = canvas;
     runtime->output = *output;
@@ -1634,10 +1659,24 @@ bool nb_desktop_runtime_dispatch(
                          "Could not dispatch the nested Wayland display");
             return false;
         }
-        update->redraw = nb_wayland_server_take_redraw_damage(
+        update->redraw = nb_wayland_server_take_redraw_region(
             runtime->wayland,
-            &update->damage);
-        update->damage_valid = update->redraw;
+            &update->damage_region);
+        if (update->redraw && !update->damage_region.full) {
+            struct nb_damage_rect bounds;
+
+            update->damage_valid = nb_damage_region_bounds(
+                &update->damage_region,
+                runtime->viewport.width,
+                runtime->viewport.height,
+                &bounds);
+            if (update->damage_valid) {
+                update->damage = (struct nb_rect){bounds.x,
+                                                  bounds.y,
+                                                  bounds.width,
+                                                  bounds.height};
+            }
+        }
     }
 #endif
     update->quit_requested = runtime->quit_requested;
@@ -1677,8 +1716,43 @@ bool nb_desktop_runtime_render_damage(
     const struct nb_rect *damage,
     struct nb_host_frame *frame)
 {
+    struct nb_damage_region region;
+
+    if (damage == NULL) {
+        return nb_desktop_runtime_render_region(runtime,
+                                                clock_text,
+                                                serial,
+                                                NULL,
+                                                frame);
+    }
+    nb_damage_region_clear(&region);
+    if (!nb_damage_region_add(
+            &region,
+            (struct nb_damage_rect){damage->x,
+                                     damage->y,
+                                     damage->width,
+                                     damage->height},
+            runtime != NULL ? runtime->viewport.width : 0,
+            runtime != NULL ? runtime->viewport.height : 0)) {
+        return false;
+    }
+    return nb_desktop_runtime_render_region(runtime,
+                                            clock_text,
+                                            serial,
+                                            &region,
+                                            frame);
+}
+
+bool nb_desktop_runtime_render_region(
+    struct nb_desktop_runtime *runtime,
+    const char *clock_text,
+    uint64_t serial,
+    const struct nb_damage_region *damage,
+    struct nb_host_frame *frame)
+{
     SDL_Renderer *renderer;
     SDL_Rect clip;
+    struct nb_damage_rect bounds;
     bool rendered;
 
     if (runtime == NULL || clock_text == NULL || clock_text[0] == '\0' ||
@@ -1686,11 +1760,14 @@ bool nb_desktop_runtime_render_damage(
         return false;
     }
     if (damage != NULL &&
-        (damage->x < 0 || damage->y < 0 || damage->width <= 0 ||
-         damage->height <= 0 || damage->x >= runtime->viewport.width ||
-         damage->y >= runtime->viewport.height ||
-         damage->width > runtime->viewport.width - damage->x ||
-         damage->height > runtime->viewport.height - damage->y)) {
+        (!nb_damage_region_is_valid(damage,
+                                    runtime->viewport.width,
+                                    runtime->viewport.height) ||
+         damage->full || damage->count == 0 ||
+         !nb_damage_region_bounds(damage,
+                                  runtime->viewport.width,
+                                  runtime->viewport.height,
+                                  &bounds))) {
         return false;
     }
     renderer = nb_software_canvas_renderer(runtime->canvas);
@@ -1698,12 +1775,15 @@ bool nb_desktop_runtime_render_damage(
         return false;
     }
     runtime->render_damage_valid = damage != NULL;
+#if NIXBENCH_HAS_WAYLAND
+    nb_wayland_renderer_set_damage(runtime->wayland_renderer, damage);
+#endif
     if (damage != NULL) {
         runtime->render_damage = *damage;
-        clip = (SDL_Rect){damage->x,
-                          damage->y,
-                          damage->width,
-                          damage->height};
+        clip = (SDL_Rect){bounds.x,
+                          bounds.y,
+                          bounds.width,
+                          bounds.height};
         if (!SDL_SetRenderClipRect(renderer, &clip)) {
             runtime->render_damage_valid = false;
             return false;
@@ -1732,10 +1812,12 @@ bool nb_desktop_runtime_render_damage(
         return false;
     }
     if (damage != NULL) {
-        frame->damage_x = damage->x;
-        frame->damage_y = damage->y;
-        frame->damage_width = damage->width;
-        frame->damage_height = damage->height;
+        frame->damage_x = bounds.x;
+        frame->damage_y = bounds.y;
+        frame->damage_width = bounds.width;
+        frame->damage_height = bounds.height;
+        frame->damage_rects = damage->rects;
+        frame->damage_count = damage->count;
     }
     return true;
 }

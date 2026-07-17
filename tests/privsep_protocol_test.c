@@ -184,6 +184,30 @@ static void test_core_round_trips(void)
     CHECK(decoded.data.frame_begin.damage_height == 2);
 
     memset(&source, 0, sizeof(source));
+    source.type = NB_PRIVSEP_MESSAGE_FRAME_BEGIN;
+    source.data.frame_begin.generation = 8;
+    source.data.frame_begin.serial = 101;
+    source.data.frame_begin.frame_bytes = 40;
+    source.data.frame_begin.damage_count = 2;
+    source.data.frame_begin.damage_rects[0].x = 3;
+    source.data.frame_begin.damage_rects[0].y = 4;
+    source.data.frame_begin.damage_rects[0].width = 2;
+    source.data.frame_begin.damage_rects[0].height = 2;
+    source.data.frame_begin.damage_rects[1].x = 20;
+    source.data.frame_begin.damage_rects[1].y = 10;
+    source.data.frame_begin.damage_rects[1].width = 3;
+    source.data.frame_begin.damage_rects[1].height = 2;
+    size = encode(NB_PRIVSEP_ENDPOINT_CORE, sequence, &source, wire);
+    CHECK(nb_privsep_parser_feed(&parser, wire, size, &consumed, &decoded) ==
+          NB_PRIVSEP_PARSE_MESSAGE);
+    CHECK(decoded.sequence == sequence++);
+    CHECK(decoded.data.frame_begin.damage_count == 2);
+    CHECK(decoded.data.frame_begin.damage_rects[0].x == 3);
+    CHECK(decoded.data.frame_begin.damage_rects[0].height == 2);
+    CHECK(decoded.data.frame_begin.damage_rects[1].x == 20);
+    CHECK(decoded.data.frame_begin.damage_rects[1].width == 3);
+
+    memset(&source, 0, sizeof(source));
     source.type = NB_PRIVSEP_MESSAGE_FRAME_DATA;
     source.data.frame_data.generation = 8;
     source.data.frame_data.serial = 99;

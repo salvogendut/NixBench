@@ -54,9 +54,41 @@ bool nb_host_frame_damage(const struct nb_host_frame *frame,
                           int *width,
                           int *height)
 {
+    struct nb_damage_region region;
+    struct nb_damage_rect bounds;
+    size_t index;
+
     if (frame == NULL || x == NULL || y == NULL || width == NULL ||
         height == NULL || frame->width <= 0 || frame->height <= 0) {
         return false;
+    }
+    if (frame->damage_count != 0) {
+        if (frame->damage_rects == NULL ||
+            frame->damage_count > NB_DAMAGE_REGION_CAPACITY) {
+            return false;
+        }
+        nb_damage_region_clear(&region);
+        for (index = 0; index < frame->damage_count; ++index) {
+            if (!nb_damage_region_add(&region,
+                                      frame->damage_rects[index],
+                                      frame->width,
+                                      frame->height) ||
+                region.full) {
+                return false;
+            }
+        }
+        if (region.count != frame->damage_count ||
+            !nb_damage_region_bounds(&region,
+                                     frame->width,
+                                     frame->height,
+                                     &bounds)) {
+            return false;
+        }
+        *x = bounds.x;
+        *y = bounds.y;
+        *width = bounds.width;
+        *height = bounds.height;
+        return true;
     }
     if (frame->damage_width == 0 && frame->damage_height == 0) {
         *x = 0;
@@ -77,6 +109,56 @@ bool nb_host_frame_damage(const struct nb_host_frame *frame,
     *y = frame->damage_y;
     *width = frame->damage_width;
     *height = frame->damage_height;
+    return true;
+}
+
+size_t nb_host_frame_damage_count(const struct nb_host_frame *frame)
+{
+    int x;
+    int y;
+    int width;
+    int height;
+
+    if (frame == NULL ||
+        !nb_host_frame_damage(frame, &x, &y, &width, &height)) {
+        return 0;
+    }
+    return frame->damage_count != 0 ? frame->damage_count : 1;
+}
+
+bool nb_host_frame_damage_at(const struct nb_host_frame *frame,
+                             size_t index,
+                             int *x,
+                             int *y,
+                             int *width,
+                             int *height)
+{
+    const struct nb_damage_rect *rect;
+
+    if (frame == NULL || x == NULL || y == NULL || width == NULL ||
+        height == NULL) {
+        return false;
+    }
+    if (frame->damage_count == 0) {
+        return index == 0 && nb_host_frame_damage(frame, x, y, width, height);
+    }
+    if (frame->damage_rects == NULL ||
+        frame->damage_count > NB_DAMAGE_REGION_CAPACITY ||
+        index >= frame->damage_count) {
+        return false;
+    }
+    rect = &frame->damage_rects[index];
+    if (rect->x < 0 || rect->y < 0 || rect->width <= 0 ||
+        rect->height <= 0 || rect->x >= frame->width ||
+        rect->y >= frame->height ||
+        rect->width > frame->width - rect->x ||
+        rect->height > frame->height - rect->y) {
+        return false;
+    }
+    *x = rect->x;
+    *y = rect->y;
+    *width = rect->width;
+    *height = rect->height;
     return true;
 }
 

@@ -1190,6 +1190,8 @@ static enum nb_host_result wsdisplay_present(
     enum nb_framebuffer_source_format source_format;
     enum nb_framebuffer_status conversion_status;
     size_t source_size;
+    size_t damage_count;
+    size_t damage_index;
     int damage_x;
     int damage_y;
     int damage_width;
@@ -1204,12 +1206,11 @@ static enum nb_host_result wsdisplay_present(
                    : NB_HOST_RESULT_SUSPENDED;
     }
     if (frame->width != context->output.pixel_width ||
-        frame->height != context->output.pixel_height ||
-        !nb_host_frame_damage(frame,
-                              &damage_x,
-                              &damage_y,
-                              &damage_width,
-                              &damage_height)) {
+        frame->height != context->output.pixel_height) {
+        return NB_HOST_RESULT_INVALID_ARGUMENT;
+    }
+    damage_count = nb_host_frame_damage_count(frame);
+    if (damage_count == 0) {
         return NB_HOST_RESULT_INVALID_ARGUMENT;
     }
     if (context->event_count >= NB_HOST_WSDISPLAY_EVENT_CAPACITY) {
@@ -1224,29 +1225,55 @@ static enum nb_host_result wsdisplay_present(
         frame->format == NB_HOST_PIXEL_FORMAT_XRGB8888
             ? NB_FRAMEBUFFER_SOURCE_XRGB8888
             : NB_FRAMEBUFFER_SOURCE_ARGB8888;
-    if (damage_x != 0 || damage_y != 0 ||
+    if (!nb_host_frame_damage_at(frame,
+                                 0,
+                                 &damage_x,
+                                 &damage_y,
+                                 &damage_width,
+                                 &damage_height)) {
+        return NB_HOST_RESULT_INVALID_ARGUMENT;
+    }
+    if (damage_count != 1 || damage_x != 0 || damage_y != 0 ||
         damage_width != frame->width || damage_height != frame->height) {
         const size_t destination_pixel_size =
             context->framebuffer_format.bits_per_pixel / 8U;
-        const size_t source_offset =
-            (size_t)damage_y * frame->stride +
-            (size_t)damage_x * NB_HOST_BYTES_PER_PIXEL;
-        const size_t destination_offset =
-            (size_t)damage_y * context->framebuffer_stride +
-            (size_t)damage_x * destination_pixel_size;
 
-        conversion_status = nb_framebuffer_convert(
-            (const unsigned char *)frame->pixels + source_offset,
-            source_size - source_offset,
-            frame->stride,
-            source_format,
-            (unsigned char *)context->visible_framebuffer +
-                destination_offset,
-            context->framebuffer_size - destination_offset,
-            context->framebuffer_stride,
-            (size_t)damage_width,
-            (size_t)damage_height,
-            &context->framebuffer_format);
+        conversion_status = NB_FRAMEBUFFER_OK;
+        for (damage_index = 0;
+             damage_index < damage_count;
+             ++damage_index) {
+            size_t source_offset;
+            size_t destination_offset;
+
+            if (!nb_host_frame_damage_at(frame,
+                                         damage_index,
+                                         &damage_x,
+                                         &damage_y,
+                                         &damage_width,
+                                         &damage_height)) {
+                return NB_HOST_RESULT_INVALID_ARGUMENT;
+            }
+            source_offset = (size_t)damage_y * frame->stride +
+                            (size_t)damage_x * NB_HOST_BYTES_PER_PIXEL;
+            destination_offset =
+                (size_t)damage_y * context->framebuffer_stride +
+                (size_t)damage_x * destination_pixel_size;
+            conversion_status = nb_framebuffer_convert(
+                (const unsigned char *)frame->pixels + source_offset,
+                source_size - source_offset,
+                frame->stride,
+                source_format,
+                (unsigned char *)context->visible_framebuffer +
+                    destination_offset,
+                context->framebuffer_size - destination_offset,
+                context->framebuffer_stride,
+                (size_t)damage_width,
+                (size_t)damage_height,
+                &context->framebuffer_format);
+            if (conversion_status != NB_FRAMEBUFFER_OK) {
+                break;
+            }
+        }
         nb_framebuffer_shadow_invalidate(context->framebuffer_shadow);
     } else if (context->framebuffer_shadow != NULL) {
         conversion_status = nb_framebuffer_shadow_present(

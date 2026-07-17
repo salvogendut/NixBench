@@ -8,7 +8,8 @@ enum {
     OUTPUT_PAYLOAD_SIZE = 32,
     READY_PAYLOAD_SIZE = 40,
     SUSPEND_PAYLOAD_SIZE = 24,
-    FRAME_BEGIN_PAYLOAD_SIZE = 40,
+    FRAME_BEGIN_PREFIX_SIZE = 24,
+    FRAME_BEGIN_RECT_SIZE = 16,
     FRAME_REFERENCE_PAYLOAD_SIZE = 16,
     POINTER_MOTION_PAYLOAD_SIZE = 24,
     POINTER_BUTTON_PAYLOAD_SIZE = 32,
@@ -171,6 +172,8 @@ bool nb_privsep_message_is_valid(
 {
     uint64_t data_end;
     uint64_t damage_bytes;
+    size_t damage_index;
+    size_t damage_count;
 
     if (!nb_privsep_endpoint_is_valid(sender) || message == NULL ||
         !message_type_is_from(message->type, sender)) {
@@ -186,33 +189,56 @@ bool nb_privsep_message_is_valid(
             message->data.frame_begin.frame_bytes == 0 ||
             message->data.frame_begin.frame_bytes >
                 NB_PRIVSEP_MAX_FRAME_BYTES ||
+            message->data.frame_begin.damage_count >
+                NB_PRIVSEP_MAX_DAMAGE_RECTS ||
             ((message->data.frame_begin.damage_width == 0) !=
              (message->data.frame_begin.damage_height == 0))) {
             return false;
         }
-        if (message->data.frame_begin.damage_width == 0) {
+        damage_count = message->data.frame_begin.damage_count;
+        if (damage_count == 0 &&
+            message->data.frame_begin.damage_width != 0) {
+            damage_count = 1;
+        }
+        if (damage_count == 0) {
             return message->data.frame_begin.damage_x == 0 &&
                    message->data.frame_begin.damage_y == 0;
         }
-        if (message->data.frame_begin.damage_x >=
-                NB_PRIVSEP_MAX_OUTPUT_DIMENSION ||
-            message->data.frame_begin.damage_y >=
-                NB_PRIVSEP_MAX_OUTPUT_DIMENSION ||
-            message->data.frame_begin.damage_width >
-                NB_PRIVSEP_MAX_OUTPUT_DIMENSION ||
-            message->data.frame_begin.damage_height >
-                NB_PRIVSEP_MAX_OUTPUT_DIMENSION ||
-            message->data.frame_begin.damage_width >
-                NB_PRIVSEP_MAX_OUTPUT_DIMENSION -
-                    message->data.frame_begin.damage_x ||
-            message->data.frame_begin.damage_height >
-                NB_PRIVSEP_MAX_OUTPUT_DIMENSION -
-                    message->data.frame_begin.damage_y) {
-            return false;
+        damage_bytes = 0;
+        for (damage_index = 0;
+             damage_index < damage_count;
+             ++damage_index) {
+            const uint32_t damage_x =
+                message->data.frame_begin.damage_count != 0
+                    ? message->data.frame_begin
+                          .damage_rects[damage_index].x
+                    : message->data.frame_begin.damage_x;
+            const uint32_t damage_y =
+                message->data.frame_begin.damage_count != 0
+                    ? message->data.frame_begin
+                          .damage_rects[damage_index].y
+                    : message->data.frame_begin.damage_y;
+            const uint32_t damage_width =
+                message->data.frame_begin.damage_count != 0
+                    ? message->data.frame_begin
+                          .damage_rects[damage_index].width
+                    : message->data.frame_begin.damage_width;
+            const uint32_t damage_height =
+                message->data.frame_begin.damage_count != 0
+                    ? message->data.frame_begin
+                          .damage_rects[damage_index].height
+                    : message->data.frame_begin.damage_height;
+
+            if (damage_x >= NB_PRIVSEP_MAX_OUTPUT_DIMENSION ||
+                damage_y >= NB_PRIVSEP_MAX_OUTPUT_DIMENSION ||
+                damage_width == 0 || damage_height == 0 ||
+                damage_width > NB_PRIVSEP_MAX_OUTPUT_DIMENSION - damage_x ||
+                damage_height > NB_PRIVSEP_MAX_OUTPUT_DIMENSION - damage_y) {
+                return false;
+            }
+            damage_bytes += (uint64_t)damage_width *
+                            (uint64_t)damage_height * UINT64_C(4);
         }
-        damage_bytes =
-            (uint64_t)message->data.frame_begin.damage_width *
-            (uint64_t)message->data.frame_begin.damage_height * UINT64_C(4);
         return damage_bytes == message->data.frame_begin.frame_bytes;
     case NB_PRIVSEP_MESSAGE_FRAME_DATA:
         if (message->data.frame_data.generation == 0 ||
@@ -271,8 +297,7 @@ static bool fixed_payload_size(enum nb_privsep_message_type type,
         *payload_size = CORE_HELLO_PAYLOAD_SIZE;
         return true;
     case NB_PRIVSEP_MESSAGE_FRAME_BEGIN:
-        *payload_size = FRAME_BEGIN_PAYLOAD_SIZE;
-        return true;
+        return false;
     case NB_PRIVSEP_MESSAGE_FRAME_COMMIT:
     case NB_PRIVSEP_MESSAGE_FRAME_ABORT:
         *payload_size = FRAME_REFERENCE_PAYLOAD_SIZE;
@@ -320,6 +345,19 @@ static bool wire_payload_size_is_valid(enum nb_privsep_message_type type,
         return payload_size > NB_PRIVSEP_FRAME_DATA_PREFIX_SIZE &&
                payload_size <= NB_PRIVSEP_MAX_PAYLOAD_SIZE;
     }
+    if (type == NB_PRIVSEP_MESSAGE_FRAME_BEGIN) {
+        uint32_t count;
+
+        if (payload_size < FRAME_BEGIN_PREFIX_SIZE ||
+            (payload_size - FRAME_BEGIN_PREFIX_SIZE) %
+                    FRAME_BEGIN_RECT_SIZE !=
+                0) {
+            return false;
+        }
+        count = (uint32_t)((payload_size - FRAME_BEGIN_PREFIX_SIZE) /
+                           FRAME_BEGIN_RECT_SIZE);
+        return count <= NB_PRIVSEP_MAX_DAMAGE_RECTS;
+    }
     return fixed_payload_size(type, &expected) &&
            payload_size == expected;
 }
@@ -330,6 +368,16 @@ static bool message_payload_size(const struct nb_privsep_message *message,
     if (message->type == NB_PRIVSEP_MESSAGE_FRAME_DATA) {
         *payload_size = NB_PRIVSEP_FRAME_DATA_PREFIX_SIZE +
                         (size_t)message->data.frame_data.size;
+        return true;
+    }
+    if (message->type == NB_PRIVSEP_MESSAGE_FRAME_BEGIN) {
+        size_t count = message->data.frame_begin.damage_count;
+
+        if (count == 0 && message->data.frame_begin.damage_width != 0) {
+            count = 1;
+        }
+        *payload_size = FRAME_BEGIN_PREFIX_SIZE +
+                        count * FRAME_BEGIN_RECT_SIZE;
         return true;
     }
     return fixed_payload_size(message->type, payload_size);
@@ -365,6 +413,8 @@ static bool decode_output(const unsigned char *source,
 static void encode_payload(const struct nb_privsep_message *message,
                            unsigned char *payload)
 {
+    size_t index;
+
     switch (message->type) {
     case NB_PRIVSEP_MESSAGE_CORE_HELLO:
         store_u32(payload, message->data.credentials.process_id);
@@ -379,15 +429,44 @@ static void encode_payload(const struct nb_privsep_message *message,
         store_u32(payload + 28, 0);
         break;
     case NB_PRIVSEP_MESSAGE_FRAME_BEGIN:
+    {
+        size_t count = message->data.frame_begin.damage_count;
+
+        if (count == 0 && message->data.frame_begin.damage_width != 0) {
+            count = 1;
+        }
         store_u64(payload, message->data.frame_begin.generation);
         store_u64(payload + 8, message->data.frame_begin.serial);
         store_u32(payload + 16, message->data.frame_begin.frame_bytes);
-        store_u32(payload + 20, message->data.frame_begin.damage_x);
-        store_u32(payload + 24, message->data.frame_begin.damage_y);
-        store_u32(payload + 28, message->data.frame_begin.damage_width);
-        store_u32(payload + 32, message->data.frame_begin.damage_height);
-        store_u32(payload + 36, 0);
+        store_u32(payload + 20, (uint32_t)count);
+        for (index = 0; index < count; ++index) {
+            const size_t offset = FRAME_BEGIN_PREFIX_SIZE +
+                                  index * FRAME_BEGIN_RECT_SIZE;
+
+            if (message->data.frame_begin.damage_count != 0) {
+                store_u32(payload + offset,
+                          message->data.frame_begin.damage_rects[index].x);
+                store_u32(payload + offset + 4,
+                          message->data.frame_begin.damage_rects[index].y);
+                store_u32(payload + offset + 8,
+                          message->data.frame_begin
+                              .damage_rects[index].width);
+                store_u32(payload + offset + 12,
+                          message->data.frame_begin
+                              .damage_rects[index].height);
+            } else {
+                store_u32(payload + offset,
+                          message->data.frame_begin.damage_x);
+                store_u32(payload + offset + 4,
+                          message->data.frame_begin.damage_y);
+                store_u32(payload + offset + 8,
+                          message->data.frame_begin.damage_width);
+                store_u32(payload + offset + 12,
+                          message->data.frame_begin.damage_height);
+            }
+        }
         break;
+    }
     case NB_PRIVSEP_MESSAGE_FRAME_DATA:
         store_u64(payload, message->data.frame_data.generation);
         store_u64(payload + 8, message->data.frame_data.serial);
@@ -520,17 +599,44 @@ static bool decode_payload(enum nb_privsep_message_type type,
         message->data.credentials.saved_group_id = load_u32(payload + 24);
         break;
     case NB_PRIVSEP_MESSAGE_FRAME_BEGIN:
-        if (load_u32(payload + 36) != 0) {
+    {
+        const uint32_t count = load_u32(payload + 20);
+        size_t index;
+
+        if (count > NB_PRIVSEP_MAX_DAMAGE_RECTS ||
+            payload_size != FRAME_BEGIN_PREFIX_SIZE +
+                                (size_t)count * FRAME_BEGIN_RECT_SIZE) {
             return false;
         }
         message->data.frame_begin.generation = load_u64(payload);
         message->data.frame_begin.serial = load_u64(payload + 8);
         message->data.frame_begin.frame_bytes = load_u32(payload + 16);
-        message->data.frame_begin.damage_x = load_u32(payload + 20);
-        message->data.frame_begin.damage_y = load_u32(payload + 24);
-        message->data.frame_begin.damage_width = load_u32(payload + 28);
-        message->data.frame_begin.damage_height = load_u32(payload + 32);
+        message->data.frame_begin.damage_count = count;
+        for (index = 0; index < count; ++index) {
+            const size_t offset = FRAME_BEGIN_PREFIX_SIZE +
+                                  index * FRAME_BEGIN_RECT_SIZE;
+
+            message->data.frame_begin.damage_rects[index].x =
+                load_u32(payload + offset);
+            message->data.frame_begin.damage_rects[index].y =
+                load_u32(payload + offset + 4);
+            message->data.frame_begin.damage_rects[index].width =
+                load_u32(payload + offset + 8);
+            message->data.frame_begin.damage_rects[index].height =
+                load_u32(payload + offset + 12);
+        }
+        if (count != 0) {
+            message->data.frame_begin.damage_x =
+                message->data.frame_begin.damage_rects[0].x;
+            message->data.frame_begin.damage_y =
+                message->data.frame_begin.damage_rects[0].y;
+            message->data.frame_begin.damage_width =
+                message->data.frame_begin.damage_rects[0].width;
+            message->data.frame_begin.damage_height =
+                message->data.frame_begin.damage_rects[0].height;
+        }
         break;
+    }
     case NB_PRIVSEP_MESSAGE_FRAME_DATA:
         message->data.frame_data.generation = load_u64(payload);
         message->data.frame_data.serial = load_u64(payload + 8);

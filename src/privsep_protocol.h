@@ -6,13 +6,13 @@
 #include <stdint.h>
 
 /*
- * Version-two helper/core messages use an inherited local byte stream. All
+ * Version-three helper/core messages use an inherited local byte stream. All
  * control integers are big endian on the wire. FRAME_DATA bytes are opaque;
- * for version two they contain packed rows of native-endian XRGB8888 damage.
+ * they contain native-endian XRGB8888 rows packed in damage-list order.
  */
 enum {
     NB_PRIVSEP_PROTOCOL_MAGIC = 0x4e425043,
-    NB_PRIVSEP_PROTOCOL_VERSION = 2,
+    NB_PRIVSEP_PROTOCOL_VERSION = 3,
     NB_PRIVSEP_HEADER_SIZE = 24,
     NB_PRIVSEP_FRAME_DATA_CAPACITY = 65536,
     NB_PRIVSEP_FRAME_DATA_PREFIX_SIZE = 24,
@@ -24,7 +24,8 @@ enum {
     NB_PRIVSEP_MAX_OUTPUT_DIMENSION = 8192,
     NB_PRIVSEP_MAX_REFRESH_MILLIHERTZ = 1000000,
     NB_PRIVSEP_MAX_FRAME_BYTES = 128 * 1024 * 1024,
-    NB_PRIVSEP_XKB_KEY_NAME_CAPACITY = 5
+    NB_PRIVSEP_XKB_KEY_NAME_CAPACITY = 5,
+    NB_PRIVSEP_MAX_DAMAGE_RECTS = 64
 };
 
 enum nb_privsep_endpoint {
@@ -114,6 +115,13 @@ struct nb_privsep_frame_begin {
     uint32_t damage_y;
     uint32_t damage_width;
     uint32_t damage_height;
+    uint32_t damage_count;
+    struct {
+        uint32_t x;
+        uint32_t y;
+        uint32_t width;
+        uint32_t height;
+    } damage_rects[NB_PRIVSEP_MAX_DAMAGE_RECTS];
 };
 
 struct nb_privsep_frame_data {

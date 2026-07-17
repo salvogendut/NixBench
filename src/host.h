@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "damage_region.h"
+
 enum {
     NB_HOST_BYTES_PER_PIXEL = 4,
     NB_HOST_XKB_KEY_NAME_CAPACITY = 5
@@ -30,12 +32,13 @@ enum nb_host_pixel_format {
 };
 
 /*
- * A retained software-composited frame. Pixels are borrowed only for the
- * duration of nb_host_present(). The damage rectangle selects pixels changed
- * since the prior accepted frame; the first frame after creation or resume is
- * complete. Accepted serial numbers are nonzero and strictly increasing for
- * the lifetime of a host; an unaccepted serial may be retried. Stride is
- * measured in bytes.
+ * A retained software-composited frame. Pixels and optional damage_rects are
+ * borrowed only for the duration of nb_host_present(). Multiple rectangles
+ * preserve sparse animation damage. The legacy single rectangle remains the
+ * default when damage_count is zero; its zero size means the complete frame.
+ * The first frame after creation or resume is complete. Accepted serial
+ * numbers are nonzero and strictly increasing for the lifetime of a host; an
+ * unaccepted serial may be retried. Stride is measured in bytes.
  */
 struct nb_host_frame {
     const void *pixels;
@@ -53,6 +56,8 @@ struct nb_host_frame {
     int damage_y;
     int damage_width;
     int damage_height;
+    const struct nb_damage_rect *damage_rects;
+    size_t damage_count;
 };
 
 enum nb_host_pointer_button {
@@ -145,6 +150,13 @@ bool nb_host_frame_damage(const struct nb_host_frame *frame,
                           int *y,
                           int *width,
                           int *height);
+size_t nb_host_frame_damage_count(const struct nb_host_frame *frame);
+bool nb_host_frame_damage_at(const struct nb_host_frame *frame,
+                             size_t index,
+                             int *x,
+                             int *y,
+                             int *width,
+                             int *height);
 bool nb_host_event_is_valid(const struct nb_host_event *event);
 
 bool nb_host_get_output(const struct nb_host *host,

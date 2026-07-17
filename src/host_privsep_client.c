@@ -53,10 +53,13 @@ struct nb_privsep_client_frame {
     unsigned char *pixels;
     size_t size;
     size_t offset;
-    uint32_t damage_x;
-    uint32_t damage_y;
-    uint32_t damage_width;
-    uint32_t damage_height;
+    uint32_t damage_count;
+    struct {
+        uint32_t x;
+        uint32_t y;
+        uint32_t width;
+        uint32_t height;
+    } damage_rects[NB_PRIVSEP_MAX_DAMAGE_RECTS];
     uint64_t generation;
     uint64_t serial;
     enum nb_privsep_client_frame_phase phase;
@@ -401,11 +404,12 @@ static bool stage_next_message(
         message.data.frame_begin.generation = context->frame.generation;
         message.data.frame_begin.serial = context->frame.serial;
         message.data.frame_begin.frame_bytes = (uint32_t)context->frame.size;
-        message.data.frame_begin.damage_x = context->frame.damage_x;
-        message.data.frame_begin.damage_y = context->frame.damage_y;
-        message.data.frame_begin.damage_width = context->frame.damage_width;
-        message.data.frame_begin.damage_height =
-            context->frame.damage_height;
+        message.data.frame_begin.damage_count =
+            context->frame.damage_count;
+        memcpy(message.data.frame_begin.damage_rects,
+               context->frame.damage_rects,
+               context->frame.damage_count *
+                   sizeof(message.data.frame_begin.damage_rects[0]));
         return stage_message(context,
                              &message,
                              NB_PRIVSEP_CLIENT_WIRE_FRAME_BEGIN);
@@ -1155,13 +1159,14 @@ static enum nb_host_result privsep_present(
 {
     struct nb_host_privsep_client_context *context = opaque;
     unsigned char *pixels;
-    size_t row_size;
-    size_t frame_size;
+    size_t frame_size = 0;
+    size_t packed_offset = 0;
+    size_t damage_count;
+    size_t damage_index;
     int damage_x;
     int damage_y;
     int damage_width;
     int damage_height;
-    int row;
 
     if (context->failed) {
         return NB_HOST_RESULT_ERROR;
@@ -1175,20 +1180,36 @@ static enum nb_host_result privsep_present(
     if (frame->format != NB_HOST_PIXEL_FORMAT_XRGB8888 ||
         frame->width != context->output.pixel_width ||
         frame->height != context->output.pixel_height ||
-        (size_t)frame->width > SIZE_MAX / NB_HOST_BYTES_PER_PIXEL ||
-        !nb_host_frame_damage(frame,
-                              &damage_x,
-                              &damage_y,
-                              &damage_width,
-                              &damage_height) ||
-        (size_t)damage_width > SIZE_MAX / NB_HOST_BYTES_PER_PIXEL) {
+        (size_t)frame->width > SIZE_MAX / NB_HOST_BYTES_PER_PIXEL) {
         return NB_HOST_RESULT_INVALID_ARGUMENT;
     }
-    row_size = (size_t)damage_width * NB_HOST_BYTES_PER_PIXEL;
-    if ((size_t)damage_height > SIZE_MAX / row_size) {
+    damage_count = nb_host_frame_damage_count(frame);
+    if (damage_count == 0 || damage_count > NB_PRIVSEP_MAX_DAMAGE_RECTS) {
         return NB_HOST_RESULT_INVALID_ARGUMENT;
     }
-    frame_size = row_size * (size_t)damage_height;
+    for (damage_index = 0; damage_index < damage_count; ++damage_index) {
+        size_t row_size;
+        size_t damage_size;
+
+        if (!nb_host_frame_damage_at(frame,
+                                     damage_index,
+                                     &damage_x,
+                                     &damage_y,
+                                     &damage_width,
+                                     &damage_height) ||
+            (size_t)damage_width > SIZE_MAX / NB_HOST_BYTES_PER_PIXEL) {
+            return NB_HOST_RESULT_INVALID_ARGUMENT;
+        }
+        row_size = (size_t)damage_width * NB_HOST_BYTES_PER_PIXEL;
+        if ((size_t)damage_height > SIZE_MAX / row_size) {
+            return NB_HOST_RESULT_INVALID_ARGUMENT;
+        }
+        damage_size = row_size * (size_t)damage_height;
+        if (damage_size > NB_PRIVSEP_MAX_FRAME_BYTES - frame_size) {
+            return NB_HOST_RESULT_INVALID_ARGUMENT;
+        }
+        frame_size += damage_size;
+    }
     if (frame_size == 0 || frame_size > NB_PRIVSEP_MAX_FRAME_BYTES) {
         return NB_HOST_RESULT_INVALID_ARGUMENT;
     }
@@ -1197,20 +1218,38 @@ static enum nb_host_result privsep_present(
         fail_client(context, "Could not copy a desktop frame", ENOMEM);
         return NB_HOST_RESULT_ERROR;
     }
-    for (row = 0; row < damage_height; ++row) {
-        memcpy(pixels + (size_t)row * row_size,
-               (const unsigned char *)frame->pixels +
-                   ((size_t)damage_y + (size_t)row) * frame->stride +
-                   (size_t)damage_x * NB_HOST_BYTES_PER_PIXEL,
-               row_size);
+    for (damage_index = 0; damage_index < damage_count; ++damage_index) {
+        size_t row_size;
+        int row;
+
+        (void)nb_host_frame_damage_at(frame,
+                                      damage_index,
+                                      &damage_x,
+                                      &damage_y,
+                                      &damage_width,
+                                      &damage_height);
+        row_size = (size_t)damage_width * NB_HOST_BYTES_PER_PIXEL;
+        for (row = 0; row < damage_height; ++row) {
+            memcpy(pixels + packed_offset,
+                   (const unsigned char *)frame->pixels +
+                       ((size_t)damage_y + (size_t)row) * frame->stride +
+                       (size_t)damage_x * NB_HOST_BYTES_PER_PIXEL,
+                   row_size);
+            packed_offset += row_size;
+        }
+        context->frame.damage_rects[damage_index].x =
+            (uint32_t)damage_x;
+        context->frame.damage_rects[damage_index].y =
+            (uint32_t)damage_y;
+        context->frame.damage_rects[damage_index].width =
+            (uint32_t)damage_width;
+        context->frame.damage_rects[damage_index].height =
+            (uint32_t)damage_height;
     }
     context->frame.pixels = pixels;
     context->frame.size = frame_size;
     context->frame.offset = 0;
-    context->frame.damage_x = (uint32_t)damage_x;
-    context->frame.damage_y = (uint32_t)damage_y;
-    context->frame.damage_width = (uint32_t)damage_width;
-    context->frame.damage_height = (uint32_t)damage_height;
+    context->frame.damage_count = (uint32_t)damage_count;
     context->frame.generation = context->generation;
     context->frame.serial = frame->serial;
     context->frame.phase = NB_PRIVSEP_CLIENT_FRAME_BEGIN;
