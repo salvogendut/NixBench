@@ -1084,6 +1084,51 @@ static void start_rootless_xwayland(struct nb_session_core *core)
               stderr);
     }
 }
+
+static bool wait_for_rootless_xwayland(struct nb_session_core *core)
+{
+    const uint64_t deadline = add_milliseconds(
+        nb_host_monotonic_milliseconds(core->host),
+        NB_SESSION_CORE_HANDSHAKE_TIMEOUT_MS);
+
+    while (core->xwayland != NULL &&
+           !nb_xwayland_rootless_is_ready(core->xwayland)) {
+        struct nb_host_event event;
+        enum nb_host_event_status event_status =
+            wait_for_activity(core, &event);
+
+        if (event_status == NB_HOST_EVENT_STATUS_ERROR) {
+            report_host_error(core,
+                              "Could not wait for rootless Xwayland startup");
+            return false;
+        }
+        if (!dispatch_desktop(core)) {
+            return false;
+        }
+        while (event_status == NB_HOST_EVENT_STATUS_AVAILABLE) {
+            if (!process_host_event(core, &event)) {
+                return false;
+            }
+            event_status = nb_host_poll_event(core->host, &event);
+            if (event_status == NB_HOST_EVENT_STATUS_ERROR) {
+                report_host_error(core,
+                                  "Could not drain host activity during "
+                                  "rootless Xwayland startup");
+                return false;
+            }
+        }
+        if (!core->running || session_core_sigterm_requested) {
+            fputs("Rootless Xwayland startup was cancelled\n", stderr);
+            return false;
+        }
+        if (nb_host_monotonic_milliseconds(core->host) >= deadline) {
+            fputs("Timed out waiting for rootless Xwayland startup\n",
+                  stderr);
+            return false;
+        }
+    }
+    return true;
+}
 #endif
 
 static void refresh_clock(struct nb_session_core *core)
@@ -1269,6 +1314,9 @@ int nb_session_core_run(int protocol_descriptor,
     }
 #if NIXBENCH_HAS_ROOTLESS_XWAYLAND
     start_rootless_xwayland(&core);
+    if (core.xwayland != NULL && !wait_for_rootless_xwayland(&core)) {
+        goto cleanup;
+    }
 #endif
     if (!prepare_application_environment(&core) ||
         (initial_application_path != NULL &&

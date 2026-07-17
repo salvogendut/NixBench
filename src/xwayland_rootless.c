@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -50,6 +51,7 @@ struct nb_xwayland_rootless {
     xcb_atom_t wm_name;
     xcb_atom_t wm_protocols;
     xcb_atom_t wm_delete_window;
+    bool ready;
     char display_name[16];
     char socket_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
     struct nb_xwayland_window windows[NB_XWAYLAND_MAX_WINDOWS];
@@ -589,7 +591,6 @@ struct nb_xwayland_rootless *nb_xwayland_rootless_create(
     const char *xwayland_path)
 {
     struct nb_xwayland_rootless *service;
-    struct nb_desktop_xwayland_interface interface;
     int wm_sockets[2] = {-1, -1};
     int listen_descriptor = -1;
     pid_t child;
@@ -657,21 +658,9 @@ struct nb_xwayland_rootless *nb_xwayland_rootless_create(
     listen_descriptor = -1;
     service->connection = xcb_connect_to_fd(wm_sockets[0], NULL);
     wm_sockets[0] = -1;
-    if (service->connection == NULL || !initialize_xwm(service)) {
+    if (service->connection == NULL) {
         goto fail;
     }
-    interface.configure_window = configure_native_window;
-    interface.close_window = close_native_window;
-    if (!nb_desktop_runtime_set_xwayland_interface(desktop,
-                                                   &interface,
-                                                   service) ||
-        setenv("DISPLAY", service->display_name, 1) != 0) {
-        goto fail;
-    }
-    fprintf(stderr,
-            "Rootless Xwayland is ready: DISPLAY=%s pid=%ld\n",
-            service->display_name,
-            (long)service->process);
     return service;
 
 fail:
@@ -719,6 +708,74 @@ bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service)
 
     if (service == NULL || service->connection == NULL) {
         return false;
+    }
+    if (!service->ready) {
+        struct pollfd descriptor;
+        struct nb_desktop_xwayland_interface interface;
+        int poll_result;
+
+        child_result = waitpid(service->process, &child_status, WNOHANG);
+        if (child_result == service->process) {
+            service->process = -1;
+            if (WIFEXITED(child_status)) {
+                fprintf(stderr,
+                        "Rootless Xwayland exited during startup with "
+                        "status %d\n",
+                        WEXITSTATUS(child_status));
+            } else if (WIFSIGNALED(child_status)) {
+                fprintf(stderr,
+                        "Rootless Xwayland terminated during startup by "
+                        "signal %d\n",
+                        WTERMSIG(child_status));
+            }
+            return false;
+        }
+        if (xcb_connection_has_error(service->connection) != 0) {
+            report_startup_failure(service);
+            return false;
+        }
+        memset(&descriptor, 0, sizeof(descriptor));
+        descriptor.fd = xcb_get_file_descriptor(service->connection);
+        descriptor.events = POLLIN;
+        poll_result = poll(&descriptor, 1, 0);
+        if (poll_result < 0) {
+            if (errno == EINTR) {
+                return true;
+            }
+            fprintf(stderr,
+                    "Could not poll the rootless XWM startup socket: %s\n",
+                    strerror(errno));
+            return false;
+        }
+        if (poll_result == 0) {
+            return true;
+        }
+        if ((descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+            report_startup_failure(service);
+            return false;
+        }
+        if ((descriptor.revents & POLLIN) == 0) {
+            return true;
+        }
+        if (!initialize_xwm(service)) {
+            report_startup_failure(service);
+            return false;
+        }
+        interface.configure_window = configure_native_window;
+        interface.close_window = close_native_window;
+        if (!nb_desktop_runtime_set_xwayland_interface(service->desktop,
+                                                       &interface,
+                                                       service) ||
+            setenv("DISPLAY", service->display_name, 1) != 0) {
+            fputs("Could not publish the rootless Xwayland environment\n",
+                  stderr);
+            return false;
+        }
+        service->ready = true;
+        fprintf(stderr,
+                "Rootless Xwayland is ready: DISPLAY=%s pid=%ld\n",
+                service->display_name,
+                (long)service->process);
     }
     while ((event = xcb_poll_for_event(service->connection)) != NULL) {
         const uint8_t type = event->response_type & UINT8_C(0x7f);
@@ -812,7 +869,14 @@ int nb_xwayland_rootless_event_descriptor(
 const char *nb_xwayland_rootless_display_name(
     const struct nb_xwayland_rootless *service)
 {
-    return service != NULL && service->display_name[0] != '\0'
+    return service != NULL && service->ready &&
+                   service->display_name[0] != '\0'
                ? service->display_name
                : NULL;
+}
+
+bool nb_xwayland_rootless_is_ready(
+    const struct nb_xwayland_rootless *service)
+{
+    return service != NULL && service->ready;
 }

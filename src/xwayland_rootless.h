@@ -17,6 +17,8 @@ void nb_xwayland_rootless_destroy(struct nb_xwayland_rootless *service);
 
 /* Drain XWM events without blocking and associate any pending wl_surfaces. */
 bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service);
+bool nb_xwayland_rootless_is_ready(
+    const struct nb_xwayland_rootless *service);
 int nb_xwayland_rootless_event_descriptor(
     const struct nb_xwayland_rootless *service);
 const char *nb_xwayland_rootless_display_name(
