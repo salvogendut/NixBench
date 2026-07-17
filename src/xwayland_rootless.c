@@ -70,6 +70,22 @@ static bool set_close_on_exec(int descriptor, bool close_on_exec)
     return fcntl(descriptor, F_SETFD, flags) == 0;
 }
 
+static bool suppress_socket_sigpipe(int descriptor)
+{
+#if defined(SO_NOSIGPIPE)
+    const int enabled = 1;
+
+    return setsockopt(descriptor,
+                      SOL_SOCKET,
+                      SO_NOSIGPIPE,
+                      &enabled,
+                      sizeof(enabled)) == 0;
+#else
+    (void)descriptor;
+    return true;
+#endif
+}
+
 static int create_listen_socket(char *path,
                                 size_t path_size,
                                 char *display_name,
@@ -530,6 +546,44 @@ static void stop_xwayland(struct nb_xwayland_rootless *service)
     service->process = -1;
 }
 
+static void report_startup_failure(struct nb_xwayland_rootless *service)
+{
+    int status;
+    pid_t result;
+
+    if (service->connection != NULL) {
+        const int connection_error =
+            xcb_connection_has_error(service->connection);
+
+        if (connection_error != 0) {
+            fprintf(stderr,
+                    "Rootless XWM connection failed during startup "
+                    "(XCB error %d)\n",
+                    connection_error);
+        }
+    }
+    if (service->process <= 0) {
+        return;
+    }
+    result = waitpid(service->process, &status, WNOHANG);
+    if (result != service->process) {
+        return;
+    }
+    service->process = -1;
+    if (WIFEXITED(status)) {
+        fprintf(stderr,
+                "Rootless Xwayland exited during startup with status %d\n",
+                WEXITSTATUS(status));
+    } else if (WIFSIGNALED(status)) {
+        fprintf(stderr,
+                "Rootless Xwayland terminated during startup by signal %d\n",
+                WTERMSIG(status));
+    } else {
+        fputs("Rootless Xwayland stopped unexpectedly during startup\n",
+              stderr);
+    }
+}
+
 struct nb_xwayland_rootless *nb_xwayland_rootless_create(
     struct nb_desktop_runtime *desktop,
     const char *xwayland_path)
@@ -557,7 +611,9 @@ struct nb_xwayland_rootless *nb_xwayland_rootless_create(
     if (listen_descriptor < 0 ||
         socketpair(AF_UNIX, SOCK_STREAM, 0, wm_sockets) != 0 ||
         !set_close_on_exec(wm_sockets[0], true) ||
-        !set_close_on_exec(wm_sockets[1], true)) {
+        !set_close_on_exec(wm_sockets[1], true) ||
+        !suppress_socket_sigpipe(wm_sockets[0]) ||
+        !suppress_socket_sigpipe(wm_sockets[1])) {
         goto fail;
     }
     child = fork();
@@ -619,6 +675,7 @@ struct nb_xwayland_rootless *nb_xwayland_rootless_create(
     return service;
 
 fail:
+    report_startup_failure(service);
     if (wm_sockets[0] >= 0) {
         (void)close(wm_sockets[0]);
     }
