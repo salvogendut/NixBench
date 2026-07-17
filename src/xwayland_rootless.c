@@ -445,17 +445,24 @@ static bool handle_map_request(struct nb_xwayland_rootless *service,
                                  XCB_CW_EVENT_MASK,
                                  &event_mask);
     refresh_window_title(service, entry);
+    /*
+     * Xwayland creates the wl_surface when Composite allocates the manual
+     * redirect pixmap.  In particular, NetBSD's Xwayland does not allocate
+     * that pixmap when RedirectWindow targets an unrealized window.  Map the
+     * WM-owned top-level first, then redirect the now-realized window so its
+     * SetWindowPixmap hook creates and publishes the Wayland surface.
+     */
     if (!checked_request_succeeded(
+            service->connection,
+            xcb_map_window_checked(service->connection, event->window),
+            "map an X11 top-level") ||
+        !checked_request_succeeded(
             service->connection,
             xcb_composite_redirect_window_checked(
                 service->connection,
                 event->window,
                 XCB_COMPOSITE_REDIRECT_MANUAL),
-            "redirect an X11 top-level") ||
-        !checked_request_succeeded(
-            service->connection,
-            xcb_map_window_checked(service->connection, event->window),
-            "map an X11 top-level")) {
+            "redirect an X11 top-level")) {
         return false;
     }
     fprintf(stderr,
