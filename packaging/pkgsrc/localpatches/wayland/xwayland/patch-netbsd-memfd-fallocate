@@ -1,0 +1,39 @@
+$NetBSD$
+
+Fall back to ftruncate(2) when a runtime file type does not implement
+posix_fallocate(2).  NetBSD 11 memfd_create(2) descriptors return EINVAL from
+posix_fallocate(2), even though they can be sized and mapped normally after
+ftruncate(2).  Treating that result as fatal prevents Xwayland's shared-memory
+backend from creating its root pixmap.
+
+--- hw/xwayland/xwayland-shm.c.orig
++++ hw/xwayland/xwayland-shm.c
+@@ -179,21 +179,25 @@ os_create_anonymous_file(off_t size)
+     } while (ret == EINTR);
+     OsReleaseSignals();
+ 
+-    if (ret != 0) {
++    if (ret == 0)
++        return fd;
++
++    if (ret != EINVAL && ret != EOPNOTSUPP) {
+         close(fd);
+         errno = ret;
+         return -1;
+     }
+-#else
++#endif
++
++    /* The descriptor supports sizing, but not preallocation. */
+     do {
+         ret = ftruncate(fd, size);
+     } while (ret == -1 && errno == EINTR);
+ 
+     if (ret < 0) {
+         close(fd);
+         return -1;
+     }
+-#endif
+ 
+     return fd;
+ }
