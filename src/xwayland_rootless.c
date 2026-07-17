@@ -512,6 +512,31 @@ static bool close_native_window(void *context, uint32_t xwindow)
     return xcb_flush(service->connection) > 0;
 }
 
+static bool focus_native_window(void *context, uint32_t xwindow)
+{
+    struct nb_xwayland_rootless *service = context;
+    xcb_window_t focus;
+
+    if (service == NULL || service->connection == NULL) {
+        return false;
+    }
+    focus = xwindow != 0
+                ? (xcb_window_t)xwindow
+                : (xcb_window_t)XCB_INPUT_FOCUS_POINTER_ROOT;
+    if (!checked_request_succeeded(
+            service->connection,
+            xcb_set_input_focus_checked(
+                service->connection,
+                XCB_INPUT_FOCUS_POINTER_ROOT,
+                focus,
+                XCB_CURRENT_TIME),
+            xwindow != 0 ? "focus an X11 top-level"
+                         : "clear X11 top-level focus")) {
+        return false;
+    }
+    return xcb_flush(service->connection) > 0;
+}
+
 static bool handle_map_request(struct nb_xwayland_rootless *service,
                                const xcb_map_request_event_t *event)
 {
@@ -1053,6 +1078,7 @@ bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service)
         }
         interface.configure_window = configure_native_window;
         interface.close_window = close_native_window;
+        interface.focus_window = focus_native_window;
         if (!nb_desktop_runtime_set_xwayland_interface(service->desktop,
                                                        &interface,
                                                        service) ||

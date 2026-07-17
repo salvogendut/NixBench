@@ -1345,6 +1345,8 @@ static bool keyboard_change_focus(struct nb_wayland_server *server,
     struct wl_array keys;
     uint32_t leave_serial = 0;
     uint32_t enter_serial = 0;
+    uint32_t old_xwindow;
+    uint32_t new_xwindow;
 
     if (new_focus != NULL &&
         (new_focus->window == NB_WINDOW_ID_NONE ||
@@ -1354,6 +1356,8 @@ static bool keyboard_change_focus(struct nb_wayland_server *server,
     if (old_focus == new_focus) {
         return true;
     }
+    old_xwindow = old_focus != NULL ? old_focus->xwayland_window : 0;
+    new_xwindow = new_focus != NULL ? new_focus->xwayland_window : 0;
     if (server->destroying) {
         server->keyboard_focus = new_focus;
         return true;
@@ -1399,6 +1403,12 @@ static bool keyboard_change_focus(struct nb_wayland_server *server,
                                           new_client,
                                           enter_serial);
         wl_array_release(&keys);
+    }
+    if ((old_xwindow != 0 || new_xwindow != 0) &&
+        server->xwayland_interface.focus_window != NULL &&
+        !server->xwayland_interface.focus_window(server->xwayland_context,
+                                                 new_xwindow)) {
+        return false;
     }
     return true;
 }

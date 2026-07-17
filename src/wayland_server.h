@@ -28,6 +28,8 @@ struct nb_wayland_xwayland_interface {
                              int width,
                              int height);
     bool (*close_window)(void *context, uint32_t xwindow);
+    /* A zero XID clears X11 focus when focus leaves rootless Xwayland. */
+    bool (*focus_window)(void *context, uint32_t xwindow);
 };
 
 /*

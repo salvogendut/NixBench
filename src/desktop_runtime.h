@@ -23,6 +23,7 @@ struct nb_desktop_xwayland_interface {
                              int width,
                              int height);
     bool (*close_window)(void *context, uint32_t xwindow);
+    bool (*focus_window)(void *context, uint32_t xwindow);
 };
 
 enum nb_desktop_launch_request {

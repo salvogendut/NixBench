@@ -2176,6 +2176,7 @@ bool nb_desktop_runtime_set_xwayland_interface(
     }
     wayland_interface.configure_window = interface->configure_window;
     wayland_interface.close_window = interface->close_window;
+    wayland_interface.focus_window = interface->focus_window;
     nb_wayland_server_set_xwayland_interface(runtime->wayland,
                                              &wayland_interface,
                                              context);
