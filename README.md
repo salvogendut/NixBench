@@ -665,7 +665,10 @@ directory. The core publishes its Wayland socket there and starts empty, or
 launches the selected initial application, with the matching
 `XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY`. It explicitly fixes
 `EGL_PLATFORM=wayland` so NetBSD libEGL does not select its X11 default in the
-standalone session. Once the core and application process group are gone, the
+standalone session. When rootless Xwayland is enabled, the root supervisor
+also provisions the standard root-owned `/tmp/.X11-unix` socket directory with
+mode `01777` before takeover; unsafe pre-existing paths are rejected rather
+than repaired. Once the core and application process group are gone, the
 worker asks the ordinary-user sentinel to remove the bounded, user-owned
 runtime subtree and its directory. The descriptor-relative traversal never
 follows symbolic links, never crosses to another filesystem, and rejects

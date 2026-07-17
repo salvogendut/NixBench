@@ -5,11 +5,21 @@
 
 #include "wsdisplay_session.h"
 
+#include <sys/stat.h>
+#include <sys/types.h>
+
 #include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+enum {
+    NB_SESSION_STICKY_MODE = 01000,
+    NB_SESSION_X11_SOCKET_DIRECTORY_MODE = 01777
+};
 
 static void set_error(char error[NB_WSDISPLAY_SESSION_ERROR_CAPACITY],
                       const char *format,
@@ -280,6 +290,171 @@ bool nb_wsdisplay_session_derive_core_path(
         return false;
     }
     return true;
+}
+
+static bool session_same_identity(const struct stat *left,
+                                  const struct stat *right)
+{
+    return left != NULL && right != NULL &&
+           left->st_dev == right->st_dev &&
+           left->st_ino == right->st_ino;
+}
+
+static bool session_set_cloexec(int descriptor)
+{
+    const int flags = fcntl(descriptor, F_GETFD);
+
+    return flags >= 0 &&
+           fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC) == 0;
+}
+
+bool nb_wsdisplay_session_prepare_x11_socket_directory(
+    const char *path,
+    char error[NB_WSDISPLAY_SESSION_ERROR_CAPACITY])
+{
+    char parent[NB_WSDISPLAY_SESSION_PATH_CAPACITY];
+    const char *basename;
+    const char *slash;
+    struct stat parent_status;
+    struct stat named_status;
+    struct stat opened_status;
+    struct stat final_status;
+    const uid_t owner = geteuid();
+    size_t parent_length;
+    int parent_fd = -1;
+    int directory_fd = -1;
+    int open_flags = O_RDONLY;
+    bool created = false;
+    bool success = false;
+
+    if (error != NULL) {
+        error[0] = '\0';
+    }
+    if (path == NULL || path[0] != '/' || path[1] == '\0' ||
+        strnlen(path, sizeof(parent)) >= sizeof(parent)) {
+        set_error(error, "invalid X11 socket directory path");
+        return false;
+    }
+    slash = strrchr(path, '/');
+    if (slash == NULL || slash[1] == '\0') {
+        set_error(error, "invalid X11 socket directory path");
+        return false;
+    }
+    basename = slash + 1;
+    parent_length = slash == path ? 1U : (size_t)(slash - path);
+    memcpy(parent, path, parent_length);
+    parent[parent_length] = '\0';
+
+#if defined(O_DIRECTORY)
+    open_flags |= O_DIRECTORY;
+#endif
+#if defined(O_CLOEXEC)
+    open_flags |= O_CLOEXEC;
+#endif
+#if defined(O_NOFOLLOW)
+    open_flags |= O_NOFOLLOW;
+#endif
+    parent_fd = open(parent, open_flags);
+    if (parent_fd < 0 || !session_set_cloexec(parent_fd) ||
+        fstat(parent_fd, &parent_status) != 0 ||
+        !S_ISDIR(parent_status.st_mode) || parent_status.st_uid != owner ||
+        (((parent_status.st_mode & (S_IWGRP | S_IWOTH)) != 0) &&
+         (parent_status.st_mode & NB_SESSION_STICKY_MODE) == 0)) {
+        set_error(error,
+                  "X11 socket parent %s is missing or unsafe: %s",
+                  parent,
+                  errno != 0
+                      ? strerror(errno)
+                      : "unexpected ownership or mode");
+        goto cleanup;
+    }
+    if (fstatat(parent_fd,
+                basename,
+                &named_status,
+                AT_SYMLINK_NOFOLLOW) != 0) {
+        if (errno != ENOENT) {
+            set_error(error,
+                      "could not inspect X11 socket directory %s: %s",
+                      path,
+                      strerror(errno));
+            goto cleanup;
+        }
+        if (mkdirat(parent_fd, basename, S_IRWXU) != 0) {
+            set_error(error,
+                      "could not create X11 socket directory %s: %s",
+                      path,
+                      strerror(errno));
+            goto cleanup;
+        }
+        created = true;
+        if (fstatat(parent_fd,
+                    basename,
+                    &named_status,
+                    AT_SYMLINK_NOFOLLOW) != 0) {
+            set_error(error,
+                      "could not verify X11 socket directory %s: %s",
+                      path,
+                      strerror(errno));
+            goto cleanup;
+        }
+    }
+    directory_fd = openat(parent_fd, basename, open_flags);
+    if (directory_fd < 0 || !session_set_cloexec(directory_fd) ||
+        fstat(directory_fd, &opened_status) != 0 ||
+        !S_ISDIR(named_status.st_mode) || !S_ISDIR(opened_status.st_mode) ||
+        named_status.st_uid != owner || opened_status.st_uid != owner ||
+        !session_same_identity(&named_status, &opened_status)) {
+        set_error(error,
+                  "X11 socket directory %s is unsafe: %s",
+                  path,
+                  errno != 0
+                      ? strerror(errno)
+                      : "unexpected ownership or type");
+        goto cleanup;
+    }
+    if (created) {
+        if (fchmod(directory_fd,
+                   NB_SESSION_X11_SOCKET_DIRECTORY_MODE) != 0) {
+            set_error(error,
+                      "could not set X11 socket directory mode on %s: %s",
+                      path,
+                      strerror(errno));
+            goto cleanup;
+        }
+    } else if ((opened_status.st_mode & 07777) !=
+               NB_SESSION_X11_SOCKET_DIRECTORY_MODE) {
+        set_error(error,
+                  "X11 socket directory %s does not have mode 01777",
+                  path);
+        goto cleanup;
+    }
+    if (fstat(directory_fd, &opened_status) != 0 ||
+        fstatat(parent_fd,
+                basename,
+                &final_status,
+                AT_SYMLINK_NOFOLLOW) != 0 ||
+        !session_same_identity(&opened_status, &final_status) ||
+        final_status.st_uid != owner ||
+        (final_status.st_mode & 07777) !=
+            NB_SESSION_X11_SOCKET_DIRECTORY_MODE) {
+        set_error(error,
+                  "X11 socket directory %s changed during verification",
+                  path);
+        goto cleanup;
+    }
+    success = true;
+
+cleanup:
+    if (directory_fd >= 0) {
+        (void)close(directory_fd);
+    }
+    if (!success && created && parent_fd >= 0) {
+        (void)unlinkat(parent_fd, basename, AT_REMOVEDIR);
+    }
+    if (parent_fd >= 0) {
+        (void)close(parent_fd);
+    }
+    return success;
 }
 
 void nb_wsdisplay_session_frame_state_init(
@@ -2242,6 +2417,7 @@ int nb_wsdisplay_session_run(
     };
     char credential_error[NB_SESSION_CREDENTIALS_ERROR_CAPACITY];
     char recovery_error[NB_WSDISPLAY_RECOVERY_ERROR_CAPACITY];
+    char x11_socket_error[NB_WSDISPLAY_SESSION_ERROR_CAPACITY];
     char core_path[NB_WSDISPLAY_SESSION_PATH_CAPACITY];
     const char *application_path;
     int session_lock_fd;
@@ -2252,6 +2428,7 @@ int nb_wsdisplay_session_run(
 
     credential_error[0] = '\0';
     recovery_error[0] = '\0';
+    x11_socket_error[0] = '\0';
     if (options == NULL ||
         options->action < NB_WSDISPLAY_SESSION_ACTION_RUN ||
         options->action > NB_WSDISPLAY_SESSION_ACTION_RECOVER ||
@@ -2329,6 +2506,14 @@ int nb_wsdisplay_session_run(
         goto release_lock;
     }
     application_path = options->application_path;
+    if (getenv("NIXBENCH_XWAYLAND_ROOTLESS") != NULL &&
+        strcmp(getenv("NIXBENCH_XWAYLAND_ROOTLESS"), "1") == 0 &&
+        !nb_wsdisplay_session_prepare_x11_socket_directory(
+            "/tmp/.X11-unix",
+            x11_socket_error)) {
+        fprintf(stderr, "%s\n", x11_socket_error);
+        goto release_lock;
+    }
     if (!nb_wsdisplay_recovery_store(&recovery_options,
                                      &state,
                                      recovery_error)) {

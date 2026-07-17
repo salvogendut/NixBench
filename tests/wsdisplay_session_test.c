@@ -1,6 +1,12 @@
+#define _POSIX_C_SOURCE 200809L
+
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "wsdisplay_session.h"
 
@@ -226,6 +232,41 @@ static void test_core_paths(void)
         "/session", NULL, NULL, error));
 }
 
+static void test_x11_socket_directory(void)
+{
+    char parent[] = "/tmp/nixbench-x11-socket-XXXXXX";
+    char path[NB_WSDISPLAY_SESSION_PATH_CAPACITY];
+    char error[NB_WSDISPLAY_SESSION_ERROR_CAPACITY];
+    struct stat status;
+    int length;
+
+    CHECK(mkdtemp(parent) != NULL);
+    length = snprintf(path, sizeof(path), "%s/.X11-unix", parent);
+    CHECK(length > 0 && (size_t)length < sizeof(path));
+    CHECK(nb_wsdisplay_session_prepare_x11_socket_directory(path, error));
+    CHECK(lstat(path, &status) == 0);
+    CHECK(S_ISDIR(status.st_mode));
+    CHECK(status.st_uid == geteuid());
+    CHECK((status.st_mode & 07777) == 01777);
+    CHECK(nb_wsdisplay_session_prepare_x11_socket_directory(path, error));
+    CHECK(rmdir(path) == 0);
+
+    CHECK(mkdir(path, 0700) == 0);
+    CHECK(!nb_wsdisplay_session_prepare_x11_socket_directory(path, error));
+    CHECK(error[0] != '\0');
+    CHECK(rmdir(path) == 0);
+
+    CHECK(symlink("/tmp", path) == 0);
+    CHECK(!nb_wsdisplay_session_prepare_x11_socket_directory(path, error));
+    CHECK(error[0] != '\0');
+    CHECK(unlink(path) == 0);
+
+    CHECK(rmdir(parent) == 0);
+    CHECK(!nb_wsdisplay_session_prepare_x11_socket_directory(NULL, error));
+    CHECK(!nb_wsdisplay_session_prepare_x11_socket_directory("relative",
+                                                             error));
+}
+
 static void test_sigterm_gate(void)
 {
     struct nb_wsdisplay_session_sigterm_gate gate = {
@@ -350,6 +391,7 @@ int main(void)
     test_actions();
     test_rejections();
     test_core_paths();
+    test_x11_socket_directory();
     test_sigterm_gate();
     test_core_failure_gate();
     test_frame_completion_across_vt_cycles();

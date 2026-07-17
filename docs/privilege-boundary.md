@@ -34,6 +34,14 @@ fixed depth bound. The sentinel does not follow symbolic links, cross a mount
 boundary, or accept directories owned by another user. Device-free tests
 exercise the split, heartbeat timeout, nested sentinel cleanup, and exact
 crash/hang gate policy.
+
+When rootless Xwayland is requested, the root supervisor prepares the standard
+`/tmp/.X11-unix` socket directory before it stores a recovery record or changes
+the console. The retained-parent-descriptor check requires both `/tmp` and the
+socket directory to be owned by root, rejects symbolic links and non-sticky
+writable parents, and accepts an existing socket directory only with mode
+`01777`. The ordinary-user core and Xwayland process cannot create or repair
+this global directory.
 Physical takeover, normal exit, VT 1 -> 2 -> 1, and supervised-SIGTERM recovery
 have completed, and both physical core-failure gates now pass. The remaining
 failure-injection and repeated-session matrix is still pending, so this is not

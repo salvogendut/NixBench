@@ -101,6 +101,15 @@ bool nb_wsdisplay_session_derive_core_path(
     char destination[NB_WSDISPLAY_SESSION_PATH_CAPACITY],
     char error[NB_WSDISPLAY_SESSION_ERROR_CAPACITY]);
 
+/*
+ * Prepare the rootless Xwayland Unix-socket directory. The directory and its
+ * parent must be owned by the effective user. Existing directories are never
+ * repaired: an unsafe owner, type, or mode is rejected.
+ */
+bool nb_wsdisplay_session_prepare_x11_socket_directory(
+    const char *path,
+    char error[NB_WSDISPLAY_SESSION_ERROR_CAPACITY]);
+
 int nb_wsdisplay_session_run(
     const struct nb_wsdisplay_session_options *options);
 
