@@ -165,6 +165,25 @@ static void test_core_round_trips(void)
     CHECK(decoded.data.frame_begin.frame_bytes == sizeof(data));
 
     memset(&source, 0, sizeof(source));
+    source.type = NB_PRIVSEP_MESSAGE_FRAME_BEGIN;
+    source.data.frame_begin.generation = 8;
+    source.data.frame_begin.serial = 100;
+    source.data.frame_begin.frame_bytes = 16;
+    source.data.frame_begin.damage_x = 1;
+    source.data.frame_begin.damage_y = 2;
+    source.data.frame_begin.damage_width = 2;
+    source.data.frame_begin.damage_height = 2;
+    size = encode(NB_PRIVSEP_ENDPOINT_CORE, sequence, &source, wire);
+    CHECK(nb_privsep_parser_feed(&parser, wire, size, &consumed, &decoded) ==
+          NB_PRIVSEP_PARSE_MESSAGE);
+    CHECK(decoded.sequence == sequence++);
+    CHECK(decoded.data.frame_begin.frame_bytes == 16);
+    CHECK(decoded.data.frame_begin.damage_x == 1);
+    CHECK(decoded.data.frame_begin.damage_y == 2);
+    CHECK(decoded.data.frame_begin.damage_width == 2);
+    CHECK(decoded.data.frame_begin.damage_height == 2);
+
+    memset(&source, 0, sizeof(source));
     source.type = NB_PRIVSEP_MESSAGE_FRAME_DATA;
     source.data.frame_data.generation = 8;
     source.data.frame_data.serial = 99;

@@ -30,10 +30,12 @@ enum nb_host_pixel_format {
 };
 
 /*
- * A complete software-composited frame. Pixels are borrowed only for the
- * duration of nb_host_present(). Accepted serial numbers are nonzero and
- * strictly increasing for the lifetime of a host; an unaccepted serial may be
- * retried. Stride is measured in bytes.
+ * A retained software-composited frame. Pixels are borrowed only for the
+ * duration of nb_host_present(). The damage rectangle selects pixels changed
+ * since the prior accepted frame; the first frame after creation or resume is
+ * complete. Accepted serial numbers are nonzero and strictly increasing for
+ * the lifetime of a host; an unaccepted serial may be retried. Stride is
+ * measured in bytes.
  */
 struct nb_host_frame {
     const void *pixels;
@@ -42,6 +44,15 @@ struct nb_host_frame {
     size_t stride;
     enum nb_host_pixel_format format;
     uint64_t serial;
+    /*
+     * A zero-sized damage rectangle means the complete frame. Otherwise the
+     * rectangle is validated inside the frame and only those pixels need to
+     * be transferred or copied to the output.
+     */
+    int damage_x;
+    int damage_y;
+    int damage_width;
+    int damage_height;
 };
 
 enum nb_host_pointer_button {
@@ -129,6 +140,11 @@ struct nb_host;
 
 bool nb_host_output_is_valid(const struct nb_host_output *output);
 bool nb_host_frame_is_valid(const struct nb_host_frame *frame);
+bool nb_host_frame_damage(const struct nb_host_frame *frame,
+                          int *x,
+                          int *y,
+                          int *width,
+                          int *height);
 bool nb_host_event_is_valid(const struct nb_host_event *event);
 
 bool nb_host_get_output(const struct nb_host *host,

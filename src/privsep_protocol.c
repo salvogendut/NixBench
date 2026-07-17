@@ -8,7 +8,7 @@ enum {
     OUTPUT_PAYLOAD_SIZE = 32,
     READY_PAYLOAD_SIZE = 40,
     SUSPEND_PAYLOAD_SIZE = 24,
-    FRAME_BEGIN_PAYLOAD_SIZE = 24,
+    FRAME_BEGIN_PAYLOAD_SIZE = 40,
     FRAME_REFERENCE_PAYLOAD_SIZE = 16,
     POINTER_MOTION_PAYLOAD_SIZE = 24,
     POINTER_BUTTON_PAYLOAD_SIZE = 32,
@@ -170,6 +170,7 @@ bool nb_privsep_message_is_valid(
     const struct nb_privsep_message *message)
 {
     uint64_t data_end;
+    uint64_t damage_bytes;
 
     if (!nb_privsep_endpoint_is_valid(sender) || message == NULL ||
         !message_type_is_from(message->type, sender)) {
@@ -180,11 +181,39 @@ bool nb_privsep_message_is_valid(
     case NB_PRIVSEP_MESSAGE_CORE_HELLO:
         return message->data.credentials.process_id != 0;
     case NB_PRIVSEP_MESSAGE_FRAME_BEGIN:
-        return message->data.frame_begin.generation != 0 &&
-               message->data.frame_begin.serial != 0 &&
-               message->data.frame_begin.frame_bytes != 0 &&
-               message->data.frame_begin.frame_bytes <=
-                   NB_PRIVSEP_MAX_FRAME_BYTES;
+        if (message->data.frame_begin.generation == 0 ||
+            message->data.frame_begin.serial == 0 ||
+            message->data.frame_begin.frame_bytes == 0 ||
+            message->data.frame_begin.frame_bytes >
+                NB_PRIVSEP_MAX_FRAME_BYTES ||
+            ((message->data.frame_begin.damage_width == 0) !=
+             (message->data.frame_begin.damage_height == 0))) {
+            return false;
+        }
+        if (message->data.frame_begin.damage_width == 0) {
+            return message->data.frame_begin.damage_x == 0 &&
+                   message->data.frame_begin.damage_y == 0;
+        }
+        if (message->data.frame_begin.damage_x >=
+                NB_PRIVSEP_MAX_OUTPUT_DIMENSION ||
+            message->data.frame_begin.damage_y >=
+                NB_PRIVSEP_MAX_OUTPUT_DIMENSION ||
+            message->data.frame_begin.damage_width >
+                NB_PRIVSEP_MAX_OUTPUT_DIMENSION ||
+            message->data.frame_begin.damage_height >
+                NB_PRIVSEP_MAX_OUTPUT_DIMENSION ||
+            message->data.frame_begin.damage_width >
+                NB_PRIVSEP_MAX_OUTPUT_DIMENSION -
+                    message->data.frame_begin.damage_x ||
+            message->data.frame_begin.damage_height >
+                NB_PRIVSEP_MAX_OUTPUT_DIMENSION -
+                    message->data.frame_begin.damage_y) {
+            return false;
+        }
+        damage_bytes =
+            (uint64_t)message->data.frame_begin.damage_width *
+            (uint64_t)message->data.frame_begin.damage_height * UINT64_C(4);
+        return damage_bytes == message->data.frame_begin.frame_bytes;
     case NB_PRIVSEP_MESSAGE_FRAME_DATA:
         if (message->data.frame_data.generation == 0 ||
             message->data.frame_data.serial == 0 ||
@@ -353,7 +382,11 @@ static void encode_payload(const struct nb_privsep_message *message,
         store_u64(payload, message->data.frame_begin.generation);
         store_u64(payload + 8, message->data.frame_begin.serial);
         store_u32(payload + 16, message->data.frame_begin.frame_bytes);
-        store_u32(payload + 20, 0);
+        store_u32(payload + 20, message->data.frame_begin.damage_x);
+        store_u32(payload + 24, message->data.frame_begin.damage_y);
+        store_u32(payload + 28, message->data.frame_begin.damage_width);
+        store_u32(payload + 32, message->data.frame_begin.damage_height);
+        store_u32(payload + 36, 0);
         break;
     case NB_PRIVSEP_MESSAGE_FRAME_DATA:
         store_u64(payload, message->data.frame_data.generation);
@@ -487,12 +520,16 @@ static bool decode_payload(enum nb_privsep_message_type type,
         message->data.credentials.saved_group_id = load_u32(payload + 24);
         break;
     case NB_PRIVSEP_MESSAGE_FRAME_BEGIN:
-        if (load_u32(payload + 20) != 0) {
+        if (load_u32(payload + 36) != 0) {
             return false;
         }
         message->data.frame_begin.generation = load_u64(payload);
         message->data.frame_begin.serial = load_u64(payload + 8);
         message->data.frame_begin.frame_bytes = load_u32(payload + 16);
+        message->data.frame_begin.damage_x = load_u32(payload + 20);
+        message->data.frame_begin.damage_y = load_u32(payload + 24);
+        message->data.frame_begin.damage_width = load_u32(payload + 28);
+        message->data.frame_begin.damage_height = load_u32(payload + 32);
         break;
     case NB_PRIVSEP_MESSAGE_FRAME_DATA:
         message->data.frame_data.generation = load_u64(payload);

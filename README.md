@@ -671,8 +671,10 @@ mode `01777` before takeover; unsafe pre-existing paths are rejected rather
 than repaired. The standalone core paces frame callbacks and presentation to
 the output refresh interval; wsdisplay uses a 17 ms fallback because dumb
 framebuffer output does not report a refresh rate. Client redraws arriving
-inside one interval are coalesced into the next complete desktop frame. Once
-the core and application process group are gone, the
+inside one interval are coalesced, clipped to their affected NixBench windows,
+and transported as validated packed damage rectangles. The privileged helper
+retains the last complete frame and copies only those changed pixels to the
+framebuffer. Once the core and application process group are gone, the
 worker asks the ordinary-user sentinel to remove the bounded, user-owned
 runtime subtree and its directory. The descriptor-relative traversal never
 follows symbolic links, never crosses to another filesystem, and rejects

@@ -27,6 +27,7 @@ struct nb_privsep_helper {
     void *present_data;
     unsigned char *staging;
     size_t staging_size;
+    bool staging_valid;
 
     unsigned char outbound[NB_PRIVSEP_HELPER_OUTBOUND_CAPACITY];
     size_t outbound_head;
@@ -50,6 +51,10 @@ struct nb_privsep_helper {
     uint64_t frame_serial;
     uint32_t frame_expected;
     uint32_t frame_received;
+    uint32_t frame_damage_x;
+    uint32_t frame_damage_y;
+    uint32_t frame_damage_width;
+    uint32_t frame_damage_height;
 
     bool presentation_pending;
     uint64_t presentation_generation;
@@ -258,17 +263,44 @@ static void clear_frame(struct nb_privsep_helper *helper)
     helper->frame_serial = 0;
     helper->frame_expected = 0;
     helper->frame_received = 0;
+    helper->frame_damage_x = 0;
+    helper->frame_damage_y = 0;
+    helper->frame_damage_width = 0;
+    helper->frame_damage_height = 0;
 }
 
 static bool handle_frame_begin(struct nb_privsep_helper *helper,
                                const struct nb_privsep_frame_begin *begin)
 {
+    uint32_t damage_x = begin->damage_x;
+    uint32_t damage_y = begin->damage_y;
+    uint32_t damage_width = begin->damage_width;
+    uint32_t damage_height = begin->damage_height;
+    uint64_t expected;
+
+    if (damage_width == 0 && damage_height == 0) {
+        damage_x = 0;
+        damage_y = 0;
+        damage_width = helper->output.pixel_width;
+        damage_height = helper->output.pixel_height;
+    }
+    expected = (uint64_t)damage_width * (uint64_t)damage_height *
+               UINT64_C(4);
     if (!helper->ready_sent || helper->frame_open ||
         helper->presentation_pending ||
         begin->generation != helper->generation ||
         helper->suspended ||
         begin->serial <= helper->last_submitted_serial ||
-        begin->frame_bytes != helper->output.frame_bytes) {
+        damage_x >= helper->output.pixel_width ||
+        damage_y >= helper->output.pixel_height ||
+        damage_width == 0 || damage_height == 0 ||
+        damage_width > helper->output.pixel_width - damage_x ||
+        damage_height > helper->output.pixel_height - damage_y ||
+        expected != begin->frame_bytes ||
+        (!helper->staging_valid &&
+         (damage_x != 0 || damage_y != 0 ||
+          damage_width != helper->output.pixel_width ||
+          damage_height != helper->output.pixel_height))) {
         return fail_helper(helper,
                            NB_PRIVSEP_HELPER_ERROR_PROTOCOL,
                            NB_PRIVSEP_FATAL_PROTOCOL,
@@ -281,6 +313,10 @@ static bool handle_frame_begin(struct nb_privsep_helper *helper,
     helper->frame_serial = begin->serial;
     helper->frame_expected = begin->frame_bytes;
     helper->frame_received = 0;
+    helper->frame_damage_x = damage_x;
+    helper->frame_damage_y = damage_y;
+    helper->frame_damage_width = damage_width;
+    helper->frame_damage_height = damage_height;
     return true;
 }
 
@@ -308,16 +344,39 @@ static bool handle_frame_data(struct nb_privsep_helper *helper,
                            "FRAME_DATA exceeds declared frame size");
     }
     if (!helper->frame_stale) {
-        if (end > helper->staging_size) {
-            return fail_helper(helper,
-                               NB_PRIVSEP_HELPER_ERROR_PROTOCOL,
-                               NB_PRIVSEP_FATAL_PROTOCOL,
-                               0,
-                               "FRAME_DATA exceeds trusted output size");
+        const size_t damage_stride =
+            (size_t)helper->frame_damage_width * 4U;
+        size_t source_offset = 0;
+        size_t packed_offset = helper->frame_received;
+
+        while (source_offset < data->size) {
+            const size_t row = packed_offset / damage_stride;
+            const size_t row_offset = packed_offset % damage_stride;
+            const size_t available = damage_stride - row_offset;
+            const size_t remaining = data->size - source_offset;
+            const size_t amount = remaining < available
+                                      ? remaining
+                                      : available;
+            const size_t destination_offset =
+                ((size_t)helper->frame_damage_y + row) *
+                    helper->output.stride +
+                (size_t)helper->frame_damage_x * 4U + row_offset;
+
+            if (destination_offset > helper->staging_size ||
+                amount > helper->staging_size - destination_offset) {
+                return fail_helper(
+                    helper,
+                    NB_PRIVSEP_HELPER_ERROR_PROTOCOL,
+                    NB_PRIVSEP_FATAL_PROTOCOL,
+                    0,
+                    "FRAME_DATA exceeds trusted output size");
+            }
+            memcpy(helper->staging + destination_offset,
+                   data->bytes + source_offset,
+                   amount);
+            source_offset += amount;
+            packed_offset += amount;
         }
-        memcpy(helper->staging + helper->frame_received,
-               data->bytes,
-               data->size);
     }
     helper->frame_received = (uint32_t)end;
     return true;
@@ -342,6 +401,7 @@ static bool handle_frame_reference(
     }
     stale = helper->frame_stale;
     if (type == NB_PRIVSEP_MESSAGE_FRAME_ABORT) {
+        helper->staging_valid = false;
         clear_frame(helper);
         return true;
     }
@@ -353,6 +413,7 @@ static bool handle_frame_reference(
                            "FRAME_COMMIT arrived before the complete frame");
     }
     if (stale) {
+        helper->staging_valid = false;
         clear_frame(helper);
         return true;
     }
@@ -364,6 +425,10 @@ static bool handle_frame_reference(
     frame.stride = helper->output.stride;
     frame.format = NB_HOST_PIXEL_FORMAT_XRGB8888;
     frame.serial = helper->frame_serial;
+    frame.damage_x = (int)helper->frame_damage_x;
+    frame.damage_y = (int)helper->frame_damage_y;
+    frame.damage_width = (int)helper->frame_damage_width;
+    frame.damage_height = (int)helper->frame_damage_height;
     if (!helper->present(helper->present_data,
                          helper->generation,
                          &frame)) {
@@ -377,6 +442,7 @@ static bool handle_frame_reference(
     helper->presentation_generation = helper->generation;
     helper->presentation_serial = helper->frame_serial;
     helper->last_submitted_serial = helper->frame_serial;
+    helper->staging_valid = true;
     clear_frame(helper);
     return true;
 }
@@ -739,6 +805,7 @@ bool nb_privsep_helper_suspend(struct nb_privsep_helper *helper,
     if (helper->frame_open) {
         helper->frame_stale = true;
     }
+    helper->staging_valid = false;
     ++helper->generation;
     helper->suspended = true;
     if (!helper->ready_sent) {
@@ -777,6 +844,7 @@ bool nb_privsep_helper_resume(struct nb_privsep_helper *helper,
         helper->staging_size = output->frame_bytes;
     }
     helper->output = *output;
+    helper->staging_valid = false;
     helper->suspended = false;
     if (!helper->hello_received) {
         return true;

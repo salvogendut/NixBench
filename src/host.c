@@ -25,6 +25,10 @@ bool nb_host_output_is_valid(const struct nb_host_output *output)
 bool nb_host_frame_is_valid(const struct nb_host_frame *frame)
 {
     size_t row_bytes;
+    int damage_x;
+    int damage_y;
+    int damage_width;
+    int damage_height;
 
     if (frame == NULL || frame->pixels == NULL || frame->width <= 0 ||
         frame->height <= 0 || frame->serial == 0 ||
@@ -36,7 +40,44 @@ bool nb_host_frame_is_valid(const struct nb_host_frame *frame)
     }
     row_bytes = (size_t)frame->width * NB_HOST_BYTES_PER_PIXEL;
     return frame->stride >= row_bytes &&
-           (size_t)frame->height <= SIZE_MAX / frame->stride;
+           (size_t)frame->height <= SIZE_MAX / frame->stride &&
+           nb_host_frame_damage(frame,
+                                &damage_x,
+                                &damage_y,
+                                &damage_width,
+                                &damage_height);
+}
+
+bool nb_host_frame_damage(const struct nb_host_frame *frame,
+                          int *x,
+                          int *y,
+                          int *width,
+                          int *height)
+{
+    if (frame == NULL || x == NULL || y == NULL || width == NULL ||
+        height == NULL || frame->width <= 0 || frame->height <= 0) {
+        return false;
+    }
+    if (frame->damage_width == 0 && frame->damage_height == 0) {
+        *x = 0;
+        *y = 0;
+        *width = frame->width;
+        *height = frame->height;
+        return true;
+    }
+    if (frame->damage_x < 0 || frame->damage_y < 0 ||
+        frame->damage_width <= 0 || frame->damage_height <= 0 ||
+        frame->damage_x >= frame->width ||
+        frame->damage_y >= frame->height ||
+        frame->damage_width > frame->width - frame->damage_x ||
+        frame->damage_height > frame->height - frame->damage_y) {
+        return false;
+    }
+    *x = frame->damage_x;
+    *y = frame->damage_y;
+    *width = frame->damage_width;
+    *height = frame->damage_height;
+    return true;
 }
 
 static bool xkb_key_name_is_valid(

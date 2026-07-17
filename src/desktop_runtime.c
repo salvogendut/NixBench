@@ -163,6 +163,8 @@ struct nb_desktop_runtime {
     bool pointer_visible;
     bool quit_requested;
     enum nb_desktop_launch_request pending_launch_request;
+    bool render_damage_valid;
+    struct nb_rect render_damage;
 };
 
 static void clear_update(struct nb_desktop_runtime_update *update)
@@ -256,6 +258,18 @@ static bool render_window_content(SDL_Renderer *renderer,
                                   void *context)
 {
     struct nb_desktop_runtime *runtime = context;
+    const bool outside_damage =
+        runtime->render_damage_valid &&
+        (content_rect.x >= runtime->render_damage.x +
+                               runtime->render_damage.width ||
+         content_rect.y >= runtime->render_damage.y +
+                               runtime->render_damage.height ||
+         runtime->render_damage.x >= content_rect.x + content_rect.width ||
+         runtime->render_damage.y >= content_rect.y + content_rect.height);
+
+    if (outside_damage) {
+        return true;
+    }
 
 #if NIXBENCH_HAS_WAYLAND
     if (runtime->wayland != NULL &&
@@ -1620,8 +1634,10 @@ bool nb_desktop_runtime_dispatch(
                          "Could not dispatch the nested Wayland display");
             return false;
         }
-        update->redraw =
-            nb_wayland_server_take_redraw(runtime->wayland);
+        update->redraw = nb_wayland_server_take_redraw_damage(
+            runtime->wayland,
+            &update->damage);
+        update->damage_valid = update->redraw;
     }
 #endif
     update->quit_requested = runtime->quit_requested;
@@ -1647,31 +1663,81 @@ bool nb_desktop_runtime_render(
     uint64_t serial,
     struct nb_host_frame *frame)
 {
+    return nb_desktop_runtime_render_damage(runtime,
+                                            clock_text,
+                                            serial,
+                                            NULL,
+                                            frame);
+}
+
+bool nb_desktop_runtime_render_damage(
+    struct nb_desktop_runtime *runtime,
+    const char *clock_text,
+    uint64_t serial,
+    const struct nb_rect *damage,
+    struct nb_host_frame *frame)
+{
     SDL_Renderer *renderer;
+    SDL_Rect clip;
+    bool rendered;
 
     if (runtime == NULL || clock_text == NULL || clock_text[0] == '\0' ||
         serial == 0 || frame == NULL) {
         return false;
     }
-    renderer = nb_software_canvas_renderer(runtime->canvas);
-    if (renderer == NULL ||
-        !nb_backdrop_cache_render(runtime->backdrop_cache,
-                                  renderer,
-                                  runtime->viewport,
-                                  &runtime->preferences) ||
-        !nb_shell_render_with_content(renderer,
-                                      &runtime->shell,
-                                      runtime->viewport,
-                                      clock_text,
-                                      render_window_content,
-                                      runtime) ||
-        (runtime->pointer_visible &&
-         !render_software_pointer(renderer,
-                                  runtime->pointer_x,
-                                  runtime->pointer_y))) {
+    if (damage != NULL &&
+        (damage->x < 0 || damage->y < 0 || damage->width <= 0 ||
+         damage->height <= 0 || damage->x >= runtime->viewport.width ||
+         damage->y >= runtime->viewport.height ||
+         damage->width > runtime->viewport.width - damage->x ||
+         damage->height > runtime->viewport.height - damage->y)) {
         return false;
     }
-    return nb_software_canvas_finish(runtime->canvas, serial, frame);
+    renderer = nb_software_canvas_renderer(runtime->canvas);
+    if (renderer == NULL) {
+        return false;
+    }
+    runtime->render_damage_valid = damage != NULL;
+    if (damage != NULL) {
+        runtime->render_damage = *damage;
+        clip = (SDL_Rect){damage->x,
+                          damage->y,
+                          damage->width,
+                          damage->height};
+        if (!SDL_SetRenderClipRect(renderer, &clip)) {
+            runtime->render_damage_valid = false;
+            return false;
+        }
+    }
+    rendered = nb_backdrop_cache_render(runtime->backdrop_cache,
+                                        renderer,
+                                        runtime->viewport,
+                                        &runtime->preferences) &&
+               nb_shell_render_with_content(renderer,
+                                            &runtime->shell,
+                                            runtime->viewport,
+                                            clock_text,
+                                            render_window_content,
+                                            runtime) &&
+               (!runtime->pointer_visible ||
+                render_software_pointer(renderer,
+                                        runtime->pointer_x,
+                                        runtime->pointer_y));
+    runtime->render_damage_valid = false;
+    if (damage != NULL && !SDL_SetRenderClipRect(renderer, NULL)) {
+        return false;
+    }
+    if (!rendered ||
+        !nb_software_canvas_finish(runtime->canvas, serial, frame)) {
+        return false;
+    }
+    if (damage != NULL) {
+        frame->damage_x = damage->x;
+        frame->damage_y = damage->y;
+        frame->damage_width = damage->width;
+        frame->damage_height = damage->height;
+    }
+    return true;
 }
 
 void nb_desktop_runtime_frame_presented(

@@ -232,6 +232,8 @@ struct nb_wayland_server {
     int output_refresh_millihertz;
     bool destroying;
     bool redraw_pending;
+    bool redraw_damage_valid;
+    struct nb_rect redraw_damage;
     struct nb_wayland_surface surfaces[NB_WAYLAND_MAX_SURFACES];
     unsigned int next_window_position;
     uint64_t next_popup_sequence;
@@ -911,10 +913,86 @@ static void advance_surface_revision(struct nb_wayland_surface *surface)
     }
 }
 
+static void mark_redraw_full(struct nb_wayland_server *server)
+{
+    if (server != NULL) {
+        server->redraw_pending = true;
+        server->redraw_damage_valid = false;
+        server->redraw_damage = (struct nb_rect){0, 0, 0, 0};
+    }
+}
+
+static void mark_redraw_rect(struct nb_wayland_server *server,
+                             struct nb_rect rect)
+{
+    int right;
+    int bottom;
+    int current_right;
+    int current_bottom;
+
+    if (server == NULL || rect.width <= 0 || rect.height <= 0 ||
+        server->output_width <= 0 || server->output_height <= 0) {
+        return;
+    }
+    if (rect.x < 0) {
+        rect.width += rect.x;
+        rect.x = 0;
+    }
+    if (rect.y < 0) {
+        rect.height += rect.y;
+        rect.y = 0;
+    }
+    if (rect.x >= server->output_width ||
+        rect.y >= server->output_height || rect.width <= 0 ||
+        rect.height <= 0) {
+        return;
+    }
+    if (rect.width > server->output_width - rect.x) {
+        rect.width = server->output_width - rect.x;
+    }
+    if (rect.height > server->output_height - rect.y) {
+        rect.height = server->output_height - rect.y;
+    }
+    if (server->redraw_pending && !server->redraw_damage_valid) {
+        /* An earlier unbounded shell change already requires a full frame. */
+        return;
+    }
+    if (!server->redraw_damage_valid) {
+        server->redraw_damage = rect;
+        server->redraw_damage_valid = true;
+        server->redraw_pending = true;
+        return;
+    }
+    right = rect.x + rect.width;
+    bottom = rect.y + rect.height;
+    current_right = server->redraw_damage.x +
+                    server->redraw_damage.width;
+    current_bottom = server->redraw_damage.y +
+                     server->redraw_damage.height;
+    if (rect.x < server->redraw_damage.x) {
+        server->redraw_damage.x = rect.x;
+    }
+    if (rect.y < server->redraw_damage.y) {
+        server->redraw_damage.y = rect.y;
+    }
+    if (right > current_right) {
+        current_right = right;
+    }
+    if (bottom > current_bottom) {
+        current_bottom = bottom;
+    }
+    server->redraw_damage.width =
+        current_right - server->redraw_damage.x;
+    server->redraw_damage.height =
+        current_bottom - server->redraw_damage.y;
+    server->redraw_pending = true;
+}
+
 static void surface_tree_changed(struct nb_wayland_surface *surface,
                                  bool root_revision_already_changed)
 {
     struct nb_wayland_surface *root = surface_root_toplevel(surface);
+    const struct nb_window *window;
 
     if (root == NULL) {
         return;
@@ -923,7 +1001,15 @@ static void surface_tree_changed(struct nb_wayland_surface *surface,
         advance_surface_revision(root);
     }
     refresh_toplevel_composite(root);
-    root->server->redraw_pending = true;
+    window = root->window != NB_WINDOW_ID_NONE
+                 ? nb_desktop_find_window(&root->server->shell->desktop,
+                                          root->window)
+                 : NULL;
+    if (window != NULL) {
+        mark_redraw_rect(root->server, window->frame);
+    } else {
+        mark_redraw_full(root->server);
+    }
 }
 
 static nb_menu_source_id application_menu_source_for_surface(
@@ -1599,7 +1685,7 @@ static void unmap_surface(struct nb_wayland_surface *surface,
         (void)nb_shell_destroy_window(surface->server->shell,
                                       surface->window);
         surface->window = NB_WINDOW_ID_NONE;
-        surface->server->redraw_pending = true;
+        mark_redraw_full(surface->server);
     }
 }
 
@@ -1934,7 +2020,7 @@ static void map_surface(struct nb_wayland_surface *surface)
         ++surface->server->next_window_position;
         (void)nb_shell_clamp_windows(surface->server->shell, viewport);
         surface_send_output_membership(surface, true);
-        surface->server->redraw_pending = true;
+        mark_redraw_full(surface->server);
     }
 }
 
@@ -4263,7 +4349,7 @@ static void application_menu_resource_destroyed(struct wl_resource *resource)
             menu_snapshot_reset(&surface->application_menu_snapshots[0]);
             menu_snapshot_reset(&surface->application_menu_snapshots[1]);
             if (surface->window != NB_WINDOW_ID_NONE) {
-                surface->server->redraw_pending = true;
+                mark_redraw_full(surface->server);
             }
         } else {
             surface->application_menu_committed = false;
@@ -4511,7 +4597,7 @@ static void application_menu_commit(struct wl_client *client,
     surface->application_menu_committed = true;
     menu->building = false;
     if (surface->window != NB_WINDOW_ID_NONE) {
-        surface->server->redraw_pending = true;
+        mark_redraw_full(surface->server);
     }
 }
 
@@ -5041,13 +5127,32 @@ bool nb_wayland_server_dispatch(struct nb_wayland_server *server)
 
 bool nb_wayland_server_take_redraw(struct nb_wayland_server *server)
 {
+    return nb_wayland_server_take_redraw_damage(server, NULL);
+}
+
+bool nb_wayland_server_take_redraw_damage(
+    struct nb_wayland_server *server,
+    struct nb_rect *damage)
+{
     bool redraw;
 
     if (server == NULL) {
         return false;
     }
     redraw = server->redraw_pending;
+    if (redraw && damage != NULL) {
+        if (server->redraw_damage_valid) {
+            *damage = server->redraw_damage;
+        } else {
+            *damage = (struct nb_rect){0,
+                                       0,
+                                       server->output_width,
+                                       server->output_height};
+        }
+    }
     server->redraw_pending = false;
+    server->redraw_damage_valid = false;
+    server->redraw_damage = (struct nb_rect){0, 0, 0, 0};
     return redraw;
 }
 
@@ -5065,7 +5170,7 @@ bool nb_wayland_server_set_output_size(struct nb_wayland_server *server,
     }
     server->output_width = width;
     server->output_height = height;
-    server->redraw_pending = true;
+    mark_redraw_full(server);
     wl_list_for_each(output, &server->output_resources, link) {
         wl_output_send_mode(output->resource,
                             WL_OUTPUT_MODE_CURRENT |
@@ -5275,7 +5380,7 @@ static bool associate_xwayland_surface(
                                         surface->app_id)) {
         return false;
     }
-    server->redraw_pending = true;
+    mark_redraw_full(server);
     return true;
 }
 
@@ -5355,7 +5460,7 @@ bool nb_wayland_server_update_xwayland_identity(
                                          surface->app_id))) {
         return false;
     }
-    server->redraw_pending = true;
+    mark_redraw_full(server);
     return true;
 }
 
@@ -5763,7 +5868,7 @@ bool nb_wayland_server_window_resized(struct nb_wayland_server *server,
         send_toplevel_configure(surface, desired_width, desired_height);
         wl_display_flush_clients(server->display);
     }
-    server->redraw_pending = true;
+    mark_redraw_full(server);
     return true;
 }
 

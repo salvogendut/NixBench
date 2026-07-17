@@ -277,6 +277,39 @@ static void test_host_proxy(void)
     CHECK(event.type == NB_HOST_EVENT_FRAME_COMPLETE);
     CHECK(event.data.frame_complete.frame_serial == 1);
 
+    frame.serial = 2;
+    frame.damage_x = 1;
+    frame.damage_y = 0;
+    frame.damage_width = 1;
+    frame.damage_height = 2;
+    CHECK(nb_host_present(host, &frame) == NB_HOST_RESULT_OK);
+    CHECK(nb_host_poll_event(host, &event) == NB_HOST_EVENT_STATUS_EMPTY);
+    CHECK(receive_core_message(sockets[1], &reader, &message));
+    CHECK(message.type == NB_PRIVSEP_MESSAGE_FRAME_BEGIN);
+    CHECK(message.data.frame_begin.serial == 2);
+    CHECK(message.data.frame_begin.frame_bytes == 8);
+    CHECK(message.data.frame_begin.damage_x == 1);
+    CHECK(message.data.frame_begin.damage_y == 0);
+    CHECK(message.data.frame_begin.damage_width == 1);
+    CHECK(message.data.frame_begin.damage_height == 2);
+    CHECK(receive_core_message(sockets[1], &reader, &message));
+    CHECK(message.type == NB_PRIVSEP_MESSAGE_FRAME_DATA);
+    CHECK(message.data.frame_data.size == 8);
+    CHECK(memcmp(message.data.frame_data.bytes, source + 4, 4) == 0);
+    CHECK(memcmp(message.data.frame_data.bytes + 4, source + 20, 4) == 0);
+    CHECK(receive_core_message(sockets[1], &reader, &message));
+    CHECK(message.type == NB_PRIVSEP_MESSAGE_FRAME_COMMIT);
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_FRAME_COMPLETE;
+    message.data.frame_complete.generation = 1;
+    message.data.frame_complete.serial = 2;
+    message.data.frame_complete.milliseconds = 26;
+    CHECK(send_helper_message(sockets[1], helper_sequence++, &message));
+    CHECK(nb_host_wait_event(host, 1000, &event) ==
+          NB_HOST_EVENT_STATUS_AVAILABLE);
+    CHECK(event.type == NB_HOST_EVENT_FRAME_COMPLETE);
+    CHECK(event.data.frame_complete.frame_serial == 2);
+
     memset(&message, 0, sizeof(message));
     message.type = NB_PRIVSEP_MESSAGE_PING;
     message.data.token = UINT64_C(0x1122334455667788);

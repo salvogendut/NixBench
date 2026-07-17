@@ -79,6 +79,7 @@ static void test_sdl_host(void)
         for (index = 0; index < pixel_count; ++index) {
             pixels[index] = UINT32_C(0xff18364c);
         }
+        memset(&frame, 0, sizeof(frame));
         frame.pixels = pixels;
         frame.width = output.pixel_width;
         frame.height = output.pixel_height;

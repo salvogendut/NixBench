@@ -539,11 +539,14 @@ invoking user's home-directory and group access.
 The standalone core applies an explicit presentation deadline before it
 completes client frame callbacks. Backends with a known refresh rate determine
 the interval; NetBSD wsdisplay uses a 17 ms fallback because dumb framebuffer
-mode does not report one. Multiple client commits and desktop changes inside
-that interval are coalesced into one complete canonical frame. This prevents
-unthrottled Xwayland animation from turning the synchronous software renderer
-and framebuffer copy into a maximum-throughput loop while preserving the
-existing complete-frame privilege-separation contract.
+mode does not report one. Multiple client commits inside that interval are
+coalesced, software composition is clipped to their affected desktop windows,
+and protocol version two transports only packed, bounds-checked damage rows.
+The helper owns the retained complete frame, rejects partial damage until a
+complete frame has initialized it after startup or VT acquire, and copies only
+the damaged rectangle into framebuffer memory. This prevents animated
+Xwayland clients from turning a small window update into continuous
+full-desktop rendering and copying without weakening privilege separation.
 
 The ordinary-user core also owns a bounded multi-application process table.
 The global **Applications** menu launches NixClock from beside the core and

@@ -105,6 +105,10 @@ bool nb_wayland_server_dispatch(struct nb_wayland_server *server);
  * render and present one new frame. Idle dispatch never sets this latch.
  */
 bool nb_wayland_server_take_redraw(struct nb_wayland_server *server);
+/* Consume redraw and return its desktop damage; unknown changes are full. */
+bool nb_wayland_server_take_redraw_damage(
+    struct nb_wayland_server *server,
+    struct nb_rect *damage);
 /* Update the single logical output; unchanged sizes are accepted silently. */
 bool nb_wayland_server_set_output_size(struct nb_wayland_server *server,
                                        int width,

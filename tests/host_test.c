@@ -59,7 +59,8 @@ static void test_contract_validation(void)
         3,
         4 * sizeof(uint32_t),
         NB_HOST_PIXEL_FORMAT_XRGB8888,
-        1
+        1,
+        0, 0, 0, 0
     };
     struct nb_host_event event = focus_event(true, 1);
 
@@ -81,6 +82,20 @@ static void test_contract_validation(void)
     frame.stride = 4 * sizeof(uint32_t);
     frame.format = (enum nb_host_pixel_format)99;
     CHECK(!nb_host_frame_is_valid(&frame));
+    frame.format = NB_HOST_PIXEL_FORMAT_XRGB8888;
+    frame.damage_x = 1;
+    frame.damage_y = 1;
+    frame.damage_width = 2;
+    frame.damage_height = 1;
+    CHECK(nb_host_frame_is_valid(&frame));
+    frame.damage_width = 4;
+    CHECK(!nb_host_frame_is_valid(&frame));
+    frame.damage_width = 0;
+    CHECK(!nb_host_frame_is_valid(&frame));
+    frame.damage_height = 0;
+    frame.damage_x = 0;
+    frame.damage_y = 0;
+    CHECK(nb_host_frame_is_valid(&frame));
 
     CHECK(nb_host_event_is_valid(&event));
     event.type = NB_HOST_EVENT_NONE;
@@ -163,7 +178,8 @@ static void test_event_fifo_and_capacity(void)
         3,
         4 * sizeof(uint32_t),
         NB_HOST_PIXEL_FORMAT_XRGB8888,
-        1
+        1,
+        0, 0, 0, 0
     };
     size_t index;
 
@@ -245,7 +261,8 @@ static void test_present_copy_and_completion(void)
         3,
         sizeof(source[0]),
         NB_HOST_PIXEL_FORMAT_ARGB8888_PREMULTIPLIED,
-        7
+        7,
+        0, 0, 0, 0
     };
     struct nb_host_frame presented;
     struct nb_host_event event;
@@ -314,7 +331,8 @@ static void test_console_release_acquire_and_retry(void)
         3,
         4 * sizeof(uint32_t),
         NB_HOST_PIXEL_FORMAT_XRGB8888,
-        1
+        1,
+        0, 0, 0, 0
     };
     struct nb_host_event event;
     const struct nb_host_event queued_input = focus_event(false, 50);
@@ -381,7 +399,8 @@ static void test_lifecycle_priority_preserves_critical_events(void)
         3,
         4 * sizeof(uint32_t),
         NB_HOST_PIXEL_FORMAT_XRGB8888,
-        9
+        9,
+        0, 0, 0, 0
     };
     size_t index;
 
@@ -426,7 +445,8 @@ static void test_output_change_during_suspend(void)
         4,
         5 * sizeof(uint32_t),
         NB_HOST_PIXEL_FORMAT_XRGB8888,
-        1
+        1,
+        0, 0, 0, 0
     };
 
     CHECK(host != NULL);

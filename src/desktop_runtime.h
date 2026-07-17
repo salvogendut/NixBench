@@ -42,6 +42,8 @@ struct nb_desktop_runtime_options {
 
 struct nb_desktop_runtime_update {
     bool redraw;
+    bool damage_valid;
+    struct nb_rect damage;
     bool quit_requested;
     enum nb_desktop_launch_request launch_request;
     bool preferences_changed;
@@ -117,13 +119,20 @@ int nb_desktop_runtime_event_descriptor(
     const struct nb_desktop_runtime *runtime);
 
 /*
- * Render a complete canonical frame. Pixels are borrowed from the runtime
- * until its next render, output change, or destruction.
+ * Render the canonical retained frame. The basic entry point redraws all of
+ * it; render_damage clips composition and annotates the returned host frame.
+ * Pixels are borrowed until the next render, output change, or destruction.
  */
 bool nb_desktop_runtime_render(
     struct nb_desktop_runtime *runtime,
     const char *clock_text,
     uint64_t serial,
+    struct nb_host_frame *frame);
+bool nb_desktop_runtime_render_damage(
+    struct nb_desktop_runtime *runtime,
+    const char *clock_text,
+    uint64_t serial,
+    const struct nb_rect *damage,
     struct nb_host_frame *frame);
 
 /* Notify optional compositor services only after an accepted frame completes. */

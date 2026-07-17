@@ -33,6 +33,10 @@ struct presentation_capture {
     int width;
     int height;
     size_t stride;
+    int damage_x;
+    int damage_y;
+    int damage_width;
+    int damage_height;
     unsigned int calls;
     bool succeed;
 };
@@ -57,6 +61,10 @@ static bool capture_present(void *data,
     capture->width = frame->width;
     capture->height = frame->height;
     capture->stride = frame->stride;
+    capture->damage_x = frame->damage_x;
+    capture->damage_y = frame->damage_y;
+    capture->damage_width = frame->damage_width;
+    capture->damage_height = frame->damage_height;
     capture->bytes = bytes;
     if (bytes <= sizeof(capture->pixels)) {
         memcpy(capture->pixels, frame->pixels, bytes);
@@ -321,6 +329,83 @@ static void test_frame_order_rejections(void)
     message.data.frame_data.bytes = &byte;
     CHECK(!send_core(&session, &message, 0));
     CHECK(nb_privsep_helper_failed(session.helper));
+    session_destroy(&session);
+}
+
+static void test_partial_frame_updates_staging(void)
+{
+    struct test_session session;
+    struct nb_privsep_message message = {0};
+    struct nb_privsep_message outbound;
+    unsigned char full[32];
+    unsigned char damage[16];
+    unsigned char expected[32];
+    size_t index;
+
+    for (index = 0; index < sizeof(full); ++index) {
+        full[index] = (unsigned char)index;
+    }
+    for (index = 0; index < sizeof(damage); ++index) {
+        damage[index] = (unsigned char)(200U + index);
+    }
+    memcpy(expected, full, sizeof(expected));
+    memcpy(expected + 4, damage, 8);
+    memcpy(expected + 20, damage + 8, 8);
+
+    CHECK(session_create(&session));
+    CHECK(send_hello(&session, 0));
+    CHECK(pop_outbound(&session, &outbound));
+
+    message.type = NB_PRIVSEP_MESSAGE_FRAME_BEGIN;
+    message.data.frame_begin.generation = 1;
+    message.data.frame_begin.serial = 1;
+    message.data.frame_begin.frame_bytes = sizeof(full);
+    CHECK(send_core(&session, &message, 0));
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_FRAME_DATA;
+    message.data.frame_data.generation = 1;
+    message.data.frame_data.serial = 1;
+    message.data.frame_data.size = sizeof(full);
+    message.data.frame_data.bytes = full;
+    CHECK(send_core(&session, &message, 0));
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_FRAME_COMMIT;
+    message.data.frame_reference.generation = 1;
+    message.data.frame_reference.serial = 1;
+    CHECK(send_core(&session, &message, 0));
+    CHECK(nb_privsep_helper_complete_frame(session.helper, 1, 1, 1));
+    CHECK(pop_outbound(&session, &outbound));
+
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_FRAME_BEGIN;
+    message.data.frame_begin.generation = 1;
+    message.data.frame_begin.serial = 2;
+    message.data.frame_begin.frame_bytes = sizeof(damage);
+    message.data.frame_begin.damage_x = 1;
+    message.data.frame_begin.damage_y = 0;
+    message.data.frame_begin.damage_width = 2;
+    message.data.frame_begin.damage_height = 2;
+    CHECK(send_core(&session, &message, 3));
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_FRAME_DATA;
+    message.data.frame_data.generation = 1;
+    message.data.frame_data.serial = 2;
+    message.data.frame_data.size = sizeof(damage);
+    message.data.frame_data.bytes = damage;
+    CHECK(send_core(&session, &message, 5));
+    memset(&message, 0, sizeof(message));
+    message.type = NB_PRIVSEP_MESSAGE_FRAME_COMMIT;
+    message.data.frame_reference.generation = 1;
+    message.data.frame_reference.serial = 2;
+    CHECK(send_core(&session, &message, 0));
+    CHECK(session.presentation.calls == 2);
+    CHECK(session.presentation.damage_x == 1);
+    CHECK(session.presentation.damage_y == 0);
+    CHECK(session.presentation.damage_width == 2);
+    CHECK(session.presentation.damage_height == 2);
+    CHECK(memcmp(session.presentation.pixels,
+                 expected,
+                 sizeof(expected)) == 0);
     session_destroy(&session);
 }
 
@@ -602,6 +687,7 @@ int main(void)
     test_bad_credentials_and_order();
     test_frame_and_completion();
     test_frame_order_rejections();
+    test_partial_frame_updates_staging();
     test_suspend_stale_drain_and_resume();
     test_input_heartbeat_and_shutdown();
     test_suspend_prioritizes_control();

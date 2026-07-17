@@ -53,6 +53,10 @@ struct nb_privsep_client_frame {
     unsigned char *pixels;
     size_t size;
     size_t offset;
+    uint32_t damage_x;
+    uint32_t damage_y;
+    uint32_t damage_width;
+    uint32_t damage_height;
     uint64_t generation;
     uint64_t serial;
     enum nb_privsep_client_frame_phase phase;
@@ -397,6 +401,11 @@ static bool stage_next_message(
         message.data.frame_begin.generation = context->frame.generation;
         message.data.frame_begin.serial = context->frame.serial;
         message.data.frame_begin.frame_bytes = (uint32_t)context->frame.size;
+        message.data.frame_begin.damage_x = context->frame.damage_x;
+        message.data.frame_begin.damage_y = context->frame.damage_y;
+        message.data.frame_begin.damage_width = context->frame.damage_width;
+        message.data.frame_begin.damage_height =
+            context->frame.damage_height;
         return stage_message(context,
                              &message,
                              NB_PRIVSEP_CLIENT_WIRE_FRAME_BEGIN);
@@ -1148,6 +1157,10 @@ static enum nb_host_result privsep_present(
     unsigned char *pixels;
     size_t row_size;
     size_t frame_size;
+    int damage_x;
+    int damage_y;
+    int damage_width;
+    int damage_height;
     int row;
 
     if (context->failed) {
@@ -1162,14 +1175,20 @@ static enum nb_host_result privsep_present(
     if (frame->format != NB_HOST_PIXEL_FORMAT_XRGB8888 ||
         frame->width != context->output.pixel_width ||
         frame->height != context->output.pixel_height ||
-        (size_t)frame->width > SIZE_MAX / NB_HOST_BYTES_PER_PIXEL) {
+        (size_t)frame->width > SIZE_MAX / NB_HOST_BYTES_PER_PIXEL ||
+        !nb_host_frame_damage(frame,
+                              &damage_x,
+                              &damage_y,
+                              &damage_width,
+                              &damage_height) ||
+        (size_t)damage_width > SIZE_MAX / NB_HOST_BYTES_PER_PIXEL) {
         return NB_HOST_RESULT_INVALID_ARGUMENT;
     }
-    row_size = (size_t)frame->width * NB_HOST_BYTES_PER_PIXEL;
-    if ((size_t)frame->height > SIZE_MAX / row_size) {
+    row_size = (size_t)damage_width * NB_HOST_BYTES_PER_PIXEL;
+    if ((size_t)damage_height > SIZE_MAX / row_size) {
         return NB_HOST_RESULT_INVALID_ARGUMENT;
     }
-    frame_size = row_size * (size_t)frame->height;
+    frame_size = row_size * (size_t)damage_height;
     if (frame_size == 0 || frame_size > NB_PRIVSEP_MAX_FRAME_BYTES) {
         return NB_HOST_RESULT_INVALID_ARGUMENT;
     }
@@ -1178,15 +1197,20 @@ static enum nb_host_result privsep_present(
         fail_client(context, "Could not copy a desktop frame", ENOMEM);
         return NB_HOST_RESULT_ERROR;
     }
-    for (row = 0; row < frame->height; ++row) {
+    for (row = 0; row < damage_height; ++row) {
         memcpy(pixels + (size_t)row * row_size,
                (const unsigned char *)frame->pixels +
-                   (size_t)row * frame->stride,
+                   ((size_t)damage_y + (size_t)row) * frame->stride +
+                   (size_t)damage_x * NB_HOST_BYTES_PER_PIXEL,
                row_size);
     }
     context->frame.pixels = pixels;
     context->frame.size = frame_size;
     context->frame.offset = 0;
+    context->frame.damage_x = (uint32_t)damage_x;
+    context->frame.damage_y = (uint32_t)damage_y;
+    context->frame.damage_width = (uint32_t)damage_width;
+    context->frame.damage_height = (uint32_t)damage_height;
     context->frame.generation = context->generation;
     context->frame.serial = frame->serial;
     context->frame.phase = NB_PRIVSEP_CLIENT_FRAME_BEGIN;

@@ -75,6 +75,8 @@ struct nb_session_core {
     struct nb_session_frame_pacing frame_pacing;
     uint64_t next_frame_serial;
     uint64_t pending_frame_serial;
+    bool redraw_damage_valid;
+    struct nb_rect redraw_damage;
     uint64_t shutdown_deadline;
     struct nb_session_application applications[NB_SESSION_CORE_MAX_APPLICATIONS];
     char program_directory[PATH_MAX];
@@ -800,7 +802,39 @@ static bool apply_runtime_update(
     const char *name = NULL;
     bool software_webkit = false;
 
-    core->redraw_needed = core->redraw_needed || update->redraw;
+    if (update->redraw) {
+        if (!core->redraw_needed) {
+            core->redraw_needed = true;
+            core->redraw_damage_valid = update->damage_valid;
+            core->redraw_damage = update->damage;
+        } else if (!update->damage_valid) {
+            core->redraw_damage_valid = false;
+        } else if (core->redraw_damage_valid) {
+            const int current_right = core->redraw_damage.x +
+                                      core->redraw_damage.width;
+            const int current_bottom = core->redraw_damage.y +
+                                       core->redraw_damage.height;
+            const int update_right = update->damage.x +
+                                     update->damage.width;
+            const int update_bottom = update->damage.y +
+                                      update->damage.height;
+            const int left = update->damage.x < core->redraw_damage.x
+                                 ? update->damage.x
+                                 : core->redraw_damage.x;
+            const int top = update->damage.y < core->redraw_damage.y
+                                ? update->damage.y
+                                : core->redraw_damage.y;
+            const int right = update_right > current_right
+                                  ? update_right
+                                  : current_right;
+            const int bottom = update_bottom > current_bottom
+                                   ? update_bottom
+                                   : current_bottom;
+
+            core->redraw_damage =
+                (struct nb_rect){left, top, right - left, bottom - top};
+        }
+    }
     if (update->preferences_changed) {
         char error[256];
 
@@ -896,6 +930,7 @@ static bool configure_output(struct nb_session_core *core,
     nb_session_frame_pacing_configure(&core->frame_pacing,
                                       output->refresh_millihertz);
     core->redraw_needed = true;
+    core->redraw_damage_valid = false;
     return true;
 }
 
@@ -919,10 +954,12 @@ static bool present_desktop(struct nb_session_core *core)
         fputs("Standalone desktop frame serial exhausted\n", stderr);
         return false;
     }
-    if (!nb_desktop_runtime_render(core->desktop,
-                                   core->clock_text,
-                                   core->next_frame_serial,
-                                   &frame)) {
+    if (!nb_desktop_runtime_render_damage(
+            core->desktop,
+            core->clock_text,
+            core->next_frame_serial,
+            core->redraw_damage_valid ? &core->redraw_damage : NULL,
+            &frame)) {
         fputs("Could not render the standalone desktop\n", stderr);
         return false;
     }
@@ -940,6 +977,7 @@ static bool present_desktop(struct nb_session_core *core)
     ++core->next_frame_serial;
     nb_session_frame_pacing_presented(&core->frame_pacing, started);
     core->redraw_needed = false;
+    core->redraw_damage_valid = false;
     return true;
 }
 
@@ -973,6 +1011,7 @@ static bool process_host_event(struct nb_session_core *core,
                                         event->milliseconds);
         core->pending_frame_serial = 0;
         core->redraw_needed = true;
+        core->redraw_damage_valid = false;
         result = nb_host_complete_console_release(core->host);
         if (result != NB_HOST_RESULT_OK) {
             report_host_error(core,
@@ -1152,6 +1191,7 @@ static void refresh_clock(struct nb_session_core *core)
         (void)memcpy(core->clock_text, current, sizeof(current));
         if (!core->shutdown_pending) {
             core->redraw_needed = true;
+            core->redraw_damage_valid = false;
         }
     }
 }

@@ -6,13 +6,13 @@
 #include <stdint.h>
 
 /*
- * Version-one helper/core messages use an inherited local byte stream.  All
- * control integers are big endian on the wire.  FRAME_DATA bytes are opaque;
- * for version one they contain tightly packed, native-endian XRGB8888 words.
+ * Version-two helper/core messages use an inherited local byte stream. All
+ * control integers are big endian on the wire. FRAME_DATA bytes are opaque;
+ * for version two they contain packed rows of native-endian XRGB8888 damage.
  */
 enum {
     NB_PRIVSEP_PROTOCOL_MAGIC = 0x4e425043,
-    NB_PRIVSEP_PROTOCOL_VERSION = 1,
+    NB_PRIVSEP_PROTOCOL_VERSION = 2,
     NB_PRIVSEP_HEADER_SIZE = 24,
     NB_PRIVSEP_FRAME_DATA_CAPACITY = 65536,
     NB_PRIVSEP_FRAME_DATA_PREFIX_SIZE = 24,
@@ -110,6 +110,10 @@ struct nb_privsep_frame_begin {
     uint64_t generation;
     uint64_t serial;
     uint32_t frame_bytes;
+    uint32_t damage_x;
+    uint32_t damage_y;
+    uint32_t damage_width;
+    uint32_t damage_height;
 };
 
 struct nb_privsep_frame_data {
