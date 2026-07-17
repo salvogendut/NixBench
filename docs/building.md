@@ -112,12 +112,14 @@ title bar, and use its close gadget to close it. Resize it using the gadget
 at the right end of its bottom decorator rail. The global top bar switches
 between the focused application's menus and the NixBench desktop menu. Click a
 menu and then an item, or press and drag directly to an item. F10 opens the
-keyboard menu path; use the arrow keys, Enter, and Escape to navigate or dismiss
-it. Escape exits NixBench when no menu is open and no Wayland client owns
-keyboard focus. The right end of the bar shows local time. Clicking the desktop
-clears the active window. Pass `--fullscreen` only for a hosted full-display
-preview. Close the outer host window to exit NixBench. Use `--help` to list all
-current options.
+keyboard menu path when the desktop or an internal NixBench window owns
+keyboard focus; a focused Wayland or Xwayland client receives F10 itself. Use
+the arrow keys, Enter, and Escape to navigate or dismiss an open menu. Escape
+exits NixBench when no menu is open and no Wayland client owns keyboard focus.
+The right end of the bar shows local time. Clicking the desktop clears the
+active window. Pass `--fullscreen` only for a hosted full-display preview.
+Close the outer host window to exit NixBench. Use `--help` to list all current
+options.
 
 The CMake configuration deliberately uses the system SDL3 package instead of
 downloading dependencies during the build. Direct X11 dependencies are not

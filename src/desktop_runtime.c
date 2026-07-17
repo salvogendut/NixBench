@@ -1180,6 +1180,22 @@ static bool menu_key_repeats(const char *key_name)
            strcmp(key_name, "LEFT") == 0;
 }
 
+static bool shell_handles_menu_toggle(
+    const struct nb_desktop_runtime *runtime,
+    const char *key_name)
+{
+    if (strcmp(key_name, "FK10") != 0) {
+        return false;
+    }
+#if NIXBENCH_HAS_WAYLAND
+    /* Ordinary keys belong to the focused client, including function keys. */
+    return !wayland_has_keyboard_target(runtime);
+#else
+    (void)runtime;
+    return true;
+#endif
+}
+
 #if NIXBENCH_HAS_WAYLAND
 static bool shell_key_is_captured(
     const struct nb_desktop_runtime *runtime,
@@ -1262,7 +1278,7 @@ static bool process_key_event(const struct nb_host_event *event,
 #endif
     }
 
-    menu_context = menu_open || strcmp(key_name, "FK10") == 0;
+    menu_context = menu_open || shell_handles_menu_toggle(runtime, key_name);
     if (menu_context && menu_key_for(key_name, &menu_key)) {
         const struct nb_shell_action action =
             nb_shell_menu_key_press(&runtime->shell, menu_key);

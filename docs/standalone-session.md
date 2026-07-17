@@ -110,6 +110,12 @@ session with bounded TERM/KILL escalation, and returns through the same
 verified console-restoration path, so it works while a client has focus or the
 core is unresponsive.
 
+Plain F1 through F12 keystrokes are not desktop-global shortcuts: NixBench
+delivers them to the focused Wayland or Xwayland application. F10 opens the
+global menu from the keyboard only while the desktop or an internal NixBench
+window owns keyboard focus. This keeps application bindings such as 1984's
+F4-through-F12 controls usable without weakening the privileged VT chords.
+
 This follows pkgsrc's standard `${LOCALBASE}` layout; `/usr/pkg` is the
 default prefix. The source-tree script remains the build-and-test development
 harness.

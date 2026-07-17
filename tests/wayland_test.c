@@ -175,6 +175,9 @@ struct client_state {
     uint32_t keyboard_key_a;
     uint32_t keyboard_key_left_shift;
     uint32_t keyboard_key_space;
+    uint32_t keyboard_key_f4;
+    uint32_t keyboard_key_f10;
+    uint32_t keyboard_key_f12;
     int32_t keyboard_repeat_rate;
     int32_t keyboard_repeat_delay;
     struct wl_surface *keyboard_enter_surface;
@@ -576,6 +579,9 @@ static void keyboard_keymap(void *data,
             xkb_keycode_t key_a;
             xkb_keycode_t key_left_shift;
             xkb_keycode_t key_space;
+            xkb_keycode_t key_f4;
+            xkb_keycode_t key_f10;
+            xkb_keycode_t key_f12;
 
             state->keyboard_keymap_has_header =
                 strstr(mapping, "xkb_keymap") != NULL;
@@ -597,14 +603,26 @@ static void keyboard_keymap(void *data,
                 key_left_shift =
                     xkb_keymap_key_by_name(keymap, "LFSH");
                 key_space = xkb_keymap_key_by_name(keymap, "SPCE");
+                key_f4 = xkb_keymap_key_by_name(keymap, "FK04");
+                key_f10 = xkb_keymap_key_by_name(keymap, "FK10");
+                key_f12 = xkb_keymap_key_by_name(keymap, "FK12");
                 if (key_a >= UINT32_C(8) &&
                     key_left_shift >= UINT32_C(8) &&
                     key_space >= UINT32_C(8) &&
+                    key_f4 >= UINT32_C(8) &&
+                    key_f10 >= UINT32_C(8) &&
+                    key_f12 >= UINT32_C(8) &&
                     key_a - UINT32_C(8) <
                         (xkb_keycode_t)KEYBOARD_KEY_CAPACITY &&
                     key_left_shift - UINT32_C(8) <
                         (xkb_keycode_t)KEYBOARD_KEY_CAPACITY &&
                     key_space - UINT32_C(8) <
+                        (xkb_keycode_t)KEYBOARD_KEY_CAPACITY &&
+                    key_f4 - UINT32_C(8) <
+                        (xkb_keycode_t)KEYBOARD_KEY_CAPACITY &&
+                    key_f10 - UINT32_C(8) <
+                        (xkb_keycode_t)KEYBOARD_KEY_CAPACITY &&
+                    key_f12 - UINT32_C(8) <
                         (xkb_keycode_t)KEYBOARD_KEY_CAPACITY) {
                     state->keyboard_key_a =
                         (uint32_t)(key_a - UINT32_C(8));
@@ -612,6 +630,12 @@ static void keyboard_keymap(void *data,
                         (uint32_t)(key_left_shift - UINT32_C(8));
                     state->keyboard_key_space =
                         (uint32_t)(key_space - UINT32_C(8));
+                    state->keyboard_key_f4 =
+                        (uint32_t)(key_f4 - UINT32_C(8));
+                    state->keyboard_key_f10 =
+                        (uint32_t)(key_f10 - UINT32_C(8));
+                    state->keyboard_key_f12 =
+                        (uint32_t)(key_f12 - UINT32_C(8));
                     state->keyboard_keycodes_valid = true;
                 }
                 xkb_state = state->keyboard_keycodes_valid
@@ -2268,6 +2292,43 @@ static void test_wayland_surface_lifecycle(void)
     REQUIRE(pump_barrier(server, display));
     CHECK(client.keyboard_enter_count == 3);
     CHECK(client.keyboard_enter_key_count == 0);
+
+    /* Plain function keys, including the shell's F10 fallback, reach clients. */
+    CHECK(nb_wayland_server_keyboard_key(server,
+                                          "FK04",
+                                          UINT32_C(1170),
+                                          true));
+    CHECK(nb_wayland_server_keyboard_key(server,
+                                          "FK04",
+                                          UINT32_C(1171),
+                                          false));
+    CHECK(nb_wayland_server_keyboard_key(server,
+                                          "FK10",
+                                          UINT32_C(1172),
+                                          true));
+    CHECK(nb_wayland_server_keyboard_key(server,
+                                          "FK10",
+                                          UINT32_C(1173),
+                                          false));
+    CHECK(nb_wayland_server_keyboard_key(server,
+                                          "FK12",
+                                          UINT32_C(1174),
+                                          true));
+    CHECK(nb_wayland_server_keyboard_key(server,
+                                          "FK12",
+                                          UINT32_C(1175),
+                                          false));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.keyboard_key_count == 16);
+    CHECK(client.keyboard_press_counts[client.keyboard_key_f4] == 1);
+    CHECK(client.keyboard_release_counts[client.keyboard_key_f4] == 1);
+    CHECK(client.keyboard_press_counts[client.keyboard_key_f10] == 1);
+    CHECK(client.keyboard_release_counts[client.keyboard_key_f10] == 1);
+    CHECK(client.keyboard_press_counts[client.keyboard_key_f12] == 1);
+    CHECK(client.keyboard_release_counts[client.keyboard_key_f12] == 1);
+    CHECK(client.keyboard_key == client.keyboard_key_f12);
+    CHECK(client.keyboard_key_state == WL_KEYBOARD_KEY_STATE_RELEASED);
+    CHECK(client.keyboard_time == UINT32_C(1175));
 
     nb_wayland_server_frame_presented(server, UINT32_C(4242));
     REQUIRE(pump_barrier(server, display));
