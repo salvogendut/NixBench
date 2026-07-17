@@ -38,6 +38,7 @@ struct nb_xwayland_window {
     uint32_t surface_id;
     bool occupied;
     bool associated;
+    bool association_pending_reported;
     char title[NB_WINDOW_TITLE_CAPACITY];
 };
 
@@ -339,6 +340,20 @@ static void try_associate_window(struct nb_xwayland_rootless *service,
         entry->surface_id,
         entry->window,
         entry->title);
+    if (entry->associated) {
+        fprintf(stderr,
+                "Rootless XWM associated X window %#x with Wayland "
+                "surface %u\n",
+                (unsigned int)entry->window,
+                entry->surface_id);
+    } else if (!entry->association_pending_reported) {
+        fprintf(stderr,
+                "Rootless XWM is waiting for Wayland surface %u for X "
+                "window %#x\n",
+                entry->surface_id,
+                (unsigned int)entry->window);
+        entry->association_pending_reported = true;
+    }
 }
 
 static bool configure_native_window(void *context,
@@ -404,6 +419,10 @@ static void handle_map_request(struct nb_xwayland_rootless *service,
                                  &event_mask);
     refresh_window_title(service, entry);
     xcb_map_window(service->connection, event->window);
+    fprintf(stderr,
+            "Rootless XWM accepted map request for X window %#x (%s)\n",
+            (unsigned int)event->window,
+            entry->title);
 }
 
 static void handle_configure_request(
@@ -930,6 +949,11 @@ bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service)
 
                 if (entry != NULL) {
                     entry->surface_id = message->data.data32[0];
+                    fprintf(stderr,
+                            "Rootless XWM received WL_SURFACE_ID %u for X "
+                            "window %#x\n",
+                            entry->surface_id,
+                            (unsigned int)entry->window);
                     try_associate_window(service, entry);
                 }
             }
