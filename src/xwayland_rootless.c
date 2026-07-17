@@ -445,24 +445,10 @@ static bool handle_map_request(struct nb_xwayland_rootless *service,
                                  XCB_CW_EVENT_MASK,
                                  &event_mask);
     refresh_window_title(service, entry);
-    /*
-     * Xwayland creates the wl_surface when Composite allocates the manual
-     * redirect pixmap.  In particular, NetBSD's Xwayland does not allocate
-     * that pixmap when RedirectWindow targets an unrealized window.  Map the
-     * WM-owned top-level first, then redirect the now-realized window so its
-     * SetWindowPixmap hook creates and publishes the Wayland surface.
-     */
     if (!checked_request_succeeded(
             service->connection,
             xcb_map_window_checked(service->connection, event->window),
-            "map an X11 top-level") ||
-        !checked_request_succeeded(
-            service->connection,
-            xcb_composite_redirect_window_checked(
-                service->connection,
-                event->window,
-                XCB_COMPOSITE_REDIRECT_MANUAL),
-            "redirect an X11 top-level")) {
+            "map an X11 top-level")) {
         return false;
     }
     fprintf(stderr,
@@ -470,6 +456,21 @@ static bool handle_map_request(struct nb_xwayland_rootless *service,
             (unsigned int)event->window,
             entry->title);
     return true;
+}
+
+static bool redirect_root_subwindows(struct nb_xwayland_rootless *service)
+{
+    if (service == NULL || service->connection == NULL ||
+        service->screen == NULL) {
+        return false;
+    }
+    return checked_request_succeeded(
+        service->connection,
+        xcb_composite_redirect_subwindows_checked(
+            service->connection,
+            service->screen->root,
+            XCB_COMPOSITE_REDIRECT_MANUAL),
+        "redirect X11 top-level pixels");
 }
 
 static void handle_configure_request(
@@ -557,7 +558,8 @@ static bool initialize_xwm(struct nb_xwayland_rootless *service)
                                                  service->screen->root,
                                                  XCB_CW_EVENT_MASK,
                                                  &root_event_mask),
-            "claim SubstructureRedirect on the X root")) {
+            "claim SubstructureRedirect on the X root") ||
+        !redirect_root_subwindows(service)) {
         return false;
     }
     service->wl_surface_id = intern_atom(service->connection,
