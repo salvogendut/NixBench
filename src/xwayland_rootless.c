@@ -429,7 +429,7 @@ static bool close_native_window(void *context, uint32_t xwindow)
     return xcb_flush(service->connection) > 0;
 }
 
-static void handle_map_request(struct nb_xwayland_rootless *service,
+static bool handle_map_request(struct nb_xwayland_rootless *service,
                                const xcb_map_request_event_t *event)
 {
     const uint32_t event_mask = XCB_EVENT_MASK_PROPERTY_CHANGE |
@@ -438,18 +438,31 @@ static void handle_map_request(struct nb_xwayland_rootless *service,
         remember_window(service, event->window);
 
     if (entry == NULL) {
-        return;
+        return false;
     }
     xcb_change_window_attributes(service->connection,
                                  event->window,
                                  XCB_CW_EVENT_MASK,
                                  &event_mask);
     refresh_window_title(service, entry);
-    xcb_map_window(service->connection, event->window);
+    if (!checked_request_succeeded(
+            service->connection,
+            xcb_composite_redirect_window_checked(
+                service->connection,
+                event->window,
+                XCB_COMPOSITE_REDIRECT_MANUAL),
+            "redirect an X11 top-level") ||
+        !checked_request_succeeded(
+            service->connection,
+            xcb_map_window_checked(service->connection, event->window),
+            "map an X11 top-level")) {
+        return false;
+    }
     fprintf(stderr,
             "Rootless XWM accepted map request for X window %#x (%s)\n",
             (unsigned int)event->window,
             entry->title);
+    return true;
 }
 
 static void handle_configure_request(
@@ -537,14 +550,7 @@ static bool initialize_xwm(struct nb_xwayland_rootless *service)
                                                  service->screen->root,
                                                  XCB_CW_EVENT_MASK,
                                                  &root_event_mask),
-            "claim SubstructureRedirect on the X root") ||
-        !checked_request_succeeded(
-            service->connection,
-            xcb_composite_redirect_subwindows_checked(
-                service->connection,
-                service->screen->root,
-                XCB_COMPOSITE_REDIRECT_MANUAL),
-            "redirect X11 top-level pixels")) {
+            "claim SubstructureRedirect on the X root")) {
         return false;
     }
     service->wl_surface_id = intern_atom(service->connection,
@@ -971,9 +977,12 @@ bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service)
 
         switch (type) {
         case XCB_MAP_REQUEST:
-            handle_map_request(
-                service,
-                (const xcb_map_request_event_t *)event);
+            if (!handle_map_request(
+                    service,
+                    (const xcb_map_request_event_t *)event)) {
+                free(event);
+                return false;
+            }
             break;
         case XCB_CONFIGURE_REQUEST:
             handle_configure_request(
