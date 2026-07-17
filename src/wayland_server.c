@@ -4781,7 +4781,15 @@ static void bind_xwayland_shell(struct wl_client *client,
                   (server->xwayland_client == NULL &&
                    ((process > 0 &&
                      process == server->xwayland_client_pid) ||
-                    (process <= 0 && user == geteuid()))));
+                    /*
+                     * NetBSD's local-socket credentials do not expose a
+                     * peer PID (and some libwayland builds also leave the
+                     * UID unset). The Wayland socket lives in a private
+                     * per-session directory, so consume the authorization
+                     * for its first binder and lock subsequent binds to that
+                     * exact wl_client.
+                     */
+                    process <= 0)));
     if (!authorized) {
         wl_resource_post_error(resource,
                                XWAYLAND_SHELL_V1_ERROR_ROLE,
