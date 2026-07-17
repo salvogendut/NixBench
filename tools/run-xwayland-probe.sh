@@ -76,7 +76,8 @@ cleanup()
 }
 trap cleanup EXIT INT TERM HUP
 
-echo "NixBench Xwayland probe: launching Xwayland on :$display_number" >&2
+echo "NixBench Xwayland probe: launching rootful Xwayland on :$display_number" >&2
+echo "NixBench Xwayland probe: forcing the Wayland shared-memory backend" >&2
 if [ "${NIXBENCH_TRACE_WAYLAND:-0}" = 1 ]; then
     WAYLAND_DEBUG=client
     export WAYLAND_DEBUG
@@ -84,7 +85,11 @@ if [ "${NIXBENCH_TRACE_WAYLAND:-0}" = 1 ]; then
 fi
 
 (
-    exec "$xwayland" ":$display_number" -ac -terminate -geometry 1024x640
+    exec "$xwayland" ":$display_number" \
+        -ac \
+        -terminate \
+        -geometry 1024x640 \
+        -shm
 ) &
 xwayland_pid=$!
 

@@ -257,9 +257,10 @@ and press Return to verify keyboard input and text rendering.
 EOF
     elif [ "${application##*/}" = run-xwayland-probe.sh ]; then
         cat <<EOF
-This probe starts Xwayland inside the NixBench Wayland session and then
-opens a native X11 client. If the window appears, press keys to verify input
-and use Escape or q to close it.
+This compatibility checkpoint starts one rootful, software-rendered Xwayland
+desktop inside a NixBench window, then opens a native X11 client within it.
+If the probe appears, press keys to verify input and use Escape or q to close
+it. Seamless per-application windows will follow in the rootless milestone.
 EOF
     fi
 else
