@@ -746,10 +746,15 @@ struct nb_xwayland_rootless *nb_xwayland_rootless_create(
     if (child == 0) {
         char listen_text[32];
         char wm_text[32];
+        const char *trace_wayland = getenv("NIXBENCH_TRACE_WAYLAND");
 
         (void)close(wm_sockets[0]);
         if (!set_close_on_exec(listen_descriptor, false) ||
             !set_close_on_exec(wm_sockets[1], false)) {
+            _exit(126);
+        }
+        if (trace_wayland != NULL && strcmp(trace_wayland, "1") == 0 &&
+            setenv("WAYLAND_DEBUG", "client", 1) != 0) {
             _exit(126);
         }
         (void)snprintf(listen_text,
