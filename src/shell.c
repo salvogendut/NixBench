@@ -76,39 +76,60 @@ static bool source_model_is_consistent(
 }
 
 static void set_visible_menu_model(struct nb_shell *shell,
-                                   const struct nb_menu_model *base)
+                                   const struct nb_menu_model *base,
+                                   const char *label_override)
 {
     const struct nb_menu_model *overlay = shell->menu_overlay_model;
     const struct nb_menu_model *visible = base;
+    const bool has_label_override =
+        label_override != NULL && label_override[0] != '\0';
     size_t base_count;
     size_t overlay_count;
     size_t index;
 
     shell->active_base_menu_model = base;
-    if (base == NULL || overlay == NULL || overlay->menus == NULL ||
-        overlay->menu_count == 0) {
+    if (base == NULL || base->menus == NULL || base->menu_count == 0) {
         nb_menu_set_model(&shell->menu, visible);
         return;
     }
     base_count = base->menu_count < NB_MENU_MAX_MENUS
                      ? base->menu_count
                      : NB_MENU_MAX_MENUS;
-    overlay_count = overlay->menu_count;
+    overlay_count = overlay != NULL && overlay->menus != NULL
+                        ? overlay->menu_count
+                        : 0;
+    if (!has_label_override && overlay_count == 0) {
+        nb_menu_set_model(&shell->menu, visible);
+        return;
+    }
     if (overlay_count > NB_MENU_MAX_MENUS - base_count) {
         overlay_count = NB_MENU_MAX_MENUS - base_count;
     }
     for (index = 0; index < base_count; ++index) {
         shell->composed_menus[index] = base->menus[index];
     }
+    if (has_label_override) {
+        shell->composed_menus[0].label = label_override;
+    }
     for (index = 0; index < overlay_count; ++index) {
         shell->composed_menus[base_count + index] = overlay->menus[index];
     }
-    if (overlay_count != 0) {
-        shell->composed_menu_model.menus = shell->composed_menus;
-        shell->composed_menu_model.menu_count = base_count + overlay_count;
-        visible = &shell->composed_menu_model;
-    }
+    shell->composed_menu_model.menus = shell->composed_menus;
+    shell->composed_menu_model.menu_count = base_count + overlay_count;
+    visible = &shell->composed_menu_model;
     nb_menu_set_model(&shell->menu, visible);
+}
+
+static const char *active_menu_label(const struct nb_shell *shell)
+{
+    const size_t binding_index =
+        find_binding(shell, shell->active_menu_window);
+
+    if (binding_index == NB_DESKTOP_MAX_WINDOWS ||
+        shell->menu_bindings[binding_index].menu_label[0] == '\0') {
+        return NULL;
+    }
+    return shell->menu_bindings[binding_index].menu_label;
 }
 
 static void sync_active_menu(struct nb_shell *shell)
@@ -118,18 +139,23 @@ static void sync_active_menu(struct nb_shell *shell)
     const size_t binding_index = find_binding(shell, active);
     nb_menu_source_id source = shell->desktop_menu_source;
     const struct nb_menu_model *model = shell->desktop_menu_model;
+    const char *label_override = NULL;
     nb_window_id context_window = NB_WINDOW_ID_NONE;
 
     if (binding_index < NB_DESKTOP_MAX_WINDOWS) {
         source = shell->menu_bindings[binding_index].menu_source;
         model = shell->menu_bindings[binding_index].menu_model;
+        if (shell->menu_bindings[binding_index].menu_label[0] != '\0') {
+            label_override =
+                shell->menu_bindings[binding_index].menu_label;
+        }
         context_window = active;
     }
 
     if (source != shell->active_menu_source ||
         shell->active_base_menu_model != model ||
         context_window != shell->active_menu_window) {
-        set_visible_menu_model(shell, model);
+        set_visible_menu_model(shell, model, label_override);
         shell->active_menu_source = source;
         shell->active_menu_window = context_window;
         if (shell->pointer_owner == NB_SHELL_POINTER_MENU) {
@@ -150,6 +176,7 @@ void nb_shell_init(struct nb_shell *shell,
         shell->menu_bindings[index].window = NB_WINDOW_ID_NONE;
         shell->menu_bindings[index].menu_source = NB_MENU_SOURCE_NONE;
         shell->menu_bindings[index].menu_model = NULL;
+        shell->menu_bindings[index].menu_label[0] = '\0';
     }
     shell->desktop_menu_source = desktop_menu_source;
     shell->desktop_menu_model = desktop_menu_model;
@@ -175,7 +202,9 @@ void nb_shell_set_menu_overlay(struct nb_shell *shell,
         return;
     }
     shell->menu_overlay_model = menu_overlay_model;
-    set_visible_menu_model(shell, shell->active_base_menu_model);
+    set_visible_menu_model(shell,
+                           shell->active_base_menu_model,
+                           active_menu_label(shell));
     if (shell->pointer_owner == NB_SHELL_POINTER_MENU) {
         shell->pointer_owner = NB_SHELL_POINTER_NONE;
     }
@@ -232,6 +261,7 @@ nb_window_id nb_shell_open_window(struct nb_shell *shell,
     shell->menu_bindings[binding_index].window = window;
     shell->menu_bindings[binding_index].menu_source = menu_source;
     shell->menu_bindings[binding_index].menu_model = menu_model;
+    shell->menu_bindings[binding_index].menu_label[0] = '\0';
     sync_active_menu(shell);
     return window;
 }
@@ -252,6 +282,7 @@ bool nb_shell_destroy_window(struct nb_shell *shell, nb_window_id id)
     shell->menu_bindings[binding_index].window = NB_WINDOW_ID_NONE;
     shell->menu_bindings[binding_index].menu_source = NB_MENU_SOURCE_NONE;
     shell->menu_bindings[binding_index].menu_model = NULL;
+    shell->menu_bindings[binding_index].menu_label[0] = '\0';
     if (shell->pointer_owner == NB_SHELL_POINTER_WINDOW &&
         !nb_desktop_has_pointer_interaction(&shell->desktop)) {
         shell->pointer_owner = NB_SHELL_POINTER_NONE;
@@ -435,7 +466,9 @@ bool nb_shell_update_menu_source(struct nb_shell *shell,
     }
 
     if (found && shell->active_menu_source == menu_source) {
-        set_visible_menu_model(shell, menu_model);
+        set_visible_menu_model(shell,
+                               menu_model,
+                               active_menu_label(shell));
         if (shell->pointer_owner == NB_SHELL_POINTER_MENU) {
             shell->pointer_owner = NB_SHELL_POINTER_NONE;
         }
@@ -464,7 +497,11 @@ bool nb_shell_update_window_menu(struct nb_shell *shell,
     binding->menu_source = menu_source;
     binding->menu_model = menu_model;
     if (nb_desktop_active_window_id(&shell->desktop) == window) {
-        set_visible_menu_model(shell, menu_model);
+        set_visible_menu_model(shell,
+                               menu_model,
+                               binding->menu_label[0] != '\0'
+                                   ? binding->menu_label
+                                   : NULL);
         shell->active_menu_source = menu_source;
         shell->active_menu_window = window;
         if (shell->pointer_owner == NB_SHELL_POINTER_MENU) {
@@ -472,6 +509,40 @@ bool nb_shell_update_window_menu(struct nb_shell *shell,
         }
     } else {
         sync_active_menu(shell);
+    }
+    return true;
+}
+
+bool nb_shell_set_window_menu_label(struct nb_shell *shell,
+                                    nb_window_id window,
+                                    const char *label)
+{
+    const size_t binding_index = find_binding(shell, window);
+    struct nb_shell_menu_binding *binding;
+    size_t length = 0;
+
+    if (binding_index == NB_DESKTOP_MAX_WINDOWS) {
+        return false;
+    }
+    binding = &shell->menu_bindings[binding_index];
+    if (label != NULL) {
+        while (length + 1U < sizeof(binding->menu_label) &&
+               label[length] != '\0') {
+            binding->menu_label[length] = label[length];
+            ++length;
+        }
+    }
+    binding->menu_label[length] = '\0';
+
+    if (nb_desktop_active_window_id(&shell->desktop) == window) {
+        set_visible_menu_model(shell,
+                               binding->menu_model,
+                               binding->menu_label[0] != '\0'
+                                   ? binding->menu_label
+                                   : NULL);
+        if (shell->pointer_owner == NB_SHELL_POINTER_MENU) {
+            shell->pointer_owner = NB_SHELL_POINTER_NONE;
+        }
     }
     return true;
 }

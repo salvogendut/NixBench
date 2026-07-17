@@ -1761,7 +1761,8 @@ bool nb_desktop_runtime_associate_xwayland_surface(
     struct nb_desktop_runtime *runtime,
     uint32_t surface_resource_id,
     uint32_t xwindow,
-    const char *title)
+    const char *title,
+    const char *application_name)
 {
 #if NIXBENCH_HAS_WAYLAND
     return runtime != NULL && runtime->wayland != NULL &&
@@ -1769,12 +1770,14 @@ bool nb_desktop_runtime_associate_xwayland_surface(
                runtime->wayland,
                surface_resource_id,
                xwindow,
-               title);
+               title,
+               application_name);
 #else
     (void)runtime;
     (void)surface_resource_id;
     (void)xwindow;
     (void)title;
+    (void)application_name;
     return false;
 #endif
 }
@@ -1800,7 +1803,8 @@ bool nb_desktop_runtime_associate_xwayland_serial(
     struct nb_desktop_runtime *runtime,
     uint64_t surface_serial,
     uint32_t xwindow,
-    const char *title)
+    const char *title,
+    const char *application_name)
 {
 #if NIXBENCH_HAS_WAYLAND
     return runtime != NULL && runtime->wayland != NULL &&
@@ -1808,30 +1812,35 @@ bool nb_desktop_runtime_associate_xwayland_serial(
                runtime->wayland,
                surface_serial,
                xwindow,
-               title);
+               title,
+               application_name);
 #else
     (void)runtime;
     (void)surface_serial;
     (void)xwindow;
     (void)title;
+    (void)application_name;
     return false;
 #endif
 }
 
-bool nb_desktop_runtime_update_xwayland_title(
+bool nb_desktop_runtime_update_xwayland_identity(
     struct nb_desktop_runtime *runtime,
     uint32_t xwindow,
-    const char *title)
+    const char *title,
+    const char *application_name)
 {
 #if NIXBENCH_HAS_WAYLAND
     return runtime != NULL && runtime->wayland != NULL &&
-           nb_wayland_server_update_xwayland_title(runtime->wayland,
-                                                   xwindow,
-                                                   title);
+           nb_wayland_server_update_xwayland_identity(runtime->wayland,
+                                                      xwindow,
+                                                      title,
+                                                      application_name);
 #else
     (void)runtime;
     (void)xwindow;
     (void)title;
+    (void)application_name;
     return false;
 #endif
 }

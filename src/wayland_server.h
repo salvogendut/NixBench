@@ -201,16 +201,19 @@ bool nb_wayland_server_associate_xwayland_surface(
     struct nb_wayland_server *server,
     uint32_t surface_resource_id,
     uint32_t xwindow,
-    const char *title);
+    const char *title,
+    const char *application_name);
 bool nb_wayland_server_associate_xwayland_serial(
     struct nb_wayland_server *server,
     uint64_t surface_serial,
     uint32_t xwindow,
-    const char *title);
-bool nb_wayland_server_update_xwayland_title(
+    const char *title,
+    const char *application_name);
+bool nb_wayland_server_update_xwayland_identity(
     struct nb_wayland_server *server,
     uint32_t xwindow,
-    const char *title);
+    const char *title,
+    const char *application_name);
 bool nb_wayland_server_unmap_xwayland_window(
     struct nb_wayland_server *server,
     uint32_t xwindow);

@@ -152,16 +152,19 @@ bool nb_desktop_runtime_associate_xwayland_surface(
     struct nb_desktop_runtime *runtime,
     uint32_t surface_resource_id,
     uint32_t xwindow,
-    const char *title);
+    const char *title,
+    const char *application_name);
 bool nb_desktop_runtime_associate_xwayland_serial(
     struct nb_desktop_runtime *runtime,
     uint64_t surface_serial,
     uint32_t xwindow,
-    const char *title);
-bool nb_desktop_runtime_update_xwayland_title(
+    const char *title,
+    const char *application_name);
+bool nb_desktop_runtime_update_xwayland_identity(
     struct nb_desktop_runtime *runtime,
     uint32_t xwindow,
-    const char *title);
+    const char *title,
+    const char *application_name);
 bool nb_desktop_runtime_unmap_xwayland_window(
     struct nb_desktop_runtime *runtime,
     uint32_t xwindow);

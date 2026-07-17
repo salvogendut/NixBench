@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "shell.h"
 
@@ -371,6 +372,56 @@ static void test_per_window_menu_rebinding(void)
     CHECK(fixture.shell.menu.model == &model_b_updated);
 }
 
+static void test_per_window_menu_label(void)
+{
+    struct fixture fixture = make_fixture();
+    const struct nb_menu_model *visible;
+    struct nb_shell_action action;
+
+    CHECK(nb_shell_set_window_menu_label(&fixture.shell,
+                                         fixture.b,
+                                         "xclock"));
+    visible = fixture.shell.menu.model;
+    CHECK(visible == &fixture.shell.composed_menu_model);
+    CHECK(visible->menu_count == model_b.menu_count);
+    CHECK(strcmp(visible->menus[0].label, "xclock") == 0);
+    CHECK(visible->menus[0].items == model_b.menus[0].items);
+    CHECK(fixture.shell.active_menu_source == SOURCE_B);
+
+    action = nb_shell_menu_key_press(&fixture.shell, NB_MENU_KEY_TOGGLE);
+    CHECK(action.type == NB_SHELL_ACTION_NONE);
+    action = nb_shell_menu_key_press(&fixture.shell, NB_MENU_KEY_ACTIVATE);
+    CHECK(action.type == NB_SHELL_ACTION_MENU_COMMAND);
+    CHECK(action.menu_source == SOURCE_B);
+    CHECK(action.menu_command == COMMAND_B);
+    CHECK(action.window == fixture.b);
+
+    CHECK(nb_shell_set_window_menu_label(&fixture.shell,
+                                         fixture.a,
+                                         "xeyes"));
+    CHECK(nb_shell_activate_window(&fixture.shell, fixture.a));
+    visible = fixture.shell.menu.model;
+    CHECK(visible == &fixture.shell.composed_menu_model);
+    CHECK(strcmp(visible->menus[0].label, "xeyes") == 0);
+    CHECK(visible->menus[0].items == model_a.menus[0].items);
+    CHECK(fixture.shell.active_menu_source == SOURCE_A);
+
+    CHECK(nb_shell_update_menu_source(&fixture.shell,
+                                      SOURCE_A,
+                                      &model_a_updated));
+    visible = fixture.shell.menu.model;
+    CHECK(strcmp(visible->menus[0].label, "xeyes") == 0);
+    CHECK(visible->menus[0].items == model_a_updated.menus[0].items);
+
+    CHECK(nb_shell_set_window_menu_label(&fixture.shell,
+                                         fixture.a,
+                                         NULL));
+    CHECK(fixture.shell.menu.model == &model_a_updated);
+    CHECK(!nb_shell_set_window_menu_label(&fixture.shell,
+                                          NB_WINDOW_ID_NONE,
+                                          "invalid"));
+}
+
 static void test_window_capture_crosses_bar(void)
 {
     const struct nb_rect viewport = {0, 0, 800, 600};
@@ -517,6 +568,7 @@ int main(void)
     test_menu_routing_and_actions();
     test_shared_application_menu_source();
     test_per_window_menu_rebinding();
+    test_per_window_menu_label();
     test_window_capture_crosses_bar();
     test_pointer_target_query();
     test_close_and_keyboard_actions();

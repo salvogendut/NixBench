@@ -41,6 +41,7 @@ struct nb_xwayland_window {
     bool associated;
     bool association_pending_reported;
     char title[NB_WINDOW_TITLE_CAPACITY];
+    char application_name[NB_WINDOW_TITLE_CAPACITY];
 };
 
 struct nb_xwayland_rootless {
@@ -53,6 +54,7 @@ struct nb_xwayland_rootless {
     xcb_atom_t net_wm_name;
     xcb_atom_t utf8_string;
     xcb_atom_t wm_name;
+    xcb_atom_t wm_class;
     xcb_atom_t wm_protocols;
     xcb_atom_t wm_delete_window;
     xcb_atom_t wm_selection;
@@ -252,6 +254,10 @@ static struct nb_xwayland_window *remember_window(
                            sizeof(entry->title),
                            "%s",
                            "X11 Application");
+            (void)snprintf(entry->application_name,
+                           sizeof(entry->application_name),
+                           "%s",
+                           "X11 Application");
             return entry;
         }
     }
@@ -303,10 +309,70 @@ static bool read_title_property(struct nb_xwayland_rootless *service,
     return copied != 0;
 }
 
-static void refresh_window_title(struct nb_xwayland_rootless *service,
-                                 struct nb_xwayland_window *entry)
+static bool read_application_name(struct nb_xwayland_rootless *service,
+                                  xcb_window_t window,
+                                  char *name,
+                                  size_t name_size)
+{
+    xcb_get_property_reply_t *reply;
+    const unsigned char *value;
+    const unsigned char *selected;
+    size_t value_length;
+    size_t instance_length = 0;
+    size_t selected_length;
+    size_t copied = 0;
+
+    if (service->wm_class == XCB_ATOM_NONE || name_size == 0) {
+        return false;
+    }
+    reply = xcb_get_property_reply(
+        service->connection,
+        xcb_get_property(service->connection,
+                         0,
+                         window,
+                         service->wm_class,
+                         XCB_ATOM_STRING,
+                         0,
+                         1024),
+        NULL);
+    if (reply == NULL || reply->format != 8 ||
+        reply->type != XCB_ATOM_STRING) {
+        free(reply);
+        return false;
+    }
+    value = xcb_get_property_value(reply);
+    value_length = (size_t)xcb_get_property_value_length(reply);
+    while (instance_length < value_length &&
+           value[instance_length] != '\0') {
+        ++instance_length;
+    }
+
+    selected = value;
+    selected_length = instance_length;
+    if (selected_length == 0 && instance_length < value_length) {
+        selected = value + instance_length + 1U;
+        selected_length = 0;
+        while (instance_length + 1U + selected_length < value_length &&
+               selected[selected_length] != '\0') {
+            ++selected_length;
+        }
+    }
+    while (copied + 1U < name_size && copied < selected_length) {
+        const unsigned char character = selected[copied];
+
+        name[copied] = character < 32 ? ' ' : (char)character;
+        ++copied;
+    }
+    name[copied] = '\0';
+    free(reply);
+    return copied != 0;
+}
+
+static void refresh_window_identity(struct nb_xwayland_rootless *service,
+                                    struct nb_xwayland_window *entry)
 {
     char title[NB_WINDOW_TITLE_CAPACITY];
+    char application_name[NB_WINDOW_TITLE_CAPACITY];
 
     if (!read_title_property(service,
                              entry->window,
@@ -322,11 +388,26 @@ static void refresh_window_title(struct nb_xwayland_rootless *service,
                              sizeof(title))) {
         (void)snprintf(title, sizeof(title), "%s", "X11 Application");
     }
+    if (!read_application_name(service,
+                               entry->window,
+                               application_name,
+                               sizeof(application_name))) {
+        (void)snprintf(application_name,
+                       sizeof(application_name),
+                       "%s",
+                       title);
+    }
     (void)snprintf(entry->title, sizeof(entry->title), "%s", title);
+    (void)snprintf(entry->application_name,
+                   sizeof(entry->application_name),
+                   "%s",
+                   application_name);
     if (entry->associated) {
-        (void)nb_desktop_runtime_update_xwayland_title(service->desktop,
-                                                       entry->window,
-                                                       entry->title);
+        (void)nb_desktop_runtime_update_xwayland_identity(
+            service->desktop,
+            entry->window,
+            entry->title,
+            entry->application_name);
     }
 }
 
@@ -337,19 +418,21 @@ static void try_associate_window(struct nb_xwayland_rootless *service,
         (entry->surface_serial == 0 && entry->surface_id == 0)) {
         return;
     }
-    refresh_window_title(service, entry);
+    refresh_window_identity(service, entry);
     if (entry->surface_serial != 0) {
         entry->associated = nb_desktop_runtime_associate_xwayland_serial(
             service->desktop,
             entry->surface_serial,
             entry->window,
-            entry->title);
+            entry->title,
+            entry->application_name);
     } else {
         entry->associated = nb_desktop_runtime_associate_xwayland_surface(
             service->desktop,
             entry->surface_id,
             entry->window,
-            entry->title);
+            entry->title,
+            entry->application_name);
     }
     if (entry->associated) {
         if (entry->surface_serial != 0) {
@@ -444,7 +527,7 @@ static bool handle_map_request(struct nb_xwayland_rootless *service,
                                  event->window,
                                  XCB_CW_EVENT_MASK,
                                  &event_mask);
-    refresh_window_title(service, entry);
+    refresh_window_identity(service, entry);
     if (!checked_request_succeeded(
             service->connection,
             xcb_map_window_checked(service->connection, event->window),
@@ -577,6 +660,9 @@ static bool initialize_xwm(struct nb_xwayland_rootless *service)
     service->wm_name = intern_atom(service->connection,
                                    "WM_NAME",
                                    false);
+    service->wm_class = intern_atom(service->connection,
+                                    "WM_CLASS",
+                                    false);
     service->wm_protocols = intern_atom(service->connection,
                                         "WM_PROTOCOLS",
                                         false);
@@ -1047,8 +1133,9 @@ bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service)
 
             if (entry != NULL &&
                 (property->atom == service->net_wm_name ||
-                 property->atom == service->wm_name)) {
-                refresh_window_title(service, entry);
+                 property->atom == service->wm_name ||
+                 property->atom == service->wm_class)) {
+                refresh_window_identity(service, entry);
             }
             break;
         }

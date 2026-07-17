@@ -5234,7 +5234,8 @@ static bool associate_xwayland_surface(
     struct nb_wayland_server *server,
     struct nb_wayland_surface *surface,
     uint32_t xwindow,
-    const char *title)
+    const char *title,
+    const char *application_name)
 {
     struct nb_wayland_surface *existing =
         find_surface_by_xwayland_window(server, xwindow);
@@ -5256,11 +5257,22 @@ static bool associate_xwayland_surface(
               title != NULL && title[0] != '\0'
                   ? title
                   : "X11 Application");
+    copy_text(surface->app_id,
+              sizeof(surface->app_id),
+              application_name != NULL && application_name[0] != '\0'
+                  ? application_name
+                  : surface->title);
     if (surface->window == NB_WINDOW_ID_NONE) {
         map_surface(surface);
     } else if (!nb_desktop_set_window_title(&server->shell->desktop,
                                             surface->window,
                                             surface->title)) {
+        return false;
+    }
+    if (surface->window != NB_WINDOW_ID_NONE &&
+        !nb_shell_set_window_menu_label(server->shell,
+                                        surface->window,
+                                        surface->app_id)) {
         return false;
     }
     server->redraw_pending = true;
@@ -5271,7 +5283,8 @@ bool nb_wayland_server_associate_xwayland_surface(
     struct nb_wayland_server *server,
     uint32_t surface_resource_id,
     uint32_t xwindow,
-    const char *title)
+    const char *title,
+    const char *application_name)
 {
     struct nb_wayland_surface *surface;
 
@@ -5280,14 +5293,19 @@ bool nb_wayland_server_associate_xwayland_surface(
         return false;
     }
     surface = find_surface_by_resource_id(server, surface_resource_id);
-    return associate_xwayland_surface(server, surface, xwindow, title);
+    return associate_xwayland_surface(server,
+                                      surface,
+                                      xwindow,
+                                      title,
+                                      application_name);
 }
 
 bool nb_wayland_server_associate_xwayland_serial(
     struct nb_wayland_server *server,
     uint64_t surface_serial,
     uint32_t xwindow,
-    const char *title)
+    const char *title,
+    const char *application_name)
 {
     struct nb_wayland_surface *surface;
 
@@ -5296,13 +5314,18 @@ bool nb_wayland_server_associate_xwayland_serial(
         return false;
     }
     surface = find_surface_by_xwayland_serial(server, surface_serial);
-    return associate_xwayland_surface(server, surface, xwindow, title);
+    return associate_xwayland_surface(server,
+                                      surface,
+                                      xwindow,
+                                      title,
+                                      application_name);
 }
 
-bool nb_wayland_server_update_xwayland_title(
+bool nb_wayland_server_update_xwayland_identity(
     struct nb_wayland_server *server,
     uint32_t xwindow,
-    const char *title)
+    const char *title,
+    const char *application_name)
 {
     struct nb_wayland_surface *surface;
 
@@ -5318,10 +5341,18 @@ bool nb_wayland_server_update_xwayland_title(
               title != NULL && title[0] != '\0'
                   ? title
                   : "X11 Application");
+    copy_text(surface->app_id,
+              sizeof(surface->app_id),
+              application_name != NULL && application_name[0] != '\0'
+                  ? application_name
+                  : surface->title);
     if (surface->window != NB_WINDOW_ID_NONE &&
-        !nb_desktop_set_window_title(&server->shell->desktop,
-                                     surface->window,
-                                     surface->title)) {
+        (!nb_desktop_set_window_title(&server->shell->desktop,
+                                      surface->window,
+                                      surface->title) ||
+         !nb_shell_set_window_menu_label(server->shell,
+                                         surface->window,
+                                         surface->app_id))) {
         return false;
     }
     server->redraw_pending = true;

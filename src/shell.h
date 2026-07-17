@@ -49,6 +49,7 @@ struct nb_shell_menu_binding {
     nb_window_id window;
     nb_menu_source_id menu_source;
     const struct nb_menu_model *menu_model;
+    char menu_label[NB_WINDOW_TITLE_CAPACITY];
 };
 
 /* The layout permits stack allocation; its fields are shell-owned state. */
@@ -102,6 +103,10 @@ bool nb_shell_update_window_menu(struct nb_shell *shell,
                                  nb_window_id window,
                                  nb_menu_source_id menu_source,
                                  const struct nb_menu_model *menu_model);
+/* Override the first menu label for one window without changing its commands. */
+bool nb_shell_set_window_menu_label(struct nb_shell *shell,
+                                    nb_window_id window,
+                                    const char *label);
 
 /*
  * Return the frontmost shell window beneath a point without changing focus,
