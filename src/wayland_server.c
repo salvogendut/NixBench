@@ -5201,6 +5201,13 @@ struct nb_wayland_server *nb_wayland_server_create(
     int output_height)
 {
     struct nb_wayland_server *server;
+#if NIXBENCH_HAS_XWAYLAND_SHELL
+    const char *legacy_xwayland_association =
+        getenv("NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION");
+    const bool advertise_xwayland_shell =
+        legacy_xwayland_association == NULL ||
+        strcmp(legacy_xwayland_association, "1") != 0;
+#endif
 
     if (shell == NULL || menu_source == NB_MENU_SOURCE_NONE ||
         menu_source > UINT64_MAX - NB_WAYLAND_MAX_SURFACES ||
@@ -5269,12 +5276,14 @@ struct nb_wayland_server *nb_wayland_server_create(
         bind_decoration_manager);
 #endif
 #if NIXBENCH_HAS_XWAYLAND_SHELL
-    server->xwayland_shell_global = wl_global_create(
-        server->display,
-        &xwayland_shell_v1_interface,
-        1,
-        server,
-        bind_xwayland_shell);
+    if (advertise_xwayland_shell) {
+        server->xwayland_shell_global = wl_global_create(
+            server->display,
+            &xwayland_shell_v1_interface,
+            1,
+            server,
+            bind_xwayland_shell);
+    }
 #endif
     server->seat_global = wl_global_create(server->display,
                                            &wl_seat_interface,
@@ -5305,7 +5314,7 @@ struct nb_wayland_server *nb_wayland_server_create(
         server->data_device_manager_global == NULL ||
         server->xdg_wm_base_global == NULL ||
 #if NIXBENCH_HAS_XWAYLAND_SHELL
-        server->xwayland_shell_global == NULL ||
+        (advertise_xwayland_shell && server->xwayland_shell_global == NULL) ||
 #endif
         server->application_menu_global == NULL) {
         wl_display_destroy(server->display);

@@ -60,6 +60,7 @@ trace_wayland=${NIXBENCH_TRACE_WAYLAND:-}
 trace_wayland_log=${NIXBENCH_TRACE_WAYLAND_LOG:-}
 xwayland_rootless=${NIXBENCH_XWAYLAND_ROOTLESS:-0}
 xwayland=${NIXBENCH_XWAYLAND:-}
+xwayland_legacy_association=${NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION:-1}
 gtk_menu_bridge=${NIXBENCH_GTK_MENU_BRIDGE:-0}
 case "$gtk_menu_bridge" in
     0|1) ;;
@@ -103,8 +104,13 @@ if [ -n "$xwayland" ]; then
         fail "NIXBENCH_XWAYLAND must be an executable regular file"
     fi
 fi
+case "$xwayland_legacy_association" in
+    0|1) ;;
+    *) fail "NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION must be 0 or 1" ;;
+esac
 unset NIXBENCH_TRACE_WAYLAND NIXBENCH_TRACE_WAYLAND_LOG
 unset NIXBENCH_XWAYLAND_ROOTLESS NIXBENCH_XWAYLAND
+unset NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION
 
 script_path=$0
 case "$script_path" in
@@ -409,6 +415,7 @@ run_privileged_session()
                     NIXBENCH_TRACE_WAYLAND="$trace_wayland" \
                     NIXBENCH_GTK_MENU_BRIDGE="$gtk_menu_bridge" \
                     NIXBENCH_XWAYLAND_ROOTLESS="$xwayland_rootless" \
+                    NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION="$xwayland_legacy_association" \
                     NIXBENCH_XWAYLAND="$xwayland" \
                     NIXBENCH_TRACE_WAYLAND_LOG="$trace_wayland_log" \
                     "$staged_session" --acknowledge-console-takeover \
@@ -418,6 +425,7 @@ run_privileged_session()
                     NIXBENCH_TRACE_WAYLAND="$trace_wayland" \
                     NIXBENCH_GTK_MENU_BRIDGE="$gtk_menu_bridge" \
                     NIXBENCH_XWAYLAND_ROOTLESS="$xwayland_rootless" \
+                    NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION="$xwayland_legacy_association" \
                     NIXBENCH_XWAYLAND="$xwayland" \
                     "$staged_session" --acknowledge-console-takeover \
                     --core "$core" --application "$application" "$@"
@@ -426,6 +434,7 @@ run_privileged_session()
             sudo -n env \
                 NIXBENCH_GTK_MENU_BRIDGE="$gtk_menu_bridge" \
                 NIXBENCH_XWAYLAND_ROOTLESS="$xwayland_rootless" \
+                NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION="$xwayland_legacy_association" \
                 NIXBENCH_XWAYLAND="$xwayland" \
                 "$staged_session" --acknowledge-console-takeover \
                 --core "$core" --application "$application" "$@"
@@ -437,6 +446,7 @@ run_privileged_session()
                     NIXBENCH_TRACE_WAYLAND="$trace_wayland" \
                     NIXBENCH_GTK_MENU_BRIDGE="$gtk_menu_bridge" \
                     NIXBENCH_XWAYLAND_ROOTLESS="$xwayland_rootless" \
+                    NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION="$xwayland_legacy_association" \
                     NIXBENCH_XWAYLAND="$xwayland" \
                     NIXBENCH_TRACE_WAYLAND_LOG="$trace_wayland_log" \
                     "$staged_session" --acknowledge-console-takeover \
@@ -446,6 +456,7 @@ run_privileged_session()
                     NIXBENCH_TRACE_WAYLAND="$trace_wayland" \
                     NIXBENCH_GTK_MENU_BRIDGE="$gtk_menu_bridge" \
                     NIXBENCH_XWAYLAND_ROOTLESS="$xwayland_rootless" \
+                    NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION="$xwayland_legacy_association" \
                     NIXBENCH_XWAYLAND="$xwayland" \
                     "$staged_session" --acknowledge-console-takeover \
                     --core "$core" "$@"
@@ -454,6 +465,7 @@ run_privileged_session()
             sudo -n env \
                 NIXBENCH_GTK_MENU_BRIDGE="$gtk_menu_bridge" \
                 NIXBENCH_XWAYLAND_ROOTLESS="$xwayland_rootless" \
+                NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION="$xwayland_legacy_association" \
                 NIXBENCH_XWAYLAND="$xwayland" \
                 "$staged_session" --acknowledge-console-takeover \
                 --core "$core" "$@"

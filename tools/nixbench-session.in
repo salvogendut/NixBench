@@ -31,6 +31,9 @@ Environment:
   NIXBENCH_XWAYLAND_ROOTLESS Start the rootless X11 compatibility service
                             when Xwayland is installed (default: 1)
   NIXBENCH_XWAYLAND          Override the absolute Xwayland executable path
+  NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION
+                            Use the stable surface-ID association path
+                            (default: 1)
   NIXBENCH_VT_AWAY          One-based VT used by the lifecycle test
 EOF
         exit 0
@@ -76,9 +79,11 @@ NIXBENCH_SESSION_HELPER=$libexecdir/nixbench/nixbench-wsdisplay-session
 NIXBENCH_SESSION_CORE=$libexecdir/nixbench/nixbench-session-core
 NIXBENCH_GTK_MENU_BRIDGE=${NIXBENCH_GTK_MENU_BRIDGE:-1}
 NIXBENCH_XWAYLAND_ROOTLESS=${NIXBENCH_XWAYLAND_ROOTLESS:-1}
+NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION=${NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION:-1}
 NIXBENCH_ALLOW_LOCAL=$local_launch
 export NIXBENCH_INSTALLED_MODE NIXBENCH_SESSION_HELPER
 export NIXBENCH_SESSION_CORE NIXBENCH_GTK_MENU_BRIDGE
 export NIXBENCH_XWAYLAND_ROOTLESS NIXBENCH_ALLOW_LOCAL
+export NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION
 
 exec "$libexecdir/nixbench/run-wsdisplay-session.sh"
