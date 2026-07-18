@@ -170,7 +170,7 @@ home-directory and group access. Use Midori only with blank or otherwise
 trusted content during this first probe. A main window may expose the next
 compatibility boundary rather than be fully usable: popup pointer routing,
 outside-click dismissal and positioner constraint adjustment, pointer-axis
-scrolling, subsurfaces, clipboard/data transfer beyond the discovery skeleton,
+scrolling, subsurfaces, drag-and-drop, X11 `INCR` clipboard transfers,
 accelerated buffers, and generic GTK global-menu integration remain incomplete.
 
 Set `NIXBENCH_TRACE_WAYLAND=1` when invoking `./tools/run-wsdisplay-session.sh`

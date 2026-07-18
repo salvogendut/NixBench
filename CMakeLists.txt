@@ -988,7 +988,7 @@ set(NIXBENCH_ROOTLESS_XWAYLAND_AVAILABLE FALSE)
 if(UNIX AND NIXBENCH_WAYLAND_ENABLED)
   find_path(
     NIXBENCH_XCB_INCLUDE_DIR
-    NAMES xcb/xcb.h xcb/composite.h
+    NAMES xcb/xcb.h xcb/composite.h xcb/xfixes.h
     PATHS /usr/X11R7
     PATH_SUFFIXES include
   )
@@ -1004,10 +1004,17 @@ if(UNIX AND NIXBENCH_WAYLAND_ENABLED)
     PATHS /usr/X11R7
     PATH_SUFFIXES lib
   )
+  find_library(
+    NIXBENCH_XCB_XFIXES_LIBRARY
+    NAMES xcb-xfixes
+    PATHS /usr/X11R7
+    PATH_SUFFIXES lib
+  )
   if(
     NIXBENCH_XCB_INCLUDE_DIR
     AND NIXBENCH_XCB_LIBRARY
     AND NIXBENCH_XCB_COMPOSITE_LIBRARY
+    AND NIXBENCH_XCB_XFIXES_LIBRARY
   )
     find_package(Threads REQUIRED)
     set(NIXBENCH_ROOTLESS_XWAYLAND_AVAILABLE TRUE)
@@ -1023,12 +1030,16 @@ if(UNIX AND NIXBENCH_WAYLAND_ENABLED)
         nixbench_desktop_runtime
         Threads::Threads
         "${NIXBENCH_XCB_COMPOSITE_LIBRARY}"
+        "${NIXBENCH_XCB_XFIXES_LIBRARY}"
         "${NIXBENCH_XCB_LIBRARY}"
     )
     nixbench_configure_c_target(nixbench_xwayland_rootless)
     message(STATUS "Rootless Xwayland XWM support enabled")
   else()
-    message(STATUS "Rootless Xwayland XWM support unavailable (XCB Composite missing)")
+    message(
+      STATUS
+      "Rootless Xwayland XWM support unavailable (XCB Composite or XFixes missing)"
+    )
   endif()
 endif()
 

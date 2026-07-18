@@ -75,6 +75,23 @@ struct barrier_state {
     bool done;
 };
 
+struct clipboard_owner_state {
+    unsigned int calls;
+    bool available;
+};
+
+static bool record_clipboard_owner(void *context, bool available)
+{
+    struct clipboard_owner_state *state = context;
+
+    if (state == NULL) {
+        return false;
+    }
+    ++state->calls;
+    state->available = available;
+    return true;
+}
+
 struct output_state {
     struct wl_output *proxy;
     int32_t geometry_x;
@@ -1457,6 +1474,8 @@ static void test_wayland_surface_lifecycle(void)
     struct xdg_positioner *positioner = NULL;
     struct xdg_positioner *child_positioner = NULL;
     struct client_state client = {0};
+    struct clipboard_owner_state clipboard_owner = {0};
+    struct nb_wayland_xwayland_interface xwayland_interface = {0};
     struct client_state legacy_input = {0};
     struct popup_state popup_client = {0};
     struct popup_state child_popup_client = {0};
@@ -2268,6 +2287,12 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(memcmp(cached_clipboard,
                  wayland_clipboard,
                  cached_clipboard_size) == 0);
+    xwayland_interface.set_clipboard_owner = record_clipboard_owner;
+    nb_wayland_server_set_xwayland_interface(server,
+                                             &xwayland_interface,
+                                             &clipboard_owner);
+    CHECK(clipboard_owner.calls == 1);
+    CHECK(clipboard_owner.available);
     REQUIRE(pipe(clipboard_pipe) == 0);
     wl_data_offer_receive(client.selection_offer,
                           "text/plain;charset=utf-8",

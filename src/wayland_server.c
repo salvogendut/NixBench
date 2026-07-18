@@ -6387,6 +6387,11 @@ void nb_wayland_server_set_xwayland_interface(
     if (interface != NULL) {
         server->xwayland_interface = *interface;
         server->xwayland_context = context;
+        if (server->selection_kind == NB_WAYLAND_SELECTION_SOURCE &&
+            server->selection_source != NULL &&
+            server->clipboard_text != NULL) {
+            clipboard_notify_xwayland(server, true);
+        }
     }
 }
 

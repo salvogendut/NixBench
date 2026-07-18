@@ -56,15 +56,22 @@ Neither the in-process event/request contract nor the Wayland integration is a
 stable public API yet. The Wayland slice currently has one scale-1 logical
 output and no touch capability, pointer-axis scrolling, client cursor
 rendering, buffer scale/transform or input-region handling, subsurfaces,
-clipboard, accelerated buffers, resize negotiation,
-desktop-managed application launching, or a full toolkit bridge for
-application menus. Its popup support is deliberately narrow: full pointer
+accelerated buffers, or resize negotiation. Its popup support is deliberately
+narrow: full pointer
 routing into popups, outside-click dismissal policy, and positioner constraint
 adjustment are not implemented yet. NixClock exercises the first private
 application-menu protocol. Existing GTK/SDL Wayland clients are still only
 partially supported; the standalone initial-application selector permits
 diagnostic compatibility probes that are expected to expose the remaining
 gaps.
+
+The version-1 Wayland data-device path now implements bounded text selection
+ownership and asynchronous transfer. Text copied by a focused Wayland client
+is cached up to 1 MiB and exported by the rootless XWM as both X11 `CLIPBOARD`
+and `PRIMARY`; an X11 owner advertising `UTF8_STRING`, `TEXT`, or `STRING` is
+imported as a regular Wayland selection offer. Replacement and client exit
+invalidate old offers. Drag-and-drop, binary MIME payloads, and X11 `INCR`
+transfers remain deliberately unsupported.
 NixBench also does not yet offer a supported production direct-console login
 session.
 

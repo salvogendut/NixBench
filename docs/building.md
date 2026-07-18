@@ -23,6 +23,12 @@ components; no `pkg-config` executable is required by this build.
 NixClock. Application targets are built only when the Wayland client and
 compositor dependencies are available.
 
+The optional rootless Xwayland XWM is enabled when the Wayland compositor and
+the XCB, XCB Composite, and XCB XFixes development libraries are available.
+NetBSD normally supplies these under `/usr/X11R7`; CMake searches that base-X11
+layout directly. XFixes is used to observe `CLIPBOARD` and `PRIMARY` owner
+changes without polling.
+
 Detailed NetBSD DRM/KMS inventory is an optional libdrm feature controlled by
 `-DNIXBENCH_LIBDRM=AUTO`, the default. `AUTO` enables it when `xf86drm.h`,
 `xf86drmMode.h`, `libdrm/drm.h`, and the libdrm library are found, and otherwise

@@ -562,10 +562,11 @@ The initial Midori run is diagnostic and should use only blank or trusted
 content. A toplevel may appear before the browser is fully usable. Missing
 full popup pointer routing, outside-click dismissal policy, positioner
 constraint adjustment, pointer-axis scrolling, subsurfaces, clipboard/data
-transfer beyond the discovery skeleton, accelerated buffer sharing, and
-complete coverage of transient, dynamically constructed GTK context menus are
-the expected first compatibility boundaries. Static detached application
-menus, including Sakura's main popup tree, are exported by the bridge.
+transfer beyond bounded immediate text selections, accelerated buffer sharing,
+and complete coverage of transient, dynamically constructed GTK context
+menus are the expected first compatibility boundaries. Static detached
+application menus, including Sakura's main popup tree, are exported by the
+bridge.
 
 Set `NIXBENCH_TRACE_WAYLAND=1` when invoking `./tools/run-wsdisplay-session.sh`
 if you need a client-side protocol trace for a failing interaction.
@@ -651,8 +652,10 @@ null-`GdkSeat` diagnostics and no toplevel mapped before the client closed its
 connection. GTK 3.24 defers creating a seat until the registry contains both
 `wl_seat` and `wl_data_device_manager`; NixBench exposed only the former. A
 minimal version-1 data-device discovery skeleton now provides inert source and
-device resources and sends an empty selection before keyboard focus. It does
-not claim clipboard or drag-and-drop transfer behavior.
+device resources and sends an empty selection before keyboard focus. That
+historical discovery-only implementation has since been replaced by bounded
+asynchronous text selection transfer and a rootless X11 bridge; drag-and-drop,
+binary MIME payloads, and X11 `INCR` remain out of scope.
 
 The repeat physical probe passed that seat gate but Midori then terminated
 with `SIGSEGV` before mapping a window. The same crash reproduced against the

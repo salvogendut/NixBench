@@ -21,6 +21,7 @@
 
 #include <xcb/composite.h>
 #include <xcb/xcb.h>
+#include <xcb/xfixes.h>
 
 #include "desktop_runtime.h"
 #include "window.h"
@@ -29,11 +30,18 @@ enum {
     NB_XWAYLAND_FIRST_DISPLAY = 98,
     NB_XWAYLAND_LAST_DISPLAY = 109,
     NB_XWAYLAND_MAX_WINDOWS = 32,
+    NB_XWAYLAND_CLIPBOARD_MAX_BYTES = 1024 * 1024,
     NB_XWAYLAND_EXIT_WAIT_MS = 2000,
     NB_XWAYLAND_EXIT_WAIT_SLICE_MS = 20,
     NB_NET_WM_STATE_REMOVE = 0,
     NB_NET_WM_STATE_ADD = 1,
     NB_NET_WM_STATE_TOGGLE = 2
+};
+
+enum nb_xwayland_selection_import_stage {
+    NB_XWAYLAND_SELECTION_IMPORT_NONE = 0,
+    NB_XWAYLAND_SELECTION_IMPORT_TARGETS,
+    NB_XWAYLAND_SELECTION_IMPORT_TEXT
 };
 
 struct nb_xwayland_window {
@@ -60,12 +68,22 @@ struct nb_xwayland_rootless {
     xcb_atom_t net_wm_state;
     xcb_atom_t net_wm_state_fullscreen;
     xcb_atom_t utf8_string;
+    xcb_atom_t clipboard;
+    xcb_atom_t targets;
+    xcb_atom_t text;
+    xcb_atom_t incr;
+    xcb_atom_t clipboard_property;
     xcb_atom_t wm_name;
     xcb_atom_t wm_class;
     xcb_atom_t wm_protocols;
     xcb_atom_t wm_delete_window;
     xcb_atom_t wm_selection;
     xcb_window_t wm_window;
+    uint8_t xfixes_event_base;
+    enum nb_xwayland_selection_import_stage selection_import_stage;
+    xcb_atom_t selection_import_selection;
+    xcb_atom_t selection_import_target;
+    xcb_atom_t external_selection;
     xcb_connection_t *pending_connection;
     pthread_t connector_thread;
     int startup_pipe[2];
@@ -608,6 +626,342 @@ static bool focus_native_window(void *context, uint32_t xwindow)
     return xcb_flush(service->connection) > 0;
 }
 
+static bool native_selection_is_owned(
+    struct nb_xwayland_rootless *service,
+    xcb_atom_t selection)
+{
+    xcb_get_selection_owner_reply_t *reply;
+    bool owned;
+
+    reply = xcb_get_selection_owner_reply(
+        service->connection,
+        xcb_get_selection_owner(service->connection, selection),
+        NULL);
+    if (reply == NULL) {
+        return false;
+    }
+    owned = reply->owner == service->wm_window;
+    free(reply);
+    return owned;
+}
+
+static bool set_native_selection_owner(
+    struct nb_xwayland_rootless *service,
+    xcb_atom_t selection,
+    bool available,
+    const char *claim_operation,
+    const char *release_operation)
+{
+    if (!available && !native_selection_is_owned(service, selection)) {
+        return true;
+    }
+    return checked_request_succeeded(
+        service->connection,
+        xcb_set_selection_owner_checked(
+            service->connection,
+            available ? service->wm_window : XCB_WINDOW_NONE,
+            selection,
+            XCB_CURRENT_TIME),
+        available ? claim_operation : release_operation);
+}
+
+static bool set_native_clipboard_owner(void *context, bool available)
+{
+    struct nb_xwayland_rootless *service = context;
+
+    if (service == NULL || service->connection == NULL ||
+        service->wm_window == XCB_WINDOW_NONE ||
+        service->clipboard == XCB_ATOM_NONE) {
+        return false;
+    }
+    if (!set_native_selection_owner(
+            service,
+            service->clipboard,
+            available,
+            "claim the X11 CLIPBOARD selection",
+            "release the X11 CLIPBOARD selection") ||
+        !set_native_selection_owner(
+            service,
+            XCB_ATOM_PRIMARY,
+            available,
+            "claim the X11 PRIMARY selection",
+            "release the X11 PRIMARY selection")) {
+        return false;
+    }
+    return xcb_flush(service->connection) > 0;
+}
+
+static bool selection_target_is_text(
+    const struct nb_xwayland_rootless *service,
+    xcb_atom_t target)
+{
+    return target == service->utf8_string ||
+           target == service->text || target == XCB_ATOM_STRING;
+}
+
+static bool send_selection_notify(
+    struct nb_xwayland_rootless *service,
+    const xcb_selection_request_event_t *request,
+    xcb_atom_t property)
+{
+    xcb_selection_notify_event_t notify;
+
+    memset(&notify, 0, sizeof(notify));
+    notify.response_type = XCB_SELECTION_NOTIFY;
+    notify.time = request->time;
+    notify.requestor = request->requestor;
+    notify.selection = request->selection;
+    notify.target = request->target;
+    notify.property = property;
+    return checked_request_succeeded(
+        service->connection,
+        xcb_send_event_checked(service->connection,
+                               0,
+                               request->requestor,
+                               XCB_EVENT_MASK_NO_EVENT,
+                               (const char *)&notify),
+        "send an X11 selection notification");
+}
+
+static bool handle_selection_request(
+    struct nb_xwayland_rootless *service,
+    const xcb_selection_request_event_t *request)
+{
+    xcb_atom_t property = request->property;
+    bool exported = false;
+
+    if (request->owner != service->wm_window ||
+        (request->selection != service->clipboard &&
+         request->selection != XCB_ATOM_PRIMARY)) {
+        return true;
+    }
+    if (property == XCB_ATOM_NONE) {
+        property = request->target;
+    }
+    if (request->target == service->targets) {
+        const xcb_atom_t supported[] = {
+            service->targets,
+            service->utf8_string,
+            service->text,
+            XCB_ATOM_STRING
+        };
+
+        exported = checked_request_succeeded(
+            service->connection,
+            xcb_change_property_checked(service->connection,
+                                        XCB_PROP_MODE_REPLACE,
+                                        request->requestor,
+                                        property,
+                                        XCB_ATOM_ATOM,
+                                        32,
+                                        sizeof(supported) /
+                                            sizeof(supported[0]),
+                                        supported),
+            "publish X11 clipboard targets");
+    } else if (selection_target_is_text(service, request->target)) {
+        const char *text_value = NULL;
+        size_t text_size = 0;
+        xcb_atom_t property_type = request->target == XCB_ATOM_STRING
+                                       ? XCB_ATOM_STRING
+                                       : service->utf8_string;
+
+        if (nb_desktop_runtime_clipboard_text(service->desktop,
+                                              &text_value,
+                                              &text_size) &&
+            text_size <= NB_XWAYLAND_CLIPBOARD_MAX_BYTES) {
+            exported = checked_request_succeeded(
+                service->connection,
+                xcb_change_property_checked(service->connection,
+                                            XCB_PROP_MODE_REPLACE,
+                                            request->requestor,
+                                            property,
+                                            property_type,
+                                            8,
+                                            (uint32_t)text_size,
+                                            text_value),
+                "publish X11 clipboard text");
+        }
+    }
+    return send_selection_notify(service,
+                                 request,
+                                 exported ? property : XCB_ATOM_NONE);
+}
+
+static bool request_external_selection(
+    struct nb_xwayland_rootless *service,
+    xcb_atom_t selection,
+    xcb_atom_t target,
+    xcb_timestamp_t timestamp,
+    enum nb_xwayland_selection_import_stage stage)
+{
+    if (!checked_request_succeeded(
+            service->connection,
+            xcb_convert_selection_checked(service->connection,
+                                          service->wm_window,
+                                          selection,
+                                          target,
+                                          service->clipboard_property,
+                                          timestamp),
+            stage == NB_XWAYLAND_SELECTION_IMPORT_TARGETS
+                ? "request X11 clipboard targets"
+                : "request X11 clipboard text")) {
+        return false;
+    }
+    service->selection_import_stage = stage;
+    service->selection_import_selection = selection;
+    service->selection_import_target = target;
+    return true;
+}
+
+static void handle_xfixes_selection_notify(
+    struct nb_xwayland_rootless *service,
+    const xcb_xfixes_selection_notify_event_t *event)
+{
+    if (event->selection != service->clipboard &&
+        event->selection != XCB_ATOM_PRIMARY) {
+        return;
+    }
+    if (event->owner == service->wm_window) {
+        return;
+    }
+    if (event->owner == XCB_WINDOW_NONE) {
+        if (service->external_selection == event->selection) {
+            nb_desktop_runtime_clear_external_clipboard(service->desktop);
+            service->external_selection = XCB_ATOM_NONE;
+        }
+        if (service->selection_import_selection == event->selection) {
+            service->selection_import_stage =
+                NB_XWAYLAND_SELECTION_IMPORT_NONE;
+            service->selection_import_selection = XCB_ATOM_NONE;
+            service->selection_import_target = XCB_ATOM_NONE;
+        }
+        return;
+    }
+    if (!set_native_clipboard_owner(service, false)) {
+        fputs("Rootless XWM could not release its superseded X11 "
+              "selection\n",
+              stderr);
+    }
+    if (service->external_selection != XCB_ATOM_NONE) {
+        nb_desktop_runtime_clear_external_clipboard(service->desktop);
+        service->external_selection = XCB_ATOM_NONE;
+    }
+    (void)request_external_selection(
+        service,
+        event->selection,
+        service->targets,
+        event->timestamp,
+        NB_XWAYLAND_SELECTION_IMPORT_TARGETS);
+}
+
+static xcb_atom_t choose_external_text_target(
+    const struct nb_xwayland_rootless *service,
+    const xcb_get_property_reply_t *reply)
+{
+    const xcb_atom_t *atoms;
+    size_t atom_count;
+    size_t index;
+    bool has_text = false;
+    bool has_string = false;
+
+    if (reply == NULL || reply->type != XCB_ATOM_ATOM ||
+        reply->format != 32 || reply->bytes_after != 0) {
+        return XCB_ATOM_NONE;
+    }
+    atoms = xcb_get_property_value(reply);
+    atom_count = (size_t)xcb_get_property_value_length(reply) /
+                 sizeof(*atoms);
+    for (index = 0; index < atom_count; ++index) {
+        if (atoms[index] == service->utf8_string) {
+            return service->utf8_string;
+        }
+        has_text = has_text || atoms[index] == service->text;
+        has_string = has_string || atoms[index] == XCB_ATOM_STRING;
+    }
+    if (has_text) {
+        return service->text;
+    }
+    return has_string ? XCB_ATOM_STRING : XCB_ATOM_NONE;
+}
+
+static void finish_external_selection_import(
+    struct nb_xwayland_rootless *service,
+    bool imported)
+{
+    if (imported) {
+        service->external_selection =
+            service->selection_import_selection;
+    }
+    service->selection_import_stage = NB_XWAYLAND_SELECTION_IMPORT_NONE;
+    service->selection_import_selection = XCB_ATOM_NONE;
+    service->selection_import_target = XCB_ATOM_NONE;
+}
+
+static void handle_selection_notify(
+    struct nb_xwayland_rootless *service,
+    const xcb_selection_notify_event_t *event)
+{
+    xcb_get_property_reply_t *reply;
+    xcb_atom_t target;
+
+    if (service->selection_import_stage ==
+            NB_XWAYLAND_SELECTION_IMPORT_NONE ||
+        event->requestor != service->wm_window ||
+        event->selection != service->selection_import_selection ||
+        event->target != service->selection_import_target ||
+        event->property == XCB_ATOM_NONE ||
+        (event->property != service->clipboard_property &&
+         event->property != event->target)) {
+        if (event->selection == service->selection_import_selection) {
+            finish_external_selection_import(service, false);
+        }
+        return;
+    }
+    reply = xcb_get_property_reply(
+        service->connection,
+        xcb_get_property(service->connection,
+                         1,
+                         service->wm_window,
+                         service->clipboard_property,
+                         XCB_GET_PROPERTY_TYPE_ANY,
+                         0,
+                         (NB_XWAYLAND_CLIPBOARD_MAX_BYTES + 3U) / 4U),
+        NULL);
+    if (service->selection_import_stage ==
+        NB_XWAYLAND_SELECTION_IMPORT_TARGETS) {
+        target = choose_external_text_target(service, reply);
+        free(reply);
+        if (target == XCB_ATOM_NONE ||
+            !request_external_selection(
+                service,
+                event->selection,
+                target,
+                event->time,
+                NB_XWAYLAND_SELECTION_IMPORT_TEXT)) {
+            finish_external_selection_import(service, false);
+        }
+        return;
+    }
+    if (reply != NULL && reply->format == 8 && reply->bytes_after == 0 &&
+        reply->type != XCB_ATOM_NONE && reply->type != service->incr &&
+        (size_t)xcb_get_property_value_length(reply) <=
+            NB_XWAYLAND_CLIPBOARD_MAX_BYTES) {
+        const char *value = xcb_get_property_value(reply);
+        const size_t size =
+            (size_t)xcb_get_property_value_length(reply);
+
+        finish_external_selection_import(
+            service,
+            nb_desktop_runtime_set_external_clipboard_text(
+                service->desktop,
+                value != NULL ? value : "",
+                size));
+    } else {
+        finish_external_selection_import(service, false);
+    }
+    free(reply);
+}
+
 static bool redirect_window(struct nb_xwayland_rootless *service,
                             xcb_window_t window,
                             bool redirect)
@@ -719,12 +1073,18 @@ static bool initialize_xwm(struct nb_xwayland_rootless *service)
 {
     xcb_screen_iterator_t screens;
     xcb_composite_query_version_reply_t *composite_reply;
+    xcb_xfixes_query_version_reply_t *xfixes_reply;
+    const xcb_query_extension_reply_t *xfixes_extension;
     xcb_get_selection_owner_reply_t *selection_reply;
     const uint32_t root_event_mask =
         XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
         XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY |
         XCB_EVENT_MASK_PROPERTY_CHANGE;
     const uint32_t support_event_mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
+    const uint32_t selection_event_mask =
+        XCB_XFIXES_SELECTION_EVENT_MASK_SET_SELECTION_OWNER |
+        XCB_XFIXES_SELECTION_EVENT_MASK_SELECTION_WINDOW_DESTROY |
+        XCB_XFIXES_SELECTION_EVENT_MASK_SELECTION_CLIENT_CLOSE;
     xcb_atom_t supported[2];
 
     if (xcb_connection_has_error(service->connection) != 0) {
@@ -745,6 +1105,23 @@ static bool initialize_xwm(struct nb_xwayland_rootless *service)
         return false;
     }
     free(composite_reply);
+    xfixes_extension = xcb_get_extension_data(service->connection,
+                                              &xcb_xfixes_id);
+    if (xfixes_extension == NULL || !xfixes_extension->present) {
+        fputs("Rootless Xwayland does not provide the XFixes extension\n",
+              stderr);
+        return false;
+    }
+    xfixes_reply = xcb_xfixes_query_version_reply(
+        service->connection,
+        xcb_xfixes_query_version(service->connection, 1, 0),
+        NULL);
+    if (xfixes_reply == NULL) {
+        fputs("Rootless Xwayland could not initialize XFixes\n", stderr);
+        return false;
+    }
+    free(xfixes_reply);
+    service->xfixes_event_base = xfixes_extension->first_event;
     if (!checked_request_succeeded(
             service->connection,
             xcb_change_window_attributes_checked(service->connection,
@@ -776,6 +1153,22 @@ static bool initialize_xwm(struct nb_xwayland_rootless *service)
     service->utf8_string = intern_atom(service->connection,
                                        "UTF8_STRING",
                                        false);
+    service->clipboard = intern_atom(service->connection,
+                                     "CLIPBOARD",
+                                     false);
+    service->targets = intern_atom(service->connection,
+                                   "TARGETS",
+                                   false);
+    service->text = intern_atom(service->connection,
+                                "TEXT",
+                                false);
+    service->incr = intern_atom(service->connection,
+                                "INCR",
+                                false);
+    service->clipboard_property = intern_atom(
+        service->connection,
+        "_NIXBENCH_CLIPBOARD",
+        false);
     service->wm_name = intern_atom(service->connection,
                                    "WM_NAME",
                                    false);
@@ -834,7 +1227,23 @@ static bool initialize_xwm(struct nb_xwayland_rootless *service)
                                             service->wm_window,
                                             service->wm_selection,
                                             XCB_CURRENT_TIME),
-            "claim the WM_S0 selection")) {
+            "claim the WM_S0 selection") ||
+        !checked_request_succeeded(
+            service->connection,
+            xcb_xfixes_select_selection_input_checked(
+                service->connection,
+                service->wm_window,
+                service->clipboard,
+                selection_event_mask),
+            "watch the X11 CLIPBOARD selection") ||
+        !checked_request_succeeded(
+            service->connection,
+            xcb_xfixes_select_selection_input_checked(
+                service->connection,
+                service->wm_window,
+                XCB_ATOM_PRIMARY,
+                selection_event_mask),
+            "watch the X11 PRIMARY selection")) {
         return false;
     }
     selection_reply = xcb_get_selection_owner_reply(
@@ -851,6 +1260,11 @@ static bool initialize_xwm(struct nb_xwayland_rootless *service)
     free(selection_reply);
     return service->wl_surface_id != XCB_ATOM_NONE &&
            service->wl_surface_serial != XCB_ATOM_NONE &&
+           service->clipboard != XCB_ATOM_NONE &&
+           service->targets != XCB_ATOM_NONE &&
+           service->text != XCB_ATOM_NONE &&
+           service->incr != XCB_ATOM_NONE &&
+           service->clipboard_property != XCB_ATOM_NONE &&
            service->wm_protocols != XCB_ATOM_NONE &&
            service->wm_delete_window != XCB_ATOM_NONE &&
            xcb_flush(service->connection) > 0;
@@ -1188,9 +1602,11 @@ bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service)
             report_startup_failure(service);
             return false;
         }
+        memset(&interface, 0, sizeof(interface));
         interface.configure_window = configure_native_window;
         interface.close_window = close_native_window;
         interface.focus_window = focus_native_window;
+        interface.set_clipboard_owner = set_native_clipboard_owner;
         if (!nb_desktop_runtime_set_xwayland_interface(service->desktop,
                                                        &interface,
                                                        service) ||
@@ -1291,6 +1707,19 @@ bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service)
             }
             break;
         }
+        case XCB_SELECTION_REQUEST:
+            if (!handle_selection_request(
+                    service,
+                    (const xcb_selection_request_event_t *)event)) {
+                free(event);
+                return false;
+            }
+            break;
+        case XCB_SELECTION_NOTIFY:
+            handle_selection_notify(
+                service,
+                (const xcb_selection_notify_event_t *)event);
+            break;
         case XCB_DESTROY_NOTIFY:
             forget_window(
                 service,
@@ -1311,6 +1740,12 @@ bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service)
                 ((const xcb_unmap_notify_event_t *)event)->window);
             break;
         default:
+            if (type == (uint8_t)(service->xfixes_event_base +
+                                  XCB_XFIXES_SELECTION_NOTIFY)) {
+                handle_xfixes_selection_notify(
+                    service,
+                    (const xcb_xfixes_selection_notify_event_t *)event);
+            }
             break;
         }
         free(event);
