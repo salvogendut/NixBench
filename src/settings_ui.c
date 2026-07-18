@@ -269,7 +269,7 @@ enum nb_settings_action nb_settings_hit_test(struct nb_rect content,
         return NB_SETTINGS_ACTION_TOGGLE_MIDORI_PIN;
     }
     if (contains(full_row(content, 318), x, y)) {
-        return NB_SETTINGS_ACTION_TOGGLE_PCMANFM_PIN;
+        return NB_SETTINGS_ACTION_TOGGLE_THUNAR_PIN;
     }
     if (contains(full_row(content, 370), x, y)) {
         return NB_SETTINGS_ACTION_TOGGLE_MINIMIZE;
@@ -370,8 +370,8 @@ bool nb_settings_render(SDL_Renderer *renderer,
         !render_checkbox(
             renderer,
             full_row(content, 318),
-            "PCManFM File Manager",
-            preferences->pinned_applications[NB_PINNED_APPLICATION_PCMANFM]) ||
+            "Thunar File Manager",
+            preferences->pinned_applications[NB_PINNED_APPLICATION_THUNAR]) ||
         !render_heading(renderer, content, 350, "Windows") ||
         !render_checkbox(renderer,
                          full_row(content, 370),

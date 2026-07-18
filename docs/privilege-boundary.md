@@ -22,7 +22,7 @@ and performs final restoration independently. The device worker owns the fixed
 heartbeat. `nixbench-session-core` runs as the invoking ordinary user, publishes
 a private Wayland display, and starts with no client or one selected initial
 application. Its bounded process table can subsequently launch
-NixClock, Sakura, Midori, and PCManFM from the desktop's **Applications**
+NixClock, Sakura, Midori, and Thunar from the desktop's **Applications**
 menu; this
 happens entirely after the credential drop and adds no privileged protocol
 operation. A separately dropped sibling of the same

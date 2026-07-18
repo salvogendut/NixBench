@@ -26,7 +26,7 @@ now be supplied by the experimental Wayland shared-memory surface path.
 The standalone session appends an **Applications** menu to the currently
 focused application's menus, so the launcher remains reachable even when a
 client covers the desktop. It contains pinned entries for NixClock and the
-pkgsrc Sakura, Midori, and PCManFM executables, plus **Edit Application
+pkgsrc Sakura, Midori, and Thunar executables, plus **Edit Application
 Pins...**. Pin
 changes are applied immediately and persist in the invoking user's
 `~/.nixbenchrc`. Every launched process inherits the private Wayland display
@@ -42,8 +42,11 @@ dotfile visibility, paging, selection, and preview. PNG decoding is bounded to
 the existing solid or gradient base with Center, Tile, Fit, or Fill placement;
 the selected path and mode persist in version-3 `~/.nixbenchrc` files while
 older files remain readable. This model is intended to be reused by a future
-Workbench-style file manager and drag-and-drop layer. Mature GTK file managers
-may still run as optional applications, but are not required for core Settings.
+Workbench-style file manager and drag-and-drop layer. Thunar is the default
+external file-manager entry, but is not required for core Settings. PCManFM
+remains a useful GTK2/Xwayland compatibility probe; its override-redirect
+menus and context menus exceed the current rootless XWM coverage, so it is no
+longer the default launcher choice.
 
 NixClock is the first real out-of-process application. It creates an
 `xdg_toplevel`, manages release-aware shared-memory buffers and frame callbacks,

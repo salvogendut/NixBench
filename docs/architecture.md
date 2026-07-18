@@ -145,7 +145,7 @@ runtime sentinel owns cleanup of the private runtime directory; its sibling
 core creates the desktop, publishes the Wayland display there, and launches
 no application by default, or one operator-selected initial application. Its
 ordinary-user process manager services the global **Applications** menu,
-which can start NixClock, Sakura Terminal, Midori Web Browser, and PCManFM
+which can start NixClock, Sakura Terminal, Midori Web Browser, and Thunar
 File Manager processes without involving the privileged helper. The core
 receives only a bounded anonymous protocol endpoint; the selected application
 does not receive that endpoint, and neither ordinary-user process receives a

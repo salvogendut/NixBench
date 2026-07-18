@@ -85,7 +85,7 @@ int main(void)
     CHECK((status.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO)) ==
           (S_IRUSR | S_IWUSR));
     CHECK(preferences.pinned_applications[NB_PINNED_APPLICATION_NIXCLOCK]);
-    CHECK(preferences.pinned_applications[NB_PINNED_APPLICATION_PCMANFM]);
+    CHECK(preferences.pinned_applications[NB_PINNED_APPLICATION_THUNAR]);
     CHECK(preferences.backdrop_primary.red == 24);
     CHECK(!preferences.backdrop_gradient_enabled);
     CHECK(preferences.minimize_gadget_visible);
@@ -94,7 +94,7 @@ int main(void)
     CHECK(preferences.wallpaper_mode == NB_WALLPAPER_FIT);
 
     preferences.pinned_applications[NB_PINNED_APPLICATION_SAKURA] = false;
-    preferences.pinned_applications[NB_PINNED_APPLICATION_PCMANFM] = false;
+    preferences.pinned_applications[NB_PINNED_APPLICATION_THUNAR] = false;
     preferences.backdrop_primary = (struct nb_color){1, 2, 3};
     preferences.backdrop_secondary = (struct nb_color){250, 128, 64};
     preferences.backdrop_gradient_enabled = true;
@@ -118,7 +118,7 @@ int main(void)
                                            sizeof(error));
     CHECK(result == NB_USER_CONFIG_LOADED);
     CHECK(!loaded.pinned_applications[NB_PINNED_APPLICATION_SAKURA]);
-    CHECK(!loaded.pinned_applications[NB_PINNED_APPLICATION_PCMANFM]);
+    CHECK(!loaded.pinned_applications[NB_PINNED_APPLICATION_THUNAR]);
     CHECK(nb_color_equal(loaded.backdrop_primary,
                          (struct nb_color){1, 2, 3}));
     CHECK(nb_color_equal(loaded.backdrop_secondary,
@@ -156,6 +156,19 @@ int main(void)
                                         sizeof(error)) ==
           NB_USER_CONFIG_LOADED);
     CHECK(loaded.wallpaper_mode == NB_WALLPAPER_TILE);
+
+    /* Preserve the pin choice from configurations written before Thunar
+     * replaced PCManFM, while emitting only applications.thunar on save. */
+    CHECK(write_text(path,
+                     "version=3\n"
+                     "applications.pcmanfm=unpinned\n"));
+    nb_user_preferences_init(&loaded);
+    CHECK(nb_user_config_load_or_create(path,
+                                        &loaded,
+                                        error,
+                                        sizeof(error)) ==
+          NB_USER_CONFIG_LOADED);
+    CHECK(!loaded.pinned_applications[NB_PINNED_APPLICATION_THUNAR]);
 
     CHECK(write_text(path, "version=4\n"));
     nb_user_preferences_init(&loaded);

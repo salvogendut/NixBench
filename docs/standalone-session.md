@@ -24,10 +24,10 @@ client owns keyboard focus, or use the printed supervisor `SIGTERM` command
 from the retained second SSH session.
 
 The desktop starts empty. Use the global **Applications** menu to start
-NixClock, Sakura Terminal, Midori Web Browser, or PCManFM File Manager.
+NixClock, Sakura Terminal, Midori Web Browser, or Thunar File Manager.
 NixClock is resolved from the build tree or installed prefix; the external
 entries use `/usr/pkg/bin/sakura`, `/usr/pkg/bin/midori`, and
-`/usr/pkg/bin/pcmanfm`. To export GTK application
+`/usr/pkg/bin/thunar`. To export GTK application
 menus into the bar as well, start the session with
 `NIXBENCH_GTK_MENU_BRIDGE=1`.
 
@@ -50,7 +50,7 @@ live and saved atomically. The current panel provides:
 - a native PNG wallpaper chooser with directory navigation, dotfile control,
   paging, validation, and a bounded preview;
 - Center, Tile, Fit, and Fill wallpaper placement modes;
-- persistent pins for NixClock, Sakura, Midori, and PCManFM; and
+- persistent pins for NixClock, Sakura, Midori, and Thunar; and
 - minimize- and maximize-gadget visibility, with left or right window-gadget
   placement.
 
@@ -74,6 +74,10 @@ Clicking that button restores, raises, and focuses the window. Unknown keys
 are ignored so newer configurations remain readable by older builds. A
 malformed known value is reported and the session uses safe defaults without
 giving the file to the privileged helper.
+
+Newly saved files use `applications.thunar`. The former
+`applications.pcmanfm` key remains readable as a migration alias, so an
+existing user's pinned/unpinned choice is retained after upgrading.
 
 ## Installation and local launch
 

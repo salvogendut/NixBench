@@ -32,7 +32,7 @@ enum nb_desktop_launch_request {
     NB_DESKTOP_LAUNCH_NIXCLOCK,
     NB_DESKTOP_LAUNCH_SAKURA,
     NB_DESKTOP_LAUNCH_MIDORI,
-    NB_DESKTOP_LAUNCH_PCMANFM
+    NB_DESKTOP_LAUNCH_THUNAR
 };
 
 struct nb_desktop_runtime_options {

@@ -414,7 +414,7 @@ static void test_application_launcher_menu(void)
     CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
     event = key_event("RTRN", true, 67);
     CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
-    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_PCMANFM);
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_THUNAR);
 
     nb_desktop_runtime_destroy(runtime);
 }

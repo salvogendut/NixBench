@@ -475,7 +475,7 @@ entry point is:
 ./tools/run-wsdisplay-session.sh
 ```
 
-The session starts with an empty desktop; NixClock, Sakura, Midori, and PCManFM
+The session starts with an empty desktop; NixClock, Sakura, Midori, and Thunar
 are available as persistent pins in **Applications**. **Edit Application Pins...**
 opens the ordinary-user Settings panel; the desktop's own **Settings...**
 command opens the same window. The core creates `$HOME/.nixbenchrc` on first
@@ -551,8 +551,9 @@ full-desktop rendering and copying without weakening privilege separation.
 
 The ordinary-user core also owns a bounded multi-application process table.
 The global **Applications** menu launches NixClock from beside the core and
-the pkgsrc Sakura, Midori, and PCManFM executables. GTK applications use the
-private Wayland display; PCManFM uses its rootless Xwayland `DISPLAY`. Only
+the pkgsrc Sakura, Midori, and Thunar executables. These GTK applications use
+the private Wayland display; separate X11 applications use the rootless
+Xwayland `DISPLAY`. Only
 applications pinned in `~/.nixbenchrc` are listed; the Settings entry remains
 available even when all four applications are unpinned. The
 launcher menu is appended to the focused client's menu model,
@@ -568,6 +569,11 @@ accelerated buffer sharing, and complete coverage of transient, dynamically
 constructed GTK context menus are the expected first compatibility boundaries.
 Static detached application menus, including Sakura's main popup tree, are
 exported by the bridge.
+
+Thunar replaced PCManFM as the pinned file-manager application because it is
+a GTK3 client that can use NixBench's native Wayland path. PCManFM remains a
+valuable GTK2/Xwayland regression probe, but its override-redirect popup menus
+and grabs are not yet fully supported by the rootless XWM.
 
 Set `NIXBENCH_TRACE_WAYLAND=1` when invoking `./tools/run-wsdisplay-session.sh`
 if you need a client-side protocol trace for a failing interaction.

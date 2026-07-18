@@ -59,7 +59,7 @@ enum {
 #define NIXBENCH_DESKTOP_COMMAND_LAUNCH_SAKURA UINT32_C(0xfffffff1)
 #define NIXBENCH_DESKTOP_COMMAND_LAUNCH_MIDORI UINT32_C(0xfffffff2)
 #define NIXBENCH_DESKTOP_COMMAND_APPLICATION_PINS UINT32_C(0xfffffff3)
-#define NIXBENCH_DESKTOP_COMMAND_LAUNCH_PCMANFM UINT32_C(0xfffffff4)
+#define NIXBENCH_DESKTOP_COMMAND_LAUNCH_THUNAR UINT32_C(0xfffffff4)
 
 enum {
     NIXBENCH_ABOUT_COMMAND_CLOSE = 1
@@ -272,10 +272,10 @@ static void rebuild_launcher_menu(struct nb_desktop_runtime *runtime)
                           NB_MENU_ITEM_COMMAND);
     }
     if (runtime->preferences.pinned_applications[
-            NB_PINNED_APPLICATION_PCMANFM]) {
+            NB_PINNED_APPLICATION_THUNAR]) {
         set_launcher_item(&runtime->launcher_items[count++],
-                          "PCManFM File Manager",
-                          NIXBENCH_DESKTOP_COMMAND_LAUNCH_PCMANFM,
+                          "Thunar File Manager",
+                          NIXBENCH_DESKTOP_COMMAND_LAUNCH_THUNAR,
                           NB_MENU_ITEM_COMMAND);
     }
     if (count != 0) {
@@ -727,11 +727,11 @@ static bool apply_settings_action(struct nb_desktop_runtime *runtime,
                 NB_PINNED_APPLICATION_MIDORI];
         changed = true;
         rebuild_launcher_menu(runtime);
-    } else if (action == NB_SETTINGS_ACTION_TOGGLE_PCMANFM_PIN) {
+    } else if (action == NB_SETTINGS_ACTION_TOGGLE_THUNAR_PIN) {
         runtime->preferences.pinned_applications[
-            NB_PINNED_APPLICATION_PCMANFM] =
+            NB_PINNED_APPLICATION_THUNAR] =
             !runtime->preferences.pinned_applications[
-                NB_PINNED_APPLICATION_PCMANFM];
+                NB_PINNED_APPLICATION_THUNAR];
         changed = true;
         rebuild_launcher_menu(runtime);
     } else if (action == NB_SETTINGS_ACTION_TOGGLE_MINIMIZE) {
@@ -829,8 +829,8 @@ static bool apply_shell_action(struct nb_desktop_runtime *runtime,
             return true;
         }
         if (action.menu_command ==
-            NIXBENCH_DESKTOP_COMMAND_LAUNCH_PCMANFM) {
-            runtime->pending_launch_request = NB_DESKTOP_LAUNCH_PCMANFM;
+            NIXBENCH_DESKTOP_COMMAND_LAUNCH_THUNAR) {
+            runtime->pending_launch_request = NB_DESKTOP_LAUNCH_THUNAR;
             return true;
         }
         if (action.menu_command ==

@@ -1,0 +1,47 @@
+diff --git a/sysutils/xfce4-thunar/Makefile b/sysutils/xfce4-thunar/Makefile
+index 1ca69367f7a..2c073f6fc9a 100644
+--- a/sysutils/xfce4-thunar/Makefile
++++ b/sysutils/xfce4-thunar/Makefile
+@@ -36,5 +36,4 @@ PKGCONFIG_OVERRIDE+=	thunarx/thunarx-3.pc.in
+ .include "../../sysutils/libnotify/buildlink3.mk"
+ .include "../../x11/libxfce4ui/buildlink3.mk"
+ .include "../../x11/xfce4-exo/buildlink3.mk"
+-.include "../../x11/xfce4-panel/buildlink3.mk"
+ .include "../../mk/bsd.pkg.mk"
+diff --git a/sysutils/xfce4-thunar/PLIST b/sysutils/xfce4-thunar/PLIST
+index b5dc98fc947..c7633078f2a 100644
+--- a/sysutils/xfce4-thunar/PLIST
++++ b/sysutils/xfce4-thunar/PLIST
+@@ -24,6 +24,6 @@
+ lib/thunarx-3/thunar-sbr.la
+ lib/thunarx-3/thunar-uca.la
+-lib/thunarx-3/thunar-wallpaper-plugin.la
+-lib/xfce4/panel/plugins/libthunar-tpa.la
++${PLIST.panel_plugins}lib/thunarx-3/thunar-wallpaper-plugin.la
++${PLIST.panel_plugins}lib/xfce4/panel/plugins/libthunar-tpa.la
+ man/man1/Thunar.1
+ share/Thunar/sendto/thunar-sendto-email.desktop
+@@ -261,4 +261,4 @@
+ share/locale/zh_TW/LC_MESSAGES/thunar.mo
+ share/metainfo/org.xfce.thunar.appdata.xml
+ share/polkit-1/actions/org.xfce.thunar.policy
+-share/xfce4/panel/plugins/thunar-tpa.desktop
++${PLIST.panel_plugins}share/xfce4/panel/plugins/thunar-tpa.desktop
+diff --git a/sysutils/xfce4-thunar/options.mk b/sysutils/xfce4-thunar/options.mk
+index 63c10c00644..79fb90e3c0a 100644
+--- a/sysutils/xfce4-thunar/options.mk
++++ b/sysutils/xfce4-thunar/options.mk
+@@ -4,2 +4,3 @@
+-PKG_SUPPORTED_OPTIONS=	gvfs
+-PKG_SUGGESTED_OPTIONS=	gvfs
++PKG_SUPPORTED_OPTIONS=	gvfs panel-plugins
++PKG_SUGGESTED_OPTIONS=	gvfs panel-plugins
++PLIST_VARS+=		panel_plugins
+@@ -12,0 +14,7 @@
++.if !empty(PKG_OPTIONS:Mpanel-plugins)
++PLIST.panel_plugins=	yes
++.include "../../x11/xfce4-panel/buildlink3.mk"
++.else
++CONFIGURE_ARGS+=	--disable-tpa-plugin
++CONFIGURE_ARGS+=	--disable-wallpaper-plugin
++.endif

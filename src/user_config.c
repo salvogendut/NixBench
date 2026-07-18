@@ -129,10 +129,11 @@ static bool parse_known_key(struct nb_user_preferences *preferences,
                              &preferences->pinned_applications[
                                  NB_PINNED_APPLICATION_MIDORI]);
     }
-    if (strcmp(key, "applications.pcmanfm") == 0) {
+    if (strcmp(key, "applications.thunar") == 0 ||
+        strcmp(key, "applications.pcmanfm") == 0) {
         return parse_boolean(value,
                              &preferences->pinned_applications[
-                                 NB_PINNED_APPLICATION_PCMANFM]);
+                                 NB_PINNED_APPLICATION_THUNAR]);
     }
     if (strcmp(key, "desktop.backdrop.primary") == 0) {
         return parse_color(value, &preferences->backdrop_primary);
@@ -387,7 +388,7 @@ static bool write_stream(FILE *stream,
                    "applications.nixclock=%s\n"
                    "applications.sakura=%s\n"
                    "applications.midori=%s\n"
-                   "applications.pcmanfm=%s\n"
+                   "applications.thunar=%s\n"
                    "desktop.backdrop.primary=#%02x%02x%02x\n"
                    "desktop.backdrop.secondary=#%02x%02x%02x\n"
                    "desktop.backdrop.gradient=%s\n"
@@ -409,7 +410,7 @@ static bool write_stream(FILE *stream,
                        NB_PINNED_APPLICATION_MIDORI]
                        ? "pinned" : "unpinned",
                    preferences->pinned_applications[
-                       NB_PINNED_APPLICATION_PCMANFM]
+                       NB_PINNED_APPLICATION_THUNAR]
                        ? "pinned" : "unpinned",
                    (unsigned int)preferences->backdrop_primary.red,
                    (unsigned int)preferences->backdrop_primary.green,
