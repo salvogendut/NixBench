@@ -982,6 +982,24 @@ static gboolean widget_menu_has_items(GtkWidget *widget)
     return found;
 }
 
+static gboolean bridge_window_is_toplevel(GtkWindow *window)
+{
+    GtkWidget *widget;
+    GdkWindow *gdk_window;
+
+    if (window == NULL ||
+        gtk_window_get_window_type(window) != GTK_WINDOW_TOPLEVEL) {
+        return FALSE;
+    }
+    widget = GTK_WIDGET(window);
+    if (!gtk_widget_get_realized(widget)) {
+        return TRUE;
+    }
+    gdk_window = gtk_widget_get_window(widget);
+    return gdk_window != NULL &&
+           gdk_window_get_window_type(gdk_window) == GDK_WINDOW_TOPLEVEL;
+}
+
 static size_t widget_menu_score(GtkWidget *widget)
 {
     GList *children;
@@ -1306,6 +1324,10 @@ static gboolean publish_window_menu(struct nb_gtk_menu_window_state *state)
     const char *source;
 
     if (state == NULL || state->bridge == NULL || state->window == NULL) {
+        return FALSE;
+    }
+    if (!bridge_window_is_toplevel(state->window)) {
+        window_state_clear_menu(state);
         return FALSE;
     }
     if (!bridge_ensure_manager(state->bridge)) {
@@ -1679,7 +1701,7 @@ static struct nb_gtk_menu_window_state *bridge_attach_window(
 {
     struct nb_gtk_menu_window_state *state;
 
-    if (bridge == NULL || window == NULL) {
+    if (bridge == NULL || !bridge_window_is_toplevel(window)) {
         return NULL;
     }
     bridge_bind_application(bridge, gtk_window_get_application(window));
