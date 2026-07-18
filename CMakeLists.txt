@@ -47,6 +47,29 @@ option(
 )
 
 set(
+  NIXBENCH_HTML_THEMES "AUTO"
+  CACHE STRING "Build the experimental WebKitGTK HTML theme renderer (AUTO, ON, or OFF)"
+)
+set_property(CACHE NIXBENCH_HTML_THEMES PROPERTY STRINGS AUTO ON OFF)
+string(TOUPPER "${NIXBENCH_HTML_THEMES}" NIXBENCH_HTML_THEMES)
+set(
+  NIXBENCH_HTML_THEMES "${NIXBENCH_HTML_THEMES}"
+  CACHE STRING "Build the experimental WebKitGTK HTML theme renderer (AUTO, ON, or OFF)"
+  FORCE
+)
+if(
+  NOT NIXBENCH_HTML_THEMES STREQUAL "AUTO"
+  AND NOT NIXBENCH_HTML_THEMES STREQUAL "ON"
+  AND NOT NIXBENCH_HTML_THEMES STREQUAL "OFF"
+)
+  message(
+    FATAL_ERROR
+    "NIXBENCH_HTML_THEMES must be one of AUTO, ON, or OFF "
+    "(received '${NIXBENCH_HTML_THEMES}')"
+  )
+endif()
+
+set(
   NIXBENCH_LIBDRM "AUTO"
   CACHE STRING "Build detailed DRM/KMS capability queries (AUTO, ON, or OFF)"
 )
@@ -566,6 +589,67 @@ if(NIXBENCH_WAYLAND_ENABLED)
   endif()
 endif()
 
+set(NIXBENCH_HTML_THEMES_AVAILABLE FALSE)
+set(NIXBENCH_WEBKITGTK_TARGET "")
+if(NIXBENCH_HTML_THEMES STREQUAL "OFF")
+  message(STATUS "HTML theme renderer disabled")
+elseif(NOT NIXBENCH_WAYLAND_ENABLED OR NOT NIXBENCH_WAYLAND_CLIENT_AVAILABLE)
+  if(NIXBENCH_HTML_THEMES STREQUAL "ON")
+    message(
+      FATAL_ERROR
+      "The HTML theme renderer requires Wayland server and client support"
+    )
+  else()
+    message(STATUS "HTML theme renderer unavailable: Wayland support disabled")
+  endif()
+else()
+  find_package(PkgConfig QUIET)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(
+      NIXBENCH_WEBKITGTK_41
+      QUIET IMPORTED_TARGET
+      webkit2gtk-4.1
+      gdk-wayland-3.0
+    )
+    if(NIXBENCH_WEBKITGTK_41_FOUND)
+      set(NIXBENCH_HTML_THEMES_AVAILABLE TRUE)
+      set(NIXBENCH_WEBKITGTK_TARGET PkgConfig::NIXBENCH_WEBKITGTK_41)
+      set(NIXBENCH_WEBKITGTK_API "4.1")
+    else()
+      pkg_check_modules(
+        NIXBENCH_WEBKITGTK_40
+        QUIET IMPORTED_TARGET
+        webkit2gtk-4.0
+        gdk-wayland-3.0
+      )
+      if(NIXBENCH_WEBKITGTK_40_FOUND)
+        set(NIXBENCH_HTML_THEMES_AVAILABLE TRUE)
+        set(NIXBENCH_WEBKITGTK_TARGET PkgConfig::NIXBENCH_WEBKITGTK_40)
+        set(NIXBENCH_WEBKITGTK_API "4.0")
+      endif()
+    endif()
+  endif()
+
+  if(NIXBENCH_HTML_THEMES_AVAILABLE)
+    message(
+      STATUS
+      "HTML theme renderer dependencies found (WebKitGTK ${NIXBENCH_WEBKITGTK_API})"
+    )
+  elseif(NIXBENCH_HTML_THEMES STREQUAL "ON")
+    message(
+      FATAL_ERROR
+      "The HTML theme renderer was requested, but WebKitGTK 4.0/4.1 and "
+      "gdk-wayland-3.0 were not found"
+    )
+  else()
+    message(
+      STATUS
+      "HTML theme renderer unavailable: WebKitGTK 4.0/4.1 or "
+      "gdk-wayland-3.0 not found"
+    )
+  endif()
+endif()
+
 add_library(
   nixbench_preferences STATIC
   src/preferences.c
@@ -583,6 +667,13 @@ target_include_directories(
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 nixbench_configure_c_target(nixbench_themes)
+
+add_library(nixbench_theme_atlas STATIC src/theme_atlas.c)
+target_include_directories(
+  nixbench_theme_atlas
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+nixbench_configure_c_target(nixbench_theme_atlas)
 
 add_library(
   nixbench_filesystem STATIC
@@ -1678,6 +1769,13 @@ if(BUILD_TESTING)
   )
   nixbench_configure_c_target(nixbench_theme_bundle_tests)
 
+  add_executable(nixbench_theme_atlas_tests tests/theme_atlas_test.c)
+  target_link_libraries(
+    nixbench_theme_atlas_tests
+    PRIVATE nixbench_theme_atlas
+  )
+  nixbench_configure_c_target(nixbench_theme_atlas_tests)
+
   add_executable(
     nixbench_framebuffer_format_tests
     tests/framebuffer_format_test.c
@@ -2048,6 +2146,7 @@ if(BUILD_TESTING)
   add_test(NAME nixbench.window.model COMMAND nixbench_window_tests)
   add_test(NAME nixbench.user-config COMMAND nixbench_user_config_tests)
   add_test(NAME nixbench.theme-bundles COMMAND nixbench_theme_bundle_tests)
+  add_test(NAME nixbench.theme-atlas COMMAND nixbench_theme_atlas_tests)
   add_test(NAME nixbench.menu.model COMMAND nixbench_menu_tests)
   add_test(NAME nixbench.shell.model COMMAND nixbench_shell_tests)
   add_test(NAME nixbench.application.model COMMAND nixbench_application_tests)
