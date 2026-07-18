@@ -33,8 +33,8 @@ alongside NixInfo and a Sakura terminal.*
 - GTK3/Wayland applications such as Sakura and Midori, with an optional bridge
   that publishes their menus in the NixBench bar.
 - Rootless Xwayland compatibility for traditional X11 applications,
-  including keyboard focus, EWMH fullscreen requests, and bounded text
-  clipboard interoperability with Wayland applications.
+  including keyboard focus, EWMH fullscreen requests, and bounded direct or
+  `INCR` text clipboard interoperability with Wayland applications.
 - Persistent application pins, window-control preferences, and configurable
   solid or gradient backdrops in `~/.nixbenchrc`.
 - Delayed PNG screenshots and live CPU/memory history in NixInfo.

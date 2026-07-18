@@ -25,12 +25,12 @@
 
 #include "desktop_runtime.h"
 #include "window.h"
+#include "x11_selection_transfer.h"
 
 enum {
     NB_XWAYLAND_FIRST_DISPLAY = 98,
     NB_XWAYLAND_LAST_DISPLAY = 109,
     NB_XWAYLAND_MAX_WINDOWS = 32,
-    NB_XWAYLAND_CLIPBOARD_MAX_BYTES = 1024 * 1024,
     NB_XWAYLAND_EXIT_WAIT_MS = 2000,
     NB_XWAYLAND_EXIT_WAIT_SLICE_MS = 20,
     NB_NET_WM_STATE_REMOVE = 0,
@@ -41,7 +41,9 @@ enum {
 enum nb_xwayland_selection_import_stage {
     NB_XWAYLAND_SELECTION_IMPORT_NONE = 0,
     NB_XWAYLAND_SELECTION_IMPORT_TARGETS,
-    NB_XWAYLAND_SELECTION_IMPORT_TEXT
+    NB_XWAYLAND_SELECTION_IMPORT_TEXT,
+    NB_XWAYLAND_SELECTION_IMPORT_INCR,
+    NB_XWAYLAND_SELECTION_IMPORT_INCR_DRAIN
 };
 
 struct nb_xwayland_window {
@@ -84,6 +86,7 @@ struct nb_xwayland_rootless {
     xcb_atom_t selection_import_selection;
     xcb_atom_t selection_import_target;
     xcb_atom_t external_selection;
+    struct nb_x11_selection_transfers *selection_transfers;
     xcb_connection_t *pending_connection;
     pthread_t connector_thread;
     int startup_pipe[2];
@@ -723,12 +726,61 @@ static bool send_selection_notify(
         "send an X11 selection notification");
 }
 
+static bool begin_incremental_selection_export(
+    struct nb_xwayland_rootless *service,
+    const xcb_selection_request_event_t *request,
+    xcb_atom_t property,
+    xcb_atom_t property_type,
+    const void *data,
+    size_t size)
+{
+    const uint32_t event_mask = XCB_EVENT_MASK_PROPERTY_CHANGE |
+                                XCB_EVENT_MASK_STRUCTURE_NOTIFY;
+    const uint32_t announced_size = (uint32_t)size;
+
+    if (!nb_x11_selection_outgoing_start(service->selection_transfers,
+                                         request->requestor,
+                                         property,
+                                         request->selection,
+                                         request->target,
+                                         property_type,
+                                         data,
+                                         size)) {
+        return false;
+    }
+    if (!checked_request_succeeded(
+            service->connection,
+            xcb_change_window_attributes_checked(service->connection,
+                                                 request->requestor,
+                                                 XCB_CW_EVENT_MASK,
+                                                 &event_mask),
+            "watch an incremental selection requestor") ||
+        !checked_request_succeeded(
+            service->connection,
+            xcb_change_property_checked(service->connection,
+                                        XCB_PROP_MODE_REPLACE,
+                                        request->requestor,
+                                        property,
+                                        service->incr,
+                                        32,
+                                        1,
+                                        &announced_size),
+            "start an incremental X11 clipboard transfer")) {
+        nb_x11_selection_outgoing_cancel(service->selection_transfers,
+                                         request->requestor,
+                                         property);
+        return false;
+    }
+    return true;
+}
+
 static bool handle_selection_request(
     struct nb_xwayland_rootless *service,
     const xcb_selection_request_event_t *request)
 {
     xcb_atom_t property = request->property;
     bool exported = false;
+    bool incremental = false;
 
     if (request->owner != service->wm_window ||
         (request->selection != service->clipboard &&
@@ -768,23 +820,79 @@ static bool handle_selection_request(
         if (nb_desktop_runtime_clipboard_text(service->desktop,
                                               &text_value,
                                               &text_size) &&
-            text_size <= NB_XWAYLAND_CLIPBOARD_MAX_BYTES) {
-            exported = checked_request_succeeded(
-                service->connection,
-                xcb_change_property_checked(service->connection,
-                                            XCB_PROP_MODE_REPLACE,
-                                            request->requestor,
-                                            property,
-                                            property_type,
-                                            8,
-                                            (uint32_t)text_size,
-                                            text_value),
-                "publish X11 clipboard text");
+            text_size <= NB_X11_SELECTION_TRANSFER_MAX_BYTES) {
+            if (text_size > NB_X11_SELECTION_TRANSFER_CHUNK_BYTES) {
+                exported = begin_incremental_selection_export(
+                    service,
+                    request,
+                    property,
+                    property_type,
+                    text_value,
+                    text_size);
+                incremental = exported;
+            } else {
+                exported = checked_request_succeeded(
+                    service->connection,
+                    xcb_change_property_checked(service->connection,
+                                                XCB_PROP_MODE_REPLACE,
+                                                request->requestor,
+                                                property,
+                                                property_type,
+                                                8,
+                                                (uint32_t)text_size,
+                                                text_value),
+                    "publish X11 clipboard text");
+            }
         }
     }
-    return send_selection_notify(service,
-                                 request,
-                                 exported ? property : XCB_ATOM_NONE);
+    if (!send_selection_notify(service,
+                               request,
+                               exported ? property : XCB_ATOM_NONE)) {
+        if (incremental) {
+            nb_x11_selection_outgoing_cancel(service->selection_transfers,
+                                             request->requestor,
+                                             property);
+        }
+        return false;
+    }
+    return true;
+}
+
+static void handle_incremental_selection_export(
+    struct nb_xwayland_rootless *service,
+    const xcb_property_notify_event_t *event)
+{
+    uint32_t property_type;
+    const void *data;
+    size_t size;
+    bool complete;
+
+    if (event->state != XCB_PROPERTY_DELETE ||
+        !nb_x11_selection_outgoing_next(service->selection_transfers,
+                                        event->window,
+                                        event->atom,
+                                        &property_type,
+                                        &data,
+                                        &size,
+                                        &complete)) {
+        return;
+    }
+    if (!checked_request_succeeded(
+            service->connection,
+            xcb_change_property_checked(service->connection,
+                                        XCB_PROP_MODE_REPLACE,
+                                        event->window,
+                                        event->atom,
+                                        (xcb_atom_t)property_type,
+                                        8,
+                                        (uint32_t)size,
+                                        data),
+            complete ? "finish an incremental X11 clipboard transfer"
+                     : "continue an incremental X11 clipboard transfer")) {
+        nb_x11_selection_outgoing_cancel(service->selection_transfers,
+                                         event->window,
+                                         event->atom);
+    }
 }
 
 static bool request_external_selection(
@@ -794,6 +902,9 @@ static bool request_external_selection(
     xcb_timestamp_t timestamp,
     enum nb_xwayland_selection_import_stage stage)
 {
+    if (stage == NB_XWAYLAND_SELECTION_IMPORT_TARGETS) {
+        nb_x11_selection_incoming_clear(service->selection_transfers);
+    }
     if (!checked_request_succeeded(
             service->connection,
             xcb_convert_selection_checked(service->connection,
@@ -834,6 +945,8 @@ static void handle_xfixes_selection_notify(
                 NB_XWAYLAND_SELECTION_IMPORT_NONE;
             service->selection_import_selection = XCB_ATOM_NONE;
             service->selection_import_target = XCB_ATOM_NONE;
+            nb_x11_selection_incoming_clear(
+                service->selection_transfers);
         }
         return;
     }
@@ -895,6 +1008,7 @@ static void finish_external_selection_import(
     service->selection_import_stage = NB_XWAYLAND_SELECTION_IMPORT_NONE;
     service->selection_import_selection = XCB_ATOM_NONE;
     service->selection_import_target = XCB_ATOM_NONE;
+    nb_x11_selection_incoming_clear(service->selection_transfers);
 }
 
 static void handle_selection_notify(
@@ -925,7 +1039,7 @@ static void handle_selection_notify(
                          service->clipboard_property,
                          XCB_GET_PROPERTY_TYPE_ANY,
                          0,
-                         (NB_XWAYLAND_CLIPBOARD_MAX_BYTES + 3U) / 4U),
+                         (NB_X11_SELECTION_TRANSFER_MAX_BYTES + 3U) / 4U),
         NULL);
     if (service->selection_import_stage ==
         NB_XWAYLAND_SELECTION_IMPORT_TARGETS) {
@@ -942,10 +1056,28 @@ static void handle_selection_notify(
         }
         return;
     }
-    if (reply != NULL && reply->format == 8 && reply->bytes_after == 0 &&
+    if (reply != NULL && reply->type == service->incr &&
+        reply->format == 32 && reply->bytes_after == 0 &&
+        xcb_get_property_value_length(reply) == (int)sizeof(uint32_t)) {
+        uint32_t announced_size;
+
+        memcpy(&announced_size,
+               xcb_get_property_value(reply),
+               sizeof(announced_size));
+        nb_x11_selection_incoming_clear(service->selection_transfers);
+        if (nb_x11_selection_incoming_begin(service->selection_transfers,
+                                            announced_size)) {
+            service->selection_import_stage =
+                NB_XWAYLAND_SELECTION_IMPORT_INCR;
+        } else {
+            service->selection_import_stage =
+                NB_XWAYLAND_SELECTION_IMPORT_INCR_DRAIN;
+        }
+    } else if (reply != NULL && reply->format == 8 &&
+        reply->bytes_after == 0 &&
         reply->type != XCB_ATOM_NONE && reply->type != service->incr &&
         (size_t)xcb_get_property_value_length(reply) <=
-            NB_XWAYLAND_CLIPBOARD_MAX_BYTES) {
+            NB_X11_SELECTION_TRANSFER_MAX_BYTES) {
         const char *value = xcb_get_property_value(reply);
         const size_t size =
             (size_t)xcb_get_property_value_length(reply);
@@ -958,6 +1090,97 @@ static void handle_selection_notify(
                 size));
     } else {
         finish_external_selection_import(service, false);
+    }
+    free(reply);
+}
+
+static void handle_incremental_selection_import(
+    struct nb_xwayland_rootless *service,
+    const xcb_property_notify_event_t *event)
+{
+    xcb_get_property_reply_t *reply;
+    size_t size;
+    bool valid;
+
+    if (event->window != service->wm_window ||
+        event->atom != service->clipboard_property ||
+        event->state != XCB_PROPERTY_NEW_VALUE ||
+        (service->selection_import_stage !=
+             NB_XWAYLAND_SELECTION_IMPORT_INCR &&
+         service->selection_import_stage !=
+             NB_XWAYLAND_SELECTION_IMPORT_INCR_DRAIN)) {
+        return;
+    }
+    reply = xcb_get_property_reply(
+        service->connection,
+        xcb_get_property(service->connection,
+                         1,
+                         service->wm_window,
+                         service->clipboard_property,
+                         XCB_GET_PROPERTY_TYPE_ANY,
+                         0,
+                         (NB_X11_SELECTION_TRANSFER_MAX_BYTES + 3U) / 4U),
+        NULL);
+    if (reply == NULL) {
+        finish_external_selection_import(service, false);
+        return;
+    }
+    size = (size_t)xcb_get_property_value_length(reply);
+    valid = reply->format == 8 && reply->bytes_after == 0 &&
+            reply->type != XCB_ATOM_NONE && reply->type != service->incr;
+    if (reply->bytes_after != 0) {
+        (void)checked_request_succeeded(
+            service->connection,
+            xcb_delete_property_checked(service->connection,
+                                        service->wm_window,
+                                        service->clipboard_property),
+            "discard an oversized incremental X11 clipboard chunk");
+    }
+    if (service->selection_import_stage ==
+        NB_XWAYLAND_SELECTION_IMPORT_INCR_DRAIN) {
+        if (reply->bytes_after == 0 && size == 0) {
+            finish_external_selection_import(service, false);
+        }
+        free(reply);
+        return;
+    }
+    if (!valid) {
+        nb_x11_selection_incoming_clear(service->selection_transfers);
+        if (reply->bytes_after == 0 && size == 0) {
+            finish_external_selection_import(service, false);
+        } else {
+            service->selection_import_stage =
+                NB_XWAYLAND_SELECTION_IMPORT_INCR_DRAIN;
+        }
+        free(reply);
+        return;
+    }
+    {
+        const enum nb_x11_selection_incoming_result result =
+            nb_x11_selection_incoming_append(
+                service->selection_transfers,
+                size != 0 ? xcb_get_property_value(reply) : NULL,
+                size);
+
+        if (result == NB_X11_SELECTION_INCOMING_COMPLETE) {
+            const void *data;
+            size_t data_size;
+            bool imported = false;
+
+            if (nb_x11_selection_incoming_data(
+                    service->selection_transfers,
+                    &data,
+                    &data_size)) {
+                imported = nb_desktop_runtime_set_external_clipboard_text(
+                    service->desktop,
+                    data != NULL ? data : "",
+                    data_size);
+            }
+            finish_external_selection_import(service, imported);
+        } else if (result == NB_X11_SELECTION_INCOMING_ERROR) {
+            service->selection_import_stage =
+                NB_XWAYLAND_SELECTION_IMPORT_INCR_DRAIN;
+        }
     }
     free(reply);
 }
@@ -1379,6 +1602,10 @@ struct nb_xwayland_rootless *nb_xwayland_rootless_create(
     service->startup_pipe[0] = -1;
     service->startup_pipe[1] = -1;
     service->connector_descriptor = -1;
+    service->selection_transfers = nb_x11_selection_transfers_create();
+    if (service->selection_transfers == NULL) {
+        goto fail;
+    }
     listen_descriptor = create_listen_socket(service->socket_path,
                                              sizeof(service->socket_path),
                                              service->display_name,
@@ -1515,6 +1742,7 @@ void nb_xwayland_rootless_destroy(struct nb_xwayland_rootless *service)
     if (service->socket_path[0] != '\0') {
         (void)unlink(service->socket_path);
     }
+    nb_x11_selection_transfers_destroy(service->selection_transfers);
     free(service);
 }
 
@@ -1699,6 +1927,8 @@ bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service)
             struct nb_xwayland_window *entry =
                 find_window(service, property->window);
 
+            handle_incremental_selection_export(service, property);
+            handle_incremental_selection_import(service, property);
             if (entry != NULL &&
                 (property->atom == service->net_wm_name ||
                  property->atom == service->wm_name ||
@@ -1721,6 +1951,9 @@ bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service)
                 (const xcb_selection_notify_event_t *)event);
             break;
         case XCB_DESTROY_NOTIFY:
+            nb_x11_selection_outgoing_cancel_requestor(
+                service->selection_transfers,
+                ((const xcb_destroy_notify_event_t *)event)->window);
             forget_window(
                 service,
                 ((const xcb_destroy_notify_event_t *)event)->window);

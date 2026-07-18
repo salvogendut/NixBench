@@ -70,8 +70,11 @@ ownership and asynchronous transfer. Text copied by a focused Wayland client
 is cached up to 1 MiB and exported by the rootless XWM as both X11 `CLIPBOARD`
 and `PRIMARY`; an X11 owner advertising `UTF8_STRING`, `TEXT`, or `STRING` is
 imported as a regular Wayland selection offer. Replacement and client exit
-invalidate old offers. Drag-and-drop, binary MIME payloads, and X11 `INCR`
-transfers remain deliberately unsupported.
+invalidate old offers. Payloads larger than 64 KiB use ICCCM `INCR`: outgoing
+data is snapshotted and emitted in bounded chunks, while incoming chunks are
+accumulated only up to the same 1 MiB selection limit. Oversized incoming
+transfers are drained without becoming a Wayland selection. Drag-and-drop and
+binary MIME payloads remain deliberately unsupported.
 NixBench also does not yet offer a supported production direct-console login
 session.
 

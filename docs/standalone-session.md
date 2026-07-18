@@ -168,10 +168,10 @@ credential-dropped core performs the actual `exec` without a shell. This is
 not an application sandbox: the selected program retains the invoking user's
 home-directory and group access. Use Midori only with blank or otherwise
 trusted content during this first probe. A main window may expose the next
-compatibility boundary rather than be fully usable: popup pointer routing,
-outside-click dismissal and positioner constraint adjustment, pointer-axis
-scrolling, subsurfaces, drag-and-drop, X11 `INCR` clipboard transfers,
-accelerated buffers, and generic GTK global-menu integration remain incomplete.
+compatibility boundary rather than be fully usable: outside-click dismissal
+and positioner constraint adjustment, pointer-axis scrolling, subsurfaces,
+drag-and-drop, binary clipboard MIME types, and accelerated buffers remain
+incomplete.
 
 Set `NIXBENCH_TRACE_WAYLAND=1` when invoking `./tools/run-wsdisplay-session.sh`
 if you need a client-side protocol trace for the first failing interaction.

@@ -530,6 +530,16 @@ target_include_directories(
 )
 nixbench_configure_c_target(nixbench_damage)
 
+add_library(
+  nixbench_x11_selection_transfer STATIC
+  src/x11_selection_transfer.c
+)
+target_include_directories(
+  nixbench_x11_selection_transfer
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+nixbench_configure_c_target(nixbench_x11_selection_transfer)
+
 set(NIXBENCH_WAYLAND_CLIENT_AVAILABLE FALSE)
 if(NIXBENCH_WAYLAND_ENABLED)
   find_path(
@@ -1028,6 +1038,7 @@ if(UNIX AND NIXBENCH_WAYLAND_ENABLED)
       nixbench_xwayland_rootless
       PRIVATE
         nixbench_desktop_runtime
+        nixbench_x11_selection_transfer
         Threads::Threads
         "${NIXBENCH_XCB_COMPOSITE_LIBRARY}"
         "${NIXBENCH_XCB_XFIXES_LIBRARY}"
@@ -1403,6 +1414,16 @@ if(NIXBENCH_BUILD_WSDISPLAY_SESSION)
 endif()
 
 if(BUILD_TESTING)
+  add_executable(
+    nixbench_x11_selection_transfer_tests
+    tests/x11_selection_transfer_test.c
+  )
+  target_link_libraries(
+    nixbench_x11_selection_transfer_tests
+    PRIVATE nixbench_x11_selection_transfer
+  )
+  nixbench_configure_c_target(nixbench_x11_selection_transfer_tests)
+
   add_executable(nixbench_damage_tests tests/damage_region_test.c)
   target_link_libraries(nixbench_damage_tests PRIVATE nixbench_damage)
   nixbench_configure_c_target(nixbench_damage_tests)
@@ -1764,6 +1785,10 @@ if(BUILD_TESTING)
   endif()
 
   add_test(NAME nixbench.desktop.model COMMAND nixbench_desktop_tests)
+  add_test(
+    NAME nixbench.x11-selection-transfer
+    COMMAND nixbench_x11_selection_transfer_tests
+  )
   add_test(NAME nixbench.damage.region COMMAND nixbench_damage_tests)
   add_test(NAME nixbench.host.contract COMMAND nixbench_host_tests)
   add_test(NAME nixbench.host.fd-wait COMMAND nixbench_host_fd_wait_tests)

@@ -587,6 +587,9 @@ Current implementation checkpoint:
   surfaces, and maps each X11 top-level into an independent NixBench frame.
 - Configure, title, close, unmap, and shutdown paths are integrated without
   extending the privileged helper's device-only responsibility.
+- Bounded text selection interoperability covers Wayland and X11 `CLIPBOARD`
+  and `PRIMARY`. Transfers larger than 64 KiB use ICCCM `INCR` in both
+  directions and retain the compositor's 1 MiB selection limit.
 
 Exit criteria:
 
