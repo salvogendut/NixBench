@@ -608,8 +608,6 @@ static bool focus_native_window(void *context, uint32_t xwindow)
     return xcb_flush(service->connection) > 0;
 }
 
-static bool redirect_root_subwindows(struct nb_xwayland_rootless *service);
-
 static bool handle_map_request(struct nb_xwayland_rootless *service,
                                const xcb_map_request_event_t *event)
 {
@@ -619,15 +617,6 @@ static bool handle_map_request(struct nb_xwayland_rootless *service,
         remember_window(service, event->window);
 
     if (entry == NULL) {
-        return false;
-    }
-    /*
-     * Xwayland can finish initializing its root window after the XWM
-     * connector becomes usable. Reassert the Composite redirect here, just
-     * before approving the first real client map, so newly realized rootless
-     * windows receive their Wayland surfaces on every supported Xwayland.
-     */
-    if (!redirect_root_subwindows(service)) {
         return false;
     }
     xcb_change_window_attributes(service->connection,
