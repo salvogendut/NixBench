@@ -1,0 +1,43 @@
+From: NixBench contributors
+Subject: [PATCH 1/2] composite: mark parent before validating a late redirect
+
+A rootless DDX can realize and map a top-level before a compositor requests
+manual redirection for that individual window. On NetBSD/arm64 this reached
+compHandleMarkedWindows() with pLayerWin->parent->valdata unset and crashed in
+miValidateTree().
+
+Ensure the parent has validation data immediately before ValidateTree. Cache
+the parent used by the complete validation sequence so all three calls operate
+on the same window.
+---
+ composite/compalloc.c | 16 ++++++++++++----
+ 1 file changed, 12 insertions(+), 4 deletions(-)
+
+diff --git a/composite/compalloc.c b/composite/compalloc.c
+--- a/composite/compalloc.c
++++ b/composite/compalloc.c
+@@ -122,11 +122,19 @@ static void
+ compHandleMarkedWindows(WindowPtr pWin, WindowPtr pLayerWin)
+ {
+     ScreenPtr pScreen = pWin->drawable.pScreen;
++    WindowPtr pParent = pLayerWin->parent;
+ 
+-    (*pScreen->ValidateTree) (pLayerWin->parent, pLayerWin, VTOther);
+-    (*pScreen->HandleExposures) (pLayerWin->parent);
++    /*
++     * A rootless DDX can realize the top-level before a late per-window
++     * redirect marks its parent.  ValidateTree requires parent->valdata.
++     */
++    if (!pParent->valdata)
++        (*pScreen->MarkWindow) (pParent);
++
++    (*pScreen->ValidateTree) (pParent, pLayerWin, VTOther);
++    (*pScreen->HandleExposures) (pParent);
+     if (pScreen->PostValidateTree)
+-        (*pScreen->PostValidateTree) (pLayerWin->parent, pLayerWin, VTOther);
++        (*pScreen->PostValidateTree) (pParent, pLayerWin, VTOther);
+ }
+ 
+ /*
+-- 
+2.50.1

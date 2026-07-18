@@ -2,10 +2,11 @@
 
 [Back to the main README](../README.md)
 
-This note records the first attempt to build rootless Xwayland for NixBench on
-an ARM64 NetBSD 10.1 host. It is a troubleshooting record, not yet a supported
-installation recipe. Xwayland's Present protocol buildlink issue was resolved
-locally; a newer libdrm remains required before the final compile can proceed.
+This note records the ARM64 NetBSD 10.1 Xwayland build used with NixBench. The
+native-X11 Present protocol mismatch must be corrected first. On this host the
+reliable result is then a software-only Xwayland build: loading a newer modular
+libdrm beside NetBSD's base graphics stack produced an unusable accelerated
+server.
 
 ## Why X11 applications report `can't open display`
 
@@ -110,30 +111,109 @@ After a `sudo make clean`, the generated link then resolved to
 is a local pkgsrc-port adjustment that should be proposed upstream separately;
 it is not a NixBench source change.
 
-## libdrm requirement after Present is fixed
+## Why the accelerated build did not work
 
-Xwayland 24.1.12 next requires `libdrm >= 2.4.116`. NetBSD 10.1 base provides
-only 2.4.109. On this ARM64 package repository, `pkgin search libdrm` did not
-provide a newer binary package, so the pkgsrc `x11/libdrm` port is necessary.
+With Glamor enabled, Xwayland 24.1.12 requires `libdrm >= 2.4.116`. NetBSD 10.1
+base provides 2.4.109. Building pkgsrc `x11/libdrm` in modular mode satisfies
+Meson's version check, but it does not make the rest of NetBSD's base graphics
+stack modular.
 
-That port deliberately refuses a native-X11 package set. Build it in modular
-mode, serially and at low priority:
-
-```sh
-cd /usr/pkgsrc/x11/libdrm
-sudo env X11_TYPE=modular nice -n 19 make MAKE_JOBS=1 install
-```
-
-Before starting, check the port's dependencies and install available binary
-packages first. In particular, the generated documentation path can request
-`py313-docutils` and `py313-pygments`; prefer:
+The resulting Xwayland process on the ARM64 host loaded both ABIs: pkgsrc
+`/usr/pkg/lib/libdrm.so.2` directly and base `/usr/X11R7/lib/libdrm.so.3`
+through GBM/EGL. Xwayland accepted X11 windows, but never created or associated
+their Wayland surfaces, so clients such as `xclock` remained invisible without
+reporting an X11 error. Check for this mixture with:
 
 ```sh
-sudo pkgin install py313-docutils py313-pygments
+ldd /usr/pkg/bin/Xwayland | grep -E 'libdrm|libgbm|libEGL'
 ```
 
-If pkgin has no suitable binary package, stop and reassess before allowing
-pkgsrc to build a broad Python dependency chain on the thermally constrained
-host. Do not claim Xwayland support on this ARM64 host until a clean build
-installs `/usr/pkg/bin/Xwayland` and a fresh NixBench session successfully
-launches an X11 client.
+Do not continue using an Xwayland binary that loads both libdrm ABIs.
+
+## Software-only Xwayland fallback
+
+NixBench currently presents rootless X11 windows through shared-memory Wayland
+buffers, so the framebuffer session does not require Xwayland's Glamor or DRI3
+paths. For the validated ARM64 fallback, add these Meson arguments to the
+NetBSD section of `/usr/pkgsrc/wayland/xwayland/Makefile`:
+
+```make
+MESON_ARGS+=	-Dglamor=false -Ddri3=false
+```
+
+For this software-only build, do not expose the newer modular libdrm through
+the port's buildlink section. Locally comment out both its API requirement and
+buildlink include:
+
+```make
+# BUILDLINK_API_DEPENDS.libdrm+=	libdrm>=2.4.116
+# .include "../../x11/libdrm/buildlink3.mk"
+```
+
+Keep the `xorgproto>=2025.1` override described above. Then remove the old
+generated build state and replace the installed Xwayland package:
+
+```sh
+cd /usr/pkgsrc/wayland/xwayland
+sudo make clean
+sudo nice -n 19 make MAKE_JOBS=1 replace
+```
+
+Meson's summary must report both `glamor: false` and `dri3: false`. Its log may
+say that base libdrm 2.4.109 is too old and mark the dependency as not found;
+that is expected for this fallback. After installation, `ldd` must not show
+the modular `/usr/pkg/lib/libdrm.so.2`.
+
+## Required Xwayland 24.1.12 portability fixes
+
+The software-only build exposed two independent Xwayland/Xserver portability
+problems on this host. The exact upstream-ready diffs and reproduction record
+are preserved under
+[`patches/xwayland-24.1.12`](../patches/xwayland-24.1.12/README.md):
+
+- late manual Composite redirection could enter `miValidateTree()` with the
+  parent window's `valdata` unset and crash Xwayland;
+- the filesystem backing `XDG_RUNTIME_DIR` returned `EOPNOTSUPP` from
+  `posix_fallocate()`, which Xwayland converted into an X11 `BadAlloc` instead
+  of falling back to `ftruncate()`.
+
+Apply both patches to Xwayland 24.1.12 before building. These are candidate
+upstream fixes and are deliberately kept outside NixBench's source. For a
+local pkgsrc port, place equivalent pkgsrc-format patches under
+`/usr/pkgsrc/wayland/xwayland/patches`, update `distinfo` with
+`sudo make makepatchsum`, and rebuild the package.
+
+## NixBench rootless redirection workaround
+
+The ARM64 Xwayland server did not apply a root-wide manual Composite redirect
+to top-levels created later. NixBench therefore redirects each rootless X11
+top-level individually, immediately after mapping it, and releases the
+redirect when the window unmaps. The ordering matters: redirecting the window
+before it is mapped did not cause Xwayland to create a Wayland surface.
+
+This behavior lives in NixBench and is separate from the two Xwayland patches.
+It remains compatible with the existing x86_64 rootless path while avoiding a
+server-specific assumption about redirecting future root children.
+
+## Validation
+
+Start a fresh NixBench session after installation because the rootless
+Xwayland service and `DISPLAY` belong to one desktop session. Launch an X11
+client from Sakura:
+
+```sh
+xclock &
+```
+
+For a diagnostic run with `NIXBENCH_TRACE_WAYLAND=1`, a successful association
+contains all three messages below:
+
+```text
+Rootless XWM accepted map request for X window 0x40000c (xclock)
+Rootless XWM received WL_SURFACE_SERIAL 1 for X window 0x40000c
+Rootless XWM associated X window 0x40000c with Wayland surface serial 1
+```
+
+The ARM64 validation kept `xclock` running and visible, then terminated the
+NixBench supervisor normally. Console mode, video state, VT mode and active VT
+were restored, and `/var/run/nixbench-wsdisplay-session.state` was removed.
