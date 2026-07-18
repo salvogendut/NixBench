@@ -608,6 +608,33 @@ static bool focus_native_window(void *context, uint32_t xwindow)
     return xcb_flush(service->connection) > 0;
 }
 
+static bool redirect_window(struct nb_xwayland_rootless *service,
+                            xcb_window_t window,
+                            bool redirect)
+{
+    xcb_void_cookie_t request;
+
+    if (service == NULL || service->connection == NULL || window == 0) {
+        return false;
+    }
+    if (redirect) {
+        request = xcb_composite_redirect_window_checked(
+            service->connection,
+            window,
+            XCB_COMPOSITE_REDIRECT_MANUAL);
+    } else {
+        request = xcb_composite_unredirect_window_checked(
+            service->connection,
+            window,
+            XCB_COMPOSITE_REDIRECT_MANUAL);
+    }
+    return checked_request_succeeded(
+        service->connection,
+        request,
+        redirect ? "redirect an X11 top-level's pixels"
+                 : "release an X11 top-level's pixels");
+}
+
 static bool handle_map_request(struct nb_xwayland_rootless *service,
                                const xcb_map_request_event_t *event)
 {
@@ -627,7 +654,8 @@ static bool handle_map_request(struct nb_xwayland_rootless *service,
     if (!checked_request_succeeded(
             service->connection,
             xcb_map_window_checked(service->connection, event->window),
-            "map an X11 top-level")) {
+            "map an X11 top-level") ||
+        !redirect_window(service, event->window, true)) {
         return false;
     }
     fprintf(stderr,
@@ -635,21 +663,6 @@ static bool handle_map_request(struct nb_xwayland_rootless *service,
             (unsigned int)event->window,
             entry->title);
     return true;
-}
-
-static bool redirect_root_subwindows(struct nb_xwayland_rootless *service)
-{
-    if (service == NULL || service->connection == NULL ||
-        service->screen == NULL) {
-        return false;
-    }
-    return checked_request_succeeded(
-        service->connection,
-        xcb_composite_redirect_subwindows_checked(
-            service->connection,
-            service->screen->root,
-            XCB_COMPOSITE_REDIRECT_MANUAL),
-        "redirect X11 top-level pixels");
 }
 
 static void handle_configure_request(
@@ -738,8 +751,7 @@ static bool initialize_xwm(struct nb_xwayland_rootless *service)
                                                  service->screen->root,
                                                  XCB_CW_EVENT_MASK,
                                                  &root_event_mask),
-            "claim SubstructureRedirect on the X root") ||
-        !redirect_root_subwindows(service)) {
+            "claim SubstructureRedirect on the X root")) {
         return false;
     }
     service->wl_surface_id = intern_atom(service->connection,
@@ -1285,6 +1297,15 @@ bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service)
                 ((const xcb_destroy_notify_event_t *)event)->window);
             break;
         case XCB_UNMAP_NOTIFY:
+            if (find_window(
+                    service,
+                    ((const xcb_unmap_notify_event_t *)event)->window) !=
+                NULL) {
+                (void)redirect_window(
+                    service,
+                    ((const xcb_unmap_notify_event_t *)event)->window,
+                    false);
+            }
             forget_window(
                 service,
                 ((const xcb_unmap_notify_event_t *)event)->window);
