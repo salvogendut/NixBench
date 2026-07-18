@@ -675,6 +675,39 @@ target_include_directories(
 )
 nixbench_configure_c_target(nixbench_theme_atlas)
 
+if(NIXBENCH_HTML_THEMES_AVAILABLE)
+  add_executable(
+    nixbench-html-theme-renderer
+    src/html_theme_renderer.c
+  )
+  target_compile_definitions(
+    nixbench-html-theme-renderer
+    PRIVATE NIXBENCH_HTML_THEME_RENDERER_VERSION="${PROJECT_VERSION}"
+  )
+  target_link_libraries(
+    nixbench-html-theme-renderer
+    PRIVATE
+      nixbench_themes
+      nixbench_theme_atlas
+      "${NIXBENCH_WEBKITGTK_TARGET}"
+  )
+  nixbench_configure_c_target(nixbench-html-theme-renderer)
+  install(
+    TARGETS nixbench-html-theme-renderer
+    RUNTIME DESTINATION "${CMAKE_INSTALL_LIBEXECDIR}/nixbench"
+  )
+  if(BUILD_TESTING)
+    add_test(
+      NAME nixbench.html-theme-renderer.help
+      COMMAND nixbench-html-theme-renderer --help
+    )
+    add_test(
+      NAME nixbench.html-theme-renderer.version
+      COMMAND nixbench-html-theme-renderer --version
+    )
+  endif()
+endif()
+
 add_library(
   nixbench_filesystem STATIC
   src/file_browser.c

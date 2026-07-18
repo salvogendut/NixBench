@@ -158,3 +158,26 @@ The first hardware gate requires unchanged behavior for native NixClock,
 GTK/Wayland applications, SDL/Wayland applications, and Xwayland windows. A
 theme-renderer crash must not terminate the desktop or compromise console
 restoration.
+
+## Renderer preview
+
+When WebKitGTK support is detected, the build includes the experimental
+`nixbench-html-theme-renderer`. Before atlas integration is enabled it can
+render any validated component in a normal preview window or save a transparent
+PNG through WebKitGTK's snapshot API:
+
+```sh
+./build/nixbench-html-theme-renderer \
+  --theme ./themes/Fantasy \
+  --component window \
+  --size 640x96
+
+./build/nixbench-html-theme-renderer \
+  --theme ./themes/Motif \
+  --component window \
+  --size 640x96 \
+  --snapshot /tmp/nixbench-motif-title.png
+```
+
+This preview is a renderer bring-up tool, not an application window or the
+final compositor integration path.
