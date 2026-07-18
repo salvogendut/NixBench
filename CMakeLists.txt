@@ -19,6 +19,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
 endif()
 
 find_package(SDL3 3.2.0 CONFIG REQUIRED COMPONENTS SDL3)
+find_package(PNG REQUIRED)
 find_package(ZLIB REQUIRED)
 
 option(
@@ -577,6 +578,25 @@ target_include_directories(
 nixbench_configure_c_target(nixbench_preferences)
 
 add_library(
+  nixbench_filesystem STATIC
+  src/file_browser.c
+  src/filesystem.c
+)
+target_include_directories(
+  nixbench_filesystem
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+nixbench_configure_c_target(nixbench_filesystem)
+
+add_library(nixbench_png STATIC src/png_loader.c)
+target_include_directories(
+  nixbench_png
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(nixbench_png PUBLIC PNG::PNG)
+nixbench_configure_c_target(nixbench_png)
+
+add_library(
   nixbench_model STATIC
   src/application.c
   src/desktop.c
@@ -678,6 +698,7 @@ add_library(
   src/nixinfo_renderer.c
   src/settings_ui.c
   src/shell_renderer.c
+  src/wallpaper_chooser.c
   src/window_renderer.c
 )
 target_include_directories(
@@ -687,6 +708,7 @@ target_include_directories(
 target_link_libraries(
   nixbench_renderers
   PUBLIC SDL3::SDL3 nixbench_model
+  PRIVATE nixbench_filesystem nixbench_png
 )
 nixbench_configure_c_target(nixbench_renderers)
 
@@ -1414,6 +1436,17 @@ if(NIXBENCH_BUILD_WSDISPLAY_SESSION)
 endif()
 
 if(BUILD_TESTING)
+  add_executable(nixbench_png_tests tests/png_loader_test.c)
+  target_link_libraries(nixbench_png_tests PRIVATE nixbench_png)
+  nixbench_configure_c_target(nixbench_png_tests)
+
+  add_executable(nixbench_filesystem_tests tests/filesystem_test.c)
+  target_link_libraries(
+    nixbench_filesystem_tests
+    PRIVATE nixbench_filesystem
+  )
+  nixbench_configure_c_target(nixbench_filesystem_tests)
+
   add_executable(
     nixbench_x11_selection_transfer_tests
     tests/x11_selection_transfer_test.c
@@ -1718,7 +1751,7 @@ if(BUILD_TESTING)
   )
   target_link_libraries(
     nixbench_renderer_tests
-    PRIVATE nixbench_renderers
+    PRIVATE nixbench_renderers PNG::PNG
   )
   nixbench_configure_c_target(nixbench_renderer_tests)
 
@@ -1785,6 +1818,8 @@ if(BUILD_TESTING)
   endif()
 
   add_test(NAME nixbench.desktop.model COMMAND nixbench_desktop_tests)
+  add_test(NAME nixbench.filesystem.model COMMAND nixbench_filesystem_tests)
+  add_test(NAME nixbench.png.loader COMMAND nixbench_png_tests)
   add_test(
     NAME nixbench.x11-selection-transfer
     COMMAND nixbench_x11_selection_transfer_tests

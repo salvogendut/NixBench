@@ -23,6 +23,13 @@ enum nb_backdrop_gradient_direction {
     NB_BACKDROP_GRADIENT_DIAGONAL
 };
 
+enum nb_wallpaper_mode {
+    NB_WALLPAPER_CENTER = 0,
+    NB_WALLPAPER_TILE,
+    NB_WALLPAPER_FIT,
+    NB_WALLPAPER_FILL
+};
+
 enum nb_window_control_layout {
     NB_WINDOW_CONTROLS_SPLIT = 0,
     NB_WINDOW_CONTROLS_LEFT,
@@ -41,6 +48,7 @@ struct nb_user_preferences {
     struct nb_color backdrop_secondary;
     bool backdrop_gradient_enabled;
     enum nb_backdrop_gradient_direction backdrop_gradient_direction;
+    enum nb_wallpaper_mode wallpaper_mode;
     bool maximize_gadget_visible;
     bool minimize_gadget_visible;
     enum nb_window_control_layout window_control_layout;

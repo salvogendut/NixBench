@@ -23,6 +23,7 @@ void nb_user_preferences_init(struct nb_user_preferences *preferences)
     preferences->backdrop_secondary = (struct nb_color){43, 113, 137};
     preferences->backdrop_gradient_direction =
         NB_BACKDROP_GRADIENT_VERTICAL;
+    preferences->wallpaper_mode = NB_WALLPAPER_FIT;
     preferences->minimize_gadget_visible = true;
     preferences->maximize_gadget_visible = true;
     preferences->window_control_layout = NB_WINDOW_CONTROLS_RIGHT;
@@ -44,6 +45,8 @@ bool nb_user_preferences_is_valid(
                NB_BACKDROP_GRADIENT_VERTICAL &&
            preferences->backdrop_gradient_direction <=
                NB_BACKDROP_GRADIENT_DIAGONAL &&
+           preferences->wallpaper_mode >= NB_WALLPAPER_CENTER &&
+           preferences->wallpaper_mode <= NB_WALLPAPER_FILL &&
            preferences->window_control_layout >= NB_WINDOW_CONTROLS_SPLIT &&
            preferences->window_control_layout <= NB_WINDOW_CONTROLS_RIGHT &&
            terminated_string(preferences->wallpaper,

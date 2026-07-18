@@ -90,6 +90,7 @@ int main(void)
     CHECK(preferences.minimize_gadget_visible);
     CHECK(preferences.maximize_gadget_visible);
     CHECK(preferences.window_control_layout == NB_WINDOW_CONTROLS_RIGHT);
+    CHECK(preferences.wallpaper_mode == NB_WALLPAPER_FIT);
 
     preferences.pinned_applications[NB_PINNED_APPLICATION_SAKURA] = false;
     preferences.backdrop_primary = (struct nb_color){1, 2, 3};
@@ -100,6 +101,11 @@ int main(void)
     preferences.minimize_gadget_visible = false;
     preferences.maximize_gadget_visible = false;
     preferences.window_control_layout = NB_WINDOW_CONTROLS_RIGHT;
+    preferences.wallpaper_mode = NB_WALLPAPER_FILL;
+    (void)snprintf(preferences.wallpaper,
+                   sizeof(preferences.wallpaper),
+                   "%s",
+                   "/tmp/NixBench wallpaper.png");
     CHECK(nb_user_config_save(path,
                               &preferences,
                               error,
@@ -120,6 +126,8 @@ int main(void)
     CHECK(!loaded.minimize_gadget_visible);
     CHECK(!loaded.maximize_gadget_visible);
     CHECK(loaded.window_control_layout == NB_WINDOW_CONTROLS_RIGHT);
+    CHECK(loaded.wallpaper_mode == NB_WALLPAPER_FILL);
+    CHECK(strcmp(loaded.wallpaper, "/tmp/NixBench wallpaper.png") == 0);
 
     CHECK(write_text(path, "version=1\nwindows.minimize=false\n"));
     result = nb_user_config_load_or_create(path,
@@ -137,7 +145,16 @@ int main(void)
     CHECK(result == NB_USER_CONFIG_LOADED);
     CHECK(loaded.window_control_layout == NB_WINDOW_CONTROLS_RIGHT);
 
-    CHECK(write_text(path, "version=3\n"));
+    CHECK(write_text(path, "version=3\ndesktop.wallpaper.mode=tile\n"));
+    nb_user_preferences_init(&loaded);
+    CHECK(nb_user_config_load_or_create(path,
+                                        &loaded,
+                                        error,
+                                        sizeof(error)) ==
+          NB_USER_CONFIG_LOADED);
+    CHECK(loaded.wallpaper_mode == NB_WALLPAPER_TILE);
+
+    CHECK(write_text(path, "version=4\n"));
     nb_user_preferences_init(&loaded);
     CHECK(nb_user_config_load_or_create(path,
                                         &loaded,

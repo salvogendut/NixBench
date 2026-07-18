@@ -479,8 +479,9 @@ The session starts with an empty desktop; NixClock, Sakura, and Midori are
 available as persistent pins in **Applications**. **Edit Application Pins...**
 opens the ordinary-user Settings panel; the desktop's own **Settings...**
 command opens the same window. The core creates `$HOME/.nixbenchrc` on first
-run, then atomically saves pin, backdrop/gradient, and supported window-gadget
-changes without involving the privileged device process. A minimized window
+run, then atomically saves pin, backdrop/gradient, PNG wallpaper placement, and
+supported window-gadget changes without involving the privileged device
+process. A minimized window
 leaves the desktop and becomes a compact, titled button in the global bar;
 clicking the button restores, raises, and focuses it. An existing application
 can be selected for a

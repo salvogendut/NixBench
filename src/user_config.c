@@ -108,6 +108,10 @@ static bool parse_known_key(struct nb_user_preferences *preferences,
             *version = 2;
             return true;
         }
+        if (strcmp(value, "3") == 0) {
+            *version = 3;
+            return true;
+        }
         return false;
     }
     if (strcmp(key, "applications.nixclock") == 0) {
@@ -154,6 +158,20 @@ static bool parse_known_key(struct nb_user_preferences *preferences,
         return copy_value(preferences->wallpaper,
                           sizeof(preferences->wallpaper),
                           value);
+    }
+    if (strcmp(key, "desktop.wallpaper.mode") == 0) {
+        if (strcmp(value, "center") == 0) {
+            preferences->wallpaper_mode = NB_WALLPAPER_CENTER;
+        } else if (strcmp(value, "tile") == 0) {
+            preferences->wallpaper_mode = NB_WALLPAPER_TILE;
+        } else if (strcmp(value, "fit") == 0) {
+            preferences->wallpaper_mode = NB_WALLPAPER_FIT;
+        } else if (strcmp(value, "fill") == 0) {
+            preferences->wallpaper_mode = NB_WALLPAPER_FILL;
+        } else {
+            return false;
+        }
+        return true;
     }
     if (strcmp(key, "desktop.theme") == 0) {
         return value[0] != '\0' &&
@@ -339,13 +357,28 @@ static const char *layout_name(enum nb_window_control_layout value)
     return "split";
 }
 
+static const char *wallpaper_mode_name(enum nb_wallpaper_mode value)
+{
+    switch (value) {
+    case NB_WALLPAPER_CENTER:
+        return "center";
+    case NB_WALLPAPER_TILE:
+        return "tile";
+    case NB_WALLPAPER_FIT:
+        return "fit";
+    case NB_WALLPAPER_FILL:
+        return "fill";
+    }
+    return "fit";
+}
+
 static bool write_stream(FILE *stream,
                          const struct nb_user_preferences *preferences)
 {
     return fprintf(stream,
                    "# NixBench user configuration\n"
                    "# This file is rewritten atomically by NixBench Settings.\n"
-                   "version=2\n"
+                   "version=3\n"
                    "applications.nixclock=%s\n"
                    "applications.sakura=%s\n"
                    "applications.midori=%s\n"
@@ -354,6 +387,7 @@ static bool write_stream(FILE *stream,
                    "desktop.backdrop.gradient=%s\n"
                    "desktop.backdrop.direction=%s\n"
                    "desktop.wallpaper=%s\n"
+                   "desktop.wallpaper.mode=%s\n"
                    "desktop.theme=%s\n"
                    "windows.theme=%s\n"
                    "windows.minimize=%s\n"
@@ -377,6 +411,7 @@ static bool write_stream(FILE *stream,
                    preferences->backdrop_gradient_enabled ? "on" : "off",
                    direction_name(preferences->backdrop_gradient_direction),
                    preferences->wallpaper,
+                   wallpaper_mode_name(preferences->wallpaper_mode),
                    preferences->desktop_theme,
                    preferences->window_theme,
                    preferences->minimize_gadget_visible ? "true" : "false",

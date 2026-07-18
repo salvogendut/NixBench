@@ -1,7 +1,13 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 #include <SDL3/SDL.h>
+#include <png.h>
 
 #include "desktop_renderer.h"
 #include "backdrop_renderer.h"
@@ -442,12 +448,80 @@ static void test_console_sized_diagonal_gradient(void)
     SDL_DestroySurface(surface);
 }
 
+static void test_wallpaper_modes(void)
+{
+    char directory[] = "/tmp/nixbench-renderer-wallpaper-XXXXXX";
+    char path[512];
+    const unsigned char pixels[] = {
+        255, 0, 0, 255, 0, 255, 0, 255,
+        0, 0, 255, 255, 255, 255, 255, 255
+    };
+    png_image output;
+    SDL_Surface *surface = NULL;
+    SDL_Renderer *renderer = NULL;
+    struct nb_backdrop_cache *cache = NULL;
+    struct nb_user_preferences preferences;
+    const struct nb_rect viewport = {0, 0, 8, 6};
+    enum nb_wallpaper_mode mode;
+
+    CHECK(mkdtemp(directory) != NULL);
+    CHECK(snprintf(path, sizeof(path), "%s/wallpaper.png", directory) > 0);
+    (void)memset(&output, 0, sizeof(output));
+    output.version = PNG_IMAGE_VERSION;
+    output.width = 2;
+    output.height = 2;
+    output.format = PNG_FORMAT_RGBA;
+    CHECK(png_image_write_to_file(&output, path, false, pixels, 0, NULL));
+    surface = SDL_CreateSurface(viewport.width,
+                                viewport.height,
+                                SDL_PIXELFORMAT_XRGB8888);
+    CHECK(surface != NULL);
+    if (surface != NULL) {
+        renderer = SDL_CreateSoftwareRenderer(surface);
+    }
+    CHECK(renderer != NULL);
+    cache = nb_backdrop_cache_create();
+    CHECK(cache != NULL);
+    nb_user_preferences_init(&preferences);
+    preferences.backdrop_primary = (struct nb_color){8, 12, 16};
+    (void)snprintf(preferences.wallpaper,
+                   sizeof(preferences.wallpaper),
+                   "%s",
+                   path);
+    if (renderer != NULL && cache != NULL) {
+        for (mode = NB_WALLPAPER_CENTER;
+             mode <= NB_WALLPAPER_FILL;
+             mode = (enum nb_wallpaper_mode)(mode + 1)) {
+            preferences.wallpaper_mode = mode;
+            CHECK(nb_backdrop_cache_render(cache,
+                                           renderer,
+                                           viewport,
+                                           &preferences));
+            CHECK(SDL_RenderPresent(renderer));
+        }
+        preferences.wallpaper_mode = NB_WALLPAPER_TILE;
+        CHECK(nb_backdrop_cache_render(cache,
+                                       renderer,
+                                       viewport,
+                                       &preferences));
+        CHECK(SDL_RenderPresent(renderer));
+        CHECK(pixel_near(surface, 0, 0, 255, 0, 0, 2));
+        CHECK(pixel_near(surface, 2, 0, 255, 0, 0, 2));
+    }
+    nb_backdrop_cache_destroy(cache);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroySurface(surface);
+    CHECK(unlink(path) == 0);
+    CHECK(rmdir(directory) == 0);
+}
+
 int main(void)
 {
     test_content_callback_and_clip_restoration();
     test_checked_menu_item_gutter();
     test_backdrop_gradients();
     test_console_sized_diagonal_gradient();
+    test_wallpaper_modes();
 
     if (failures != 0) {
         fprintf(stderr, "%d renderer check(s) failed\n", failures);

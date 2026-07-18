@@ -207,6 +207,20 @@ static const char *layout_name(enum nb_window_control_layout value)
     return "Right";
 }
 
+static const char *wallpaper_mode_name(enum nb_wallpaper_mode value)
+{
+    if (value == NB_WALLPAPER_CENTER) {
+        return "Center";
+    }
+    if (value == NB_WALLPAPER_TILE) {
+        return "Tile";
+    }
+    if (value == NB_WALLPAPER_FILL) {
+        return "Fill (crop edges)";
+    }
+    return "Fit (show whole image)";
+}
+
 size_t nb_settings_palette_size(void)
 {
     return sizeof(palette) / sizeof(palette[0]);
@@ -262,6 +276,12 @@ enum nb_settings_action nb_settings_hit_test(struct nb_rect content,
     }
     if (contains(full_row(content, 394), x, y)) {
         return NB_SETTINGS_ACTION_CYCLE_CONTROL_LAYOUT;
+    }
+    if (contains(full_row(content, 446), x, y)) {
+        return NB_SETTINGS_ACTION_CHOOSE_WALLPAPER;
+    }
+    if (contains(full_row(content, 470), x, y)) {
+        return NB_SETTINGS_ACTION_CYCLE_WALLPAPER_MODE;
     }
     return NB_SETTINGS_ACTION_NONE;
 }
@@ -360,23 +380,31 @@ bool nb_settings_render(SDL_Renderer *renderer,
                    "Window gadget placement: %s",
                    layout_name(preferences->window_control_layout));
     if (!render_button(renderer, full_row(content, 394), label, false) ||
-        !render_heading(renderer, content, 434, "Appearance (reserved)") ||
-        !render_text(renderer,
-                     content.x + SETTINGS_PADDING,
-                     content.y + 454,
-                     content.x + content.width - SETTINGS_PADDING,
-                     "Wallpaper and skinnable themes are recorded in .nixbenchrc.",
-                     muted_text)) {
+        !render_heading(renderer, content, 426, "Wallpaper") ||
+        !render_button(renderer,
+                       full_row(content, 446),
+                       preferences->wallpaper[0] == '\0'
+                           ? "Choose PNG wallpaper..."
+                           : "Change PNG wallpaper...",
+                       false)) {
         return false;
     }
     (void)snprintf(label,
                    sizeof(label),
-                   "Desktop theme: %s   Window theme: %s",
-                   preferences->desktop_theme,
-                   preferences->window_theme);
+                   "Placement: %s",
+                   wallpaper_mode_name(preferences->wallpaper_mode));
+    if (!render_button(renderer, full_row(content, 470), label, false)) {
+        return false;
+    }
+    (void)snprintf(label,
+                   sizeof(label),
+                   "Current: %.110s",
+                   preferences->wallpaper[0] == '\0'
+                       ? "none (backdrop colors only)"
+                       : preferences->wallpaper);
     return render_text(renderer,
                        content.x + SETTINGS_PADDING,
-                       content.y + 474,
+                       content.y + 498,
                        content.x + content.width - SETTINGS_PADDING,
                        label,
                        muted_text);

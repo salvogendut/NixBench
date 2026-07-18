@@ -17,6 +17,7 @@
 #include "shell_renderer.h"
 #include "screenshot.h"
 #include "software_canvas.h"
+#include "wallpaper_chooser.h"
 #include "window_renderer.h"
 
 #ifndef NIXBENCH_HAS_WAYLAND
@@ -35,12 +36,15 @@ enum {
     NIXBENCH_ABOUT_WINDOW_HEIGHT = 230,
     NIXBENCH_SETTINGS_WINDOW_WIDTH = 640,
     NIXBENCH_SETTINGS_WINDOW_HEIGHT = 550,
+    NIXBENCH_WALLPAPER_WINDOW_WIDTH = 800,
+    NIXBENCH_WALLPAPER_WINDOW_HEIGHT = 580,
     NIXBENCH_SHELL_KEY_CAPTURE_CAPACITY = 32
 };
 
 #define NIXBENCH_MENU_SOURCE_DESKTOP UINT64_C(1)
 #define NIXBENCH_MENU_SOURCE_ABOUT UINT64_MAX
 #define NIXBENCH_MENU_SOURCE_SETTINGS (UINT64_MAX - UINT64_C(1))
+#define NIXBENCH_MENU_SOURCE_WALLPAPER (UINT64_MAX - UINT64_C(2))
 #define NIXBENCH_MENU_SOURCE_WAYLAND UINT64_C(0x4000000000000000)
 
 enum {
@@ -62,6 +66,10 @@ enum {
 
 enum {
     NIXBENCH_SETTINGS_COMMAND_CLOSE = 1
+};
+
+enum {
+    NIXBENCH_WALLPAPER_COMMAND_CLOSE = 1
 };
 
 enum {
@@ -122,6 +130,21 @@ static const struct nb_menu_model settings_menu_model = {
     sizeof(settings_menus) / sizeof(settings_menus[0])
 };
 
+static const struct nb_menu_item_spec wallpaper_items[] = {
+    {"Close Wallpaper Chooser", NIXBENCH_WALLPAPER_COMMAND_CLOSE,
+     NB_MENU_ITEM_COMMAND, true, false}
+};
+
+static const struct nb_menu_spec wallpaper_menus[] = {
+    {"NixBench", wallpaper_items,
+     sizeof(wallpaper_items) / sizeof(wallpaper_items[0])}
+};
+
+static const struct nb_menu_model wallpaper_menu_model = {
+    wallpaper_menus,
+    sizeof(wallpaper_menus) / sizeof(wallpaper_menus[0])
+};
+
 #if NIXBENCH_HAS_WAYLAND
 static const struct nb_menu_item_spec wayland_items[] = {
     {"Close Application", NIXBENCH_WAYLAND_COMMAND_CLOSE,
@@ -151,12 +174,15 @@ struct nb_desktop_runtime {
     nb_application_id nixinfo_application;
     nb_window_id about_window;
     nb_window_id settings_window;
+    nb_window_id wallpaper_window;
+    struct nb_wallpaper_chooser wallpaper_chooser;
     struct nb_user_preferences preferences;
     struct nb_menu_item_spec launcher_items[5];
     struct nb_menu_spec launcher_menus[1];
     struct nb_menu_model launcher_menu_model;
     enum nb_settings_color_target settings_color_target;
     enum nb_settings_action settings_pressed_action;
+    struct nb_wallpaper_chooser_action wallpaper_pressed_action;
     bool pending_preferences_changed;
 #if NIXBENCH_HAS_WAYLAND
     struct nb_wayland_server *wayland;
@@ -319,6 +345,11 @@ static bool render_window_content(SDL_Renderer *renderer,
                                   content_rect,
                                   &runtime->preferences,
                                   runtime->settings_color_target);
+    }
+    if (id == runtime->wallpaper_window) {
+        return nb_wallpaper_chooser_render(&runtime->wallpaper_chooser,
+                                           renderer,
+                                           content_rect);
     }
     return nb_window_render_default_content(renderer, window);
 }
@@ -525,6 +556,109 @@ static bool close_settings_window(struct nb_desktop_runtime *runtime,
     return sync_application_focus(runtime);
 }
 
+static bool show_wallpaper_window(struct nb_desktop_runtime *runtime)
+{
+    const struct nb_rect work_area = nb_menu_work_area(runtime->viewport);
+    const char *home = getenv("HOME");
+    int width = NIXBENCH_WALLPAPER_WINDOW_WIDTH;
+    int height = NIXBENCH_WALLPAPER_WINDOW_HEIGHT;
+    struct nb_rect frame;
+
+    if (runtime->wallpaper_window != NB_WINDOW_ID_NONE &&
+        nb_desktop_find_window(&runtime->shell.desktop,
+                               runtime->wallpaper_window) != NULL) {
+        return nb_shell_activate_window(&runtime->shell,
+                                        runtime->wallpaper_window) &&
+               sync_application_focus(runtime);
+    }
+    if (!nb_wallpaper_chooser_open(&runtime->wallpaper_chooser,
+                                   runtime->preferences.wallpaper,
+                                   home)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Could not open a directory for the wallpaper chooser");
+        return false;
+    }
+    if (width > work_area.width - 24) {
+        width = work_area.width - 24;
+    }
+    if (height > work_area.height - 24) {
+        height = work_area.height - 24;
+    }
+    if (width < NB_WINDOW_MIN_WIDTH) {
+        width = NB_WINDOW_MIN_WIDTH;
+    }
+    if (height < NB_WINDOW_MIN_HEIGHT) {
+        height = NB_WINDOW_MIN_HEIGHT;
+    }
+    frame = (struct nb_rect){
+        work_area.x + (work_area.width - width) / 2,
+        work_area.y + (work_area.height - height) / 2,
+        width,
+        height
+    };
+    runtime->wallpaper_window = nb_shell_open_window(
+        &runtime->shell,
+        "Choose Wallpaper",
+        frame,
+        NIXBENCH_MENU_SOURCE_WALLPAPER,
+        &wallpaper_menu_model);
+    if (runtime->wallpaper_window == NB_WINDOW_ID_NONE) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Could not open the wallpaper chooser window");
+        return false;
+    }
+    return sync_application_focus(runtime);
+}
+
+static bool close_wallpaper_window(struct nb_desktop_runtime *runtime,
+                                   nb_window_id window)
+{
+    if (window == NB_WINDOW_ID_NONE || window != runtime->wallpaper_window) {
+        return false;
+    }
+    if (!nb_shell_destroy_window(&runtime->shell, window)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Could not close the wallpaper chooser window");
+        return false;
+    }
+    runtime->wallpaper_window = NB_WINDOW_ID_NONE;
+    runtime->wallpaper_pressed_action =
+        (struct nb_wallpaper_chooser_action){
+            NB_WALLPAPER_CHOOSER_ACTION_NONE,
+            0
+        };
+    nb_wallpaper_chooser_invalidate_preview(&runtime->wallpaper_chooser);
+    return sync_application_focus(runtime);
+}
+
+static bool apply_wallpaper_action(
+    struct nb_desktop_runtime *runtime,
+    struct nb_wallpaper_chooser_action action)
+{
+    char selected[NB_PREFERENCES_WALLPAPER_CAPACITY] = {0};
+    const enum nb_wallpaper_chooser_result result =
+        nb_wallpaper_chooser_activate(&runtime->wallpaper_chooser,
+                                      action,
+                                      selected,
+                                      sizeof(selected));
+
+    if (result == NB_WALLPAPER_CHOOSER_RESULT_SELECTED ||
+        result == NB_WALLPAPER_CHOOSER_RESULT_CLEARED) {
+        if (strcmp(runtime->preferences.wallpaper, selected) != 0) {
+            (void)memcpy(runtime->preferences.wallpaper,
+                         selected,
+                         strlen(selected) + 1);
+            runtime->pending_preferences_changed = true;
+            nb_backdrop_cache_invalidate(runtime->backdrop_cache);
+        }
+        return close_wallpaper_window(runtime, runtime->wallpaper_window);
+    }
+    if (result == NB_WALLPAPER_CHOOSER_RESULT_CANCELLED) {
+        return close_wallpaper_window(runtime, runtime->wallpaper_window);
+    }
+    return true;
+}
+
 static bool apply_settings_action(struct nb_desktop_runtime *runtime,
                                   enum nb_settings_action action)
 {
@@ -615,6 +749,14 @@ static bool apply_settings_action(struct nb_desktop_runtime *runtime,
             runtime->preferences.minimize_gadget_visible,
             runtime->preferences.maximize_gadget_visible,
             runtime->preferences.window_control_layout);
+    } else if (action == NB_SETTINGS_ACTION_CHOOSE_WALLPAPER) {
+        return show_wallpaper_window(runtime);
+    } else if (action == NB_SETTINGS_ACTION_CYCLE_WALLPAPER_MODE) {
+        runtime->preferences.wallpaper_mode =
+            (enum nb_wallpaper_mode)((runtime->preferences.wallpaper_mode + 1) %
+                                     4);
+        changed = true;
+        nb_backdrop_cache_invalidate(runtime->backdrop_cache);
     } else if (action != NB_SETTINGS_ACTION_NONE) {
         return false;
     }
@@ -700,6 +842,9 @@ static bool apply_shell_action(struct nb_desktop_runtime *runtime,
         }
         if (action.window == runtime->settings_window) {
             return close_settings_window(runtime, action.window);
+        }
+        if (action.window == runtime->wallpaper_window) {
+            return close_wallpaper_window(runtime, action.window);
         }
 #if NIXBENCH_HAS_WAYLAND
         if (runtime->wayland != NULL &&
@@ -822,6 +967,17 @@ static bool apply_shell_action(struct nb_desktop_runtime *runtime,
         }
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "Ignored Settings menu command %u",
+                    (unsigned int)action.menu_command);
+        return true;
+    }
+
+    if (action.menu_source == NIXBENCH_MENU_SOURCE_WALLPAPER) {
+        if (action.menu_command == NIXBENCH_WALLPAPER_COMMAND_CLOSE &&
+            action.window == runtime->wallpaper_window) {
+            return close_wallpaper_window(runtime, action.window);
+        }
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Ignored wallpaper chooser menu command %u",
                     (unsigned int)action.menu_command);
         return true;
     }
@@ -1002,6 +1158,11 @@ static bool process_pointer_event(const struct nb_host_event *event,
             }
 #endif
             runtime->settings_pressed_action = NB_SETTINGS_ACTION_NONE;
+            runtime->wallpaper_pressed_action =
+                (struct nb_wallpaper_chooser_action){
+                    NB_WALLPAPER_CHOOSER_ACTION_NONE,
+                    0
+                };
             if (target.window == runtime->settings_window &&
                 target.hit == NB_WINDOW_HIT_CONTENT) {
                 const struct nb_window *settings =
@@ -1013,6 +1174,21 @@ static bool process_pointer_event(const struct nb_host_event *event,
                         nb_settings_hit_test(nb_window_content_rect(settings),
                                              x,
                                              y);
+                }
+            }
+            if (target.window == runtime->wallpaper_window &&
+                target.hit == NB_WINDOW_HIT_CONTENT) {
+                const struct nb_window *wallpaper =
+                    nb_desktop_find_window(&runtime->shell.desktop,
+                                           runtime->wallpaper_window);
+
+                if (wallpaper != NULL) {
+                    runtime->wallpaper_pressed_action =
+                        nb_wallpaper_chooser_hit_test(
+                            &runtime->wallpaper_chooser,
+                            nb_window_content_rect(wallpaper),
+                            x,
+                            y);
                 }
             }
             (void)nb_shell_pointer_down(&runtime->shell,
@@ -1055,8 +1231,15 @@ static bool process_pointer_event(const struct nb_host_event *event,
         } else {
             const enum nb_settings_action settings_action =
                 runtime->settings_pressed_action;
+            const struct nb_wallpaper_chooser_action wallpaper_action =
+                runtime->wallpaper_pressed_action;
 
             runtime->settings_pressed_action = NB_SETTINGS_ACTION_NONE;
+            runtime->wallpaper_pressed_action =
+                (struct nb_wallpaper_chooser_action){
+                    NB_WALLPAPER_CHOOSER_ACTION_NONE,
+                    0
+                };
 #if NIXBENCH_HAS_WAYLAND
             if (wayland_grabbed) {
                 return nb_wayland_server_pointer_button(
@@ -1092,6 +1275,26 @@ static bool process_pointer_event(const struct nb_host_event *event,
                                          x,
                                          y) == settings_action &&
                     !apply_settings_action(runtime, settings_action)) {
+                    return false;
+                }
+            }
+            if (wallpaper_action.type !=
+                    NB_WALLPAPER_CHOOSER_ACTION_NONE &&
+                target.window == runtime->wallpaper_window &&
+                target.hit == NB_WINDOW_HIT_CONTENT) {
+                const struct nb_window *wallpaper =
+                    nb_desktop_find_window(&runtime->shell.desktop,
+                                           runtime->wallpaper_window);
+
+                if (wallpaper != NULL &&
+                    nb_wallpaper_chooser_action_equal(
+                        nb_wallpaper_chooser_hit_test(
+                            &runtime->wallpaper_chooser,
+                            nb_window_content_rect(wallpaper),
+                            x,
+                            y),
+                        wallpaper_action) &&
+                    !apply_wallpaper_action(runtime, wallpaper_action)) {
                     return false;
                 }
             }
@@ -1524,6 +1727,7 @@ struct nb_desktop_runtime *nb_desktop_runtime_create(
     runtime->options = *options;
     runtime->about_window = NB_WINDOW_ID_NONE;
     runtime->settings_window = NB_WINDOW_ID_NONE;
+    runtime->wallpaper_window = NB_WINDOW_ID_NONE;
     runtime->settings_color_target = NB_SETTINGS_COLOR_PRIMARY;
     runtime->nixinfo_application = NB_APPLICATION_ID_NONE;
     runtime->backdrop_cache = nb_backdrop_cache_create();
@@ -1531,6 +1735,7 @@ struct nb_desktop_runtime *nb_desktop_runtime_create(
         free(runtime);
         return NULL;
     }
+    nb_wallpaper_chooser_init(&runtime->wallpaper_chooser);
     nb_user_preferences_init(&runtime->preferences);
     if (options->preferences != NULL) {
         runtime->preferences = *options->preferences;
@@ -1594,6 +1799,7 @@ void nb_desktop_runtime_destroy(struct nb_desktop_runtime *runtime)
     }
     nb_backdrop_cache_destroy(runtime->backdrop_cache);
     runtime->backdrop_cache = NULL;
+    nb_wallpaper_chooser_destroy(&runtime->wallpaper_chooser);
     nb_software_canvas_destroy(runtime->canvas);
     runtime->canvas = NULL;
     free(runtime);
@@ -1640,6 +1846,7 @@ bool nb_desktop_runtime_set_output(
 #endif
     cancel_pointer_input(runtime, 0);
     nb_backdrop_cache_invalidate(runtime->backdrop_cache);
+    nb_wallpaper_chooser_invalidate_preview(&runtime->wallpaper_chooser);
 #if NIXBENCH_HAS_WAYLAND
     nb_wayland_renderer_reset(runtime->wayland_renderer);
 #endif

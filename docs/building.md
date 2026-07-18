@@ -7,6 +7,7 @@ Required development dependencies:
 - A C11 compiler
 - CMake 3.16 or newer and a supported build tool
 - SDL 3.2.0 or newer, including its development files
+- libpng (PNG wallpaper decoding) and zlib (PNG screenshot encoding)
 - A video backend supported by SDL3; Xorg is the initial NetBSD host
 
 The compositor path additionally uses the Wayland server library and scanner,
@@ -53,8 +54,8 @@ harness and is not built by default. Enable it separately with
 `-DNIXBENCH_BUILD_WSDISPLAY_SMOKE=ON`. Neither option makes `wsdisplay` a
 supported production runtime.
 
-SDL3 is available from NetBSD pkgsrc as `devel/SDL3`. Configure, build, and test
-with:
+SDL3 is available from NetBSD pkgsrc as `devel/SDL3`; pkgsrc's `png` and
+`zlib` packages provide the image dependencies. Configure, build, and test with:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug

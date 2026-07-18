@@ -2,6 +2,10 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "png_loader.h"
 
 struct nb_backdrop_cache {
     SDL_Texture *texture;
@@ -12,6 +16,8 @@ struct nb_backdrop_cache {
     struct nb_color secondary;
     bool gradient_enabled;
     enum nb_backdrop_gradient_direction gradient_direction;
+    enum nb_wallpaper_mode wallpaper_mode;
+    char wallpaper[NB_PREFERENCES_WALLPAPER_CAPACITY];
 };
 
 static Uint8 interpolate(Uint8 first,
@@ -251,7 +257,156 @@ static bool cache_matches(
            cache->gradient_enabled ==
                preferences->backdrop_gradient_enabled &&
            cache->gradient_direction ==
-               preferences->backdrop_gradient_direction;
+               preferences->backdrop_gradient_direction &&
+           cache->wallpaper_mode == preferences->wallpaper_mode &&
+           strcmp(cache->wallpaper, preferences->wallpaper) == 0;
+}
+
+static SDL_FRect wallpaper_destination(struct nb_rect viewport,
+                                       int image_width,
+                                       int image_height,
+                                       enum nb_wallpaper_mode mode)
+{
+    int width = image_width;
+    int height = image_height;
+
+    if (mode == NB_WALLPAPER_FIT) {
+        if ((int64_t)viewport.width * image_height <=
+            (int64_t)viewport.height * image_width) {
+            width = viewport.width;
+            height = (int)((int64_t)image_height * width / image_width);
+        } else {
+            height = viewport.height;
+            width = (int)((int64_t)image_width * height / image_height);
+        }
+    } else if (mode == NB_WALLPAPER_FILL) {
+        if ((int64_t)viewport.width * image_height >=
+            (int64_t)viewport.height * image_width) {
+            width = viewport.width;
+            height = (int)((int64_t)image_height * width / image_width);
+        } else {
+            height = viewport.height;
+            width = (int)((int64_t)image_width * height / image_height);
+        }
+    }
+    if (width < 1) {
+        width = 1;
+    }
+    if (height < 1) {
+        height = 1;
+    }
+    return (SDL_FRect){
+        (float)(viewport.x + (viewport.width - width) / 2),
+        (float)(viewport.y + (viewport.height - height) / 2),
+        (float)width,
+        (float)height
+    };
+}
+
+static bool render_wallpaper(SDL_Renderer *renderer,
+                             struct nb_rect viewport,
+                             const struct nb_user_preferences *preferences)
+{
+    enum { TILE_RENDER_LIMIT = 65536 };
+    struct nb_png_image image = {0};
+    SDL_Surface *surface = NULL;
+    SDL_Texture *texture = NULL;
+    char error[256] = {0};
+    bool rendered = true;
+
+    if (preferences->wallpaper[0] == '\0') {
+        return true;
+    }
+    if (!nb_png_load(preferences->wallpaper,
+                     &image,
+                     error,
+                     sizeof(error))) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Could not load wallpaper '%s': %s",
+                    preferences->wallpaper,
+                    error);
+        return true;
+    }
+    surface = SDL_CreateSurfaceFrom(image.width,
+                                    image.height,
+                                    SDL_PIXELFORMAT_RGBA32,
+                                    image.pixels,
+                                    (int)image.pitch);
+    if (surface != NULL) {
+        texture = SDL_CreateTextureFromSurface(renderer, surface);
+    }
+    if (texture == NULL ||
+        !SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND) ||
+        !SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_LINEAR)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Could not prepare wallpaper '%s': %s",
+                    preferences->wallpaper,
+                    SDL_GetError());
+        rendered = true;
+        goto cleanup;
+    }
+    if (preferences->wallpaper_mode == NB_WALLPAPER_TILE) {
+        const uint64_t columns =
+            ((uint64_t)viewport.width + (uint64_t)image.width - 1) /
+            (uint64_t)image.width;
+        const uint64_t rows =
+            ((uint64_t)viewport.height + (uint64_t)image.height - 1) /
+            (uint64_t)image.height;
+        int y;
+
+        if (columns * rows > TILE_RENDER_LIMIT) {
+            const SDL_FRect destination = {
+                (float)viewport.x,
+                (float)viewport.y,
+                (float)viewport.width,
+                (float)viewport.height
+            };
+
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Wallpaper tile count is excessive; stretching the "
+                        "image for this session");
+            rendered = SDL_RenderTexture(renderer,
+                                         texture,
+                                         NULL,
+                                         &destination);
+        } else {
+            for (y = viewport.y;
+                 rendered && y < viewport.y + viewport.height;
+                 y += image.height) {
+                int x;
+
+                for (x = viewport.x;
+                     rendered && x < viewport.x + viewport.width;
+                     x += image.width) {
+                    const SDL_FRect destination = {
+                        (float)x,
+                        (float)y,
+                        (float)image.width,
+                        (float)image.height
+                    };
+
+                    rendered = SDL_RenderTexture(renderer,
+                                                 texture,
+                                                 NULL,
+                                                 &destination);
+                }
+            }
+        }
+    } else {
+        const SDL_FRect destination =
+            wallpaper_destination(viewport,
+                                  image.width,
+                                  image.height,
+                                  preferences->wallpaper_mode);
+
+        rendered = SDL_RenderTexture(renderer, texture, NULL, &destination);
+    }
+
+cleanup:
+    SDL_DestroyTexture(texture);
+    SDL_DestroySurface(surface);
+    nb_png_image_destroy(&image);
+    return rendered;
 }
 
 static bool rebuild_cache(
@@ -281,6 +436,9 @@ static bool rebuild_cache(
         nb_backdrop_render(surface_renderer,
                            local_viewport,
                            preferences) &&
+        render_wallpaper(surface_renderer,
+                         local_viewport,
+                         preferences) &&
         SDL_RenderPresent(surface_renderer)) {
         texture = SDL_CreateTextureFromSurface(renderer, surface);
     }
@@ -297,6 +455,11 @@ static bool rebuild_cache(
             preferences->backdrop_gradient_enabled;
         cache->gradient_direction =
             preferences->backdrop_gradient_direction;
+        cache->wallpaper_mode = preferences->wallpaper_mode;
+        (void)snprintf(cache->wallpaper,
+                       sizeof(cache->wallpaper),
+                       "%s",
+                       preferences->wallpaper);
         texture = NULL;
         rendered = true;
     }

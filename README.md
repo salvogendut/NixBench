@@ -35,8 +35,8 @@ alongside NixInfo and a Sakura terminal.*
 - Rootless Xwayland compatibility for traditional X11 applications,
   including keyboard focus, EWMH fullscreen requests, and bounded direct or
   `INCR` text clipboard interoperability with Wayland applications.
-- Persistent application pins, window-control preferences, and configurable
-  solid or gradient backdrops in `~/.nixbenchrc`.
+- Persistent application pins, window-control preferences, configurable solid
+  or gradient backdrops, and PNG wallpaper placement in `~/.nixbenchrc`.
 - Delayed PNG screenshots and live CPU/memory history in NixInfo.
 - Privilege separation between the ordinary-user desktop and the small
   root-owned console/device helper.

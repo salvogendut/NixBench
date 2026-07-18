@@ -46,6 +46,9 @@ live and saved atomically. The current panel provides:
 - two palette color pickers for the desktop backdrop;
 - an optional vertical, horizontal, or diagonal gradient from color 1 to
   color 2;
+- a native PNG wallpaper chooser with directory navigation, dotfile control,
+  paging, validation, and a bounded preview;
+- Center, Tile, Fit, and Fill wallpaper placement modes;
 - persistent pins for NixClock, Sakura, and Midori; and
 - minimize- and maximize-gadget visibility, with left or right window-gadget
   placement.
@@ -55,12 +58,17 @@ order. The close gadget is therefore the rightmost control. Existing
 `windows.controls=split` files are accepted as the new right layout; selecting
 Left in Settings groups all visible gadgets on the left instead.
 
-The version-2 file also reserves `desktop.wallpaper`, `desktop.theme`, and
-`windows.theme` keys for future wallpaper and skinning work. Version-1 files
-used `windows.minimize` as an inactive placeholder; that old value is ignored
-and the new minimize gadget defaults to visible until the user saves a
-version-2 preference. Minimizing a window hides it from the desktop without
-changing its geometry and creates a compact, titled button in the global bar.
+Version 3 activates `desktop.wallpaper` and adds
+`desktop.wallpaper.mode=center|tile|fit|fill`. The chooser accepts regular PNG
+files through a reusable, bounded directory model; decoding is capped at 8192
+pixels per dimension and 64 MiB. An unreadable or invalid saved wallpaper is
+reported once and the color backdrop remains usable. Version-1 and version-2
+files remain readable and default to Fit placement. `desktop.theme` and
+`windows.theme` remain reserved for later skinning work. Version-1 files used
+`windows.minimize` as an inactive placeholder; that old value is ignored and
+the new minimize gadget defaults to visible until the user saves a newer
+preference. Minimizing a window hides it from the desktop without changing its
+geometry and creates a compact, titled button in the global bar.
 Clicking that button restores, raises, and focuses the window. Unknown keys
 are ignored so newer configurations remain readable by older builds. A
 malformed known value is reported and the session uses safe defaults without

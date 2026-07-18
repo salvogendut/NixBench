@@ -409,6 +409,7 @@ static void test_settings_and_application_pins(void)
     struct nb_desktop_runtime *runtime;
     struct nb_desktop_runtime_update update;
     struct nb_host_event event;
+    struct nb_host_frame rendered_frame;
     struct nb_rect frame;
     struct nb_rect content;
     nb_window_id window;
@@ -508,6 +509,38 @@ static void test_settings_and_application_pins(void)
     event = key_event("RTRN", true, milliseconds++);
     CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
     CHECK(update.launch_request == NB_DESKTOP_LAUNCH_MIDORI);
+
+    update = click_runtime(runtime,
+                           content.x + 20,
+                           content.y + 475,
+                           milliseconds);
+    milliseconds += 2;
+    CHECK(update.preferences_changed);
+    CHECK(update.preferences.wallpaper_mode == NB_WALLPAPER_FILL);
+
+    update = click_runtime(runtime,
+                           content.x + 20,
+                           content.y + 451,
+                           milliseconds);
+    milliseconds += 2;
+    CHECK(nb_desktop_runtime_window_count(runtime) == 3);
+    CHECK(nb_desktop_runtime_active_window_frame(runtime, &window, &frame));
+    CHECK(nb_desktop_runtime_render(runtime,
+                                    "12:34",
+                                    900,
+                                    &rendered_frame));
+    content = (struct nb_rect){
+        frame.x + NB_WINDOW_BORDER_WIDTH,
+        frame.y + NB_WINDOW_BORDER_WIDTH + NB_WINDOW_TITLE_HEIGHT,
+        frame.width - (2 * NB_WINDOW_BORDER_WIDTH),
+        frame.height - (2 * NB_WINDOW_BORDER_WIDTH) -
+            NB_WINDOW_TITLE_HEIGHT - NB_WINDOW_FOOTER_HEIGHT
+    };
+    update = click_runtime(runtime,
+                           content.x + 12 + 312 + 10,
+                           content.y + content.height - 30,
+                           milliseconds);
+    CHECK(nb_desktop_runtime_window_count(runtime) == 2);
 
     nb_desktop_runtime_destroy(runtime);
 }

@@ -32,6 +32,18 @@ changes are applied immediately and persist in the invoking user's
 and is tracked for orderly session shutdown; a missing executable is reported
 without ending the desktop.
 
+Settings now uses a native wallpaper chooser backed by a reusable POSIX
+directory model rather than depending on a GTK file manager. It resolves and
+enumerates absolute directories with a 4096-entry bound, sorts directories
+first, filters regular PNG files case-insensitively, and supports parent/open,
+dotfile visibility, paging, selection, and preview. PNG decoding is bounded to
+8192 pixels per dimension and 64 MiB. The cached backdrop compositor combines
+the existing solid or gradient base with Center, Tile, Fit, or Fill placement;
+the selected path and mode persist in version-3 `~/.nixbenchrc` files while
+older files remain readable. This model is intended to be reused by a future
+Workbench-style file manager and drag-and-drop layer. Mature GTK file managers
+may still run as optional applications, but are not required for core Settings.
+
 NixClock is the first real out-of-process application. It creates an
 `xdg_toplevel`, manages release-aware shared-memory buffers and frame callbacks,
 and draws a scalable analog clock with continuous hour and minute hands. Its
