@@ -79,6 +79,8 @@ instructions before the first hardware run.
 
 - [Architecture](docs/architecture.md) — hosted development, application
   compatibility, and the standalone target.
+- [HTML desktop themes](docs/html-themes.md) — the Option-2 browser-rendered
+  decoration architecture, theme bundles, safety boundary, and milestones.
 - [Project status and hardware validation](docs/project-status.md) — current
   implementation details and recorded NetBSD test results.
 - [Building and hosted development](docs/building.md) — dependencies, CMake

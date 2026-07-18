@@ -1,0 +1,52 @@
+:root {
+  --fantasy-ink: #29184f;
+  --fantasy-violet: #6d3bd1;
+  --fantasy-pink: #f15bb5;
+  --fantasy-gold: #fee440;
+  --fantasy-sky: #31d7f2;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; background: transparent; overflow: hidden; }
+
+.fantasy-window {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border: 3px solid var(--fantasy-ink);
+  border-radius: 12px 4px 12px 4px;
+  filter: drop-shadow(3px 4px 0 rgba(18, 9, 42, .45));
+}
+
+.titlebar {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 7px 0 28px;
+  color: white;
+  font: 700 13px sans-serif;
+  background: linear-gradient(90deg, var(--fantasy-violet), var(--fantasy-pink), var(--fantasy-gold), var(--fantasy-sky));
+  border-radius: 8px 1px 0 0;
+}
+
+.fantasy-horn {
+  position: absolute;
+  z-index: 2;
+  left: 8px;
+  top: -13px;
+  width: 10px;
+  height: 25px;
+  background: linear-gradient(90deg, #fff3bd, #f2b134);
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+
+.mane { width: 8px; height: 20px; background: repeating-linear-gradient(#f15bb5 0 4px, #fee440 4px 8px, #31d7f2 8px 12px); }
+.title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-shadow: 1px 1px var(--fantasy-ink); }
+.window-controls { display: flex; gap: 4px; }
+.window-controls button { width: 21px; height: 21px; padding: 0; color: var(--fantasy-ink); border: 1px solid var(--fantasy-ink); border-radius: 50%; background: rgba(255,255,255,.72); font-weight: 800; }
+.window-controls button:hover { transform: translateY(-1px); background: white; }
+.tail { width: 18px; height: 20px; border-radius: 0 100% 100% 0; background: repeating-linear-gradient(135deg, #f15bb5 0 4px, #fee440 4px 8px, #31d7f2 8px 12px); }
+
+.fantasy-desktop { width: 100%; height: 100%; background: radial-gradient(circle at 70% 20%, #673ab7, transparent 34%), linear-gradient(145deg, #152a55, #3f194f); }
+.fantasy-menubar { height: 24px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px; color: white; background: linear-gradient(90deg, #402080, #a13588); font: 700 12px sans-serif; }
