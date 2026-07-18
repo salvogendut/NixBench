@@ -577,6 +577,13 @@ target_include_directories(
 )
 nixbench_configure_c_target(nixbench_preferences)
 
+add_library(nixbench_themes STATIC src/theme_bundle.c)
+target_include_directories(
+  nixbench_themes
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+nixbench_configure_c_target(nixbench_themes)
+
 add_library(
   nixbench_filesystem STATIC
   src/file_browser.c
@@ -1659,6 +1666,18 @@ if(BUILD_TESTING)
   )
   nixbench_configure_c_target(nixbench_user_config_tests)
 
+  add_executable(nixbench_theme_bundle_tests tests/theme_bundle_test.c)
+  target_compile_definitions(
+    nixbench_theme_bundle_tests
+    PRIVATE
+      NIXBENCH_SOURCE_THEME_DIR="${CMAKE_CURRENT_SOURCE_DIR}/themes"
+  )
+  target_link_libraries(
+    nixbench_theme_bundle_tests
+    PRIVATE nixbench_themes
+  )
+  nixbench_configure_c_target(nixbench_theme_bundle_tests)
+
   add_executable(
     nixbench_framebuffer_format_tests
     tests/framebuffer_format_test.c
@@ -2028,6 +2047,7 @@ if(BUILD_TESTING)
   )
   add_test(NAME nixbench.window.model COMMAND nixbench_window_tests)
   add_test(NAME nixbench.user-config COMMAND nixbench_user_config_tests)
+  add_test(NAME nixbench.theme-bundles COMMAND nixbench_theme_bundle_tests)
   add_test(NAME nixbench.menu.model COMMAND nixbench_menu_tests)
   add_test(NAME nixbench.shell.model COMMAND nixbench_shell_tests)
   add_test(NAME nixbench.application.model COMMAND nixbench_application_tests)
