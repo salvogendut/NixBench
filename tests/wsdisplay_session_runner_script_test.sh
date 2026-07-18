@@ -185,6 +185,8 @@ env PATH="$temporary/bin:/usr/bin:/bin" \
 grep -F -- "$installed_helper --acknowledge-console-takeover" \
     "$installed_log" >/dev/null
 grep -F -- 'NIXBENCH_GTK_MENU_BRIDGE=1' "$installed_log" >/dev/null
+grep -F -- 'NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION=0' \
+    "$installed_log" >/dev/null
 if grep -F -- '/usr/bin/install' "$installed_log" >/dev/null ||
    grep -F -- 'Configuring the privilege-separated session' \
        "$installed_output" >/dev/null; then
@@ -239,6 +241,8 @@ grep -F -- "--application $test_application" "$application_log" >/dev/null
 grep -F -- "application-argument=$test_application" "$application_log" \
     >/dev/null
 grep -F -- 'NIXBENCH_GTK_MENU_BRIDGE=1' "$application_log" >/dev/null
+grep -F -- 'NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION=0' \
+    "$application_log" >/dev/null
 grep -F -- 'selected initial application will open automatically' \
     "$application_output" >/dev/null
 grep -F -- 'execution occurs only after the desktop core has dropped privileges' \

@@ -60,7 +60,7 @@ trace_wayland=${NIXBENCH_TRACE_WAYLAND:-}
 trace_wayland_log=${NIXBENCH_TRACE_WAYLAND_LOG:-}
 xwayland_rootless=${NIXBENCH_XWAYLAND_ROOTLESS:-0}
 xwayland=${NIXBENCH_XWAYLAND:-}
-xwayland_legacy_association=${NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION:-1}
+xwayland_legacy_association=${NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION:-0}
 gtk_menu_bridge=${NIXBENCH_GTK_MENU_BRIDGE:-0}
 case "$gtk_menu_bridge" in
     0|1) ;;
