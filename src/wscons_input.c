@@ -1661,6 +1661,185 @@ static bool pc_xt_us_map_is_supported(
            map[221].group1[0] == KS_Menu;
 }
 
+/*
+ * A wscons keyboard need not identify itself as PC-XT even when it exposes a
+ * perfectly ordinary desktop layout.  In particular, USB keyboards on ARM
+ * machines commonly report WSKBD_TYPE_USB.  Raw wscons events contain the
+ * keymap index, not a Unicode character, so use the keymap's unmodified
+ * keysym to associate the usual keys with their XKB physical names.
+ *
+ * This is deliberately a conservative common-keyboard fallback.  The
+ * validated PC-XT/US profile above remains the exact, complete mapping for
+ * the usual x86 case; this one makes the standard alphanumeric, modifier,
+ * navigation, keypad, and function keys usable on other wscons keyboard
+ * types without guessing at their numeric scan-code layout.
+ */
+static const char *xkb_name_for_wscons_keysym(keysym_t keysym)
+{
+    switch (keysym) {
+    case KS_Escape: return "ESC";
+    case KS_BackSpace: return "BKSP";
+    case KS_Tab: return "TAB";
+    case KS_Return: return "RTRN";
+    case KS_space: return "SPCE";
+    case KS_1: return "AE01";
+    case KS_2: return "AE02";
+    case KS_3: return "AE03";
+    case KS_4: return "AE04";
+    case KS_5: return "AE05";
+    case KS_6: return "AE06";
+    case KS_7: return "AE07";
+    case KS_8: return "AE08";
+    case KS_9: return "AE09";
+    case KS_0: return "AE10";
+    case KS_minus: return "AE11";
+    case KS_equal: return "AE12";
+    case KS_q: case KS_Q: return "AD01";
+    case KS_w: case KS_W: return "AD02";
+    case KS_e: case KS_E: return "AD03";
+    case KS_r: case KS_R: return "AD04";
+    case KS_t: case KS_T: return "AD05";
+    case KS_y: case KS_Y: return "AD06";
+    case KS_u: case KS_U: return "AD07";
+    case KS_i: case KS_I: return "AD08";
+    case KS_o: case KS_O: return "AD09";
+    case KS_p: case KS_P: return "AD10";
+    case KS_bracketleft: return "AD11";
+    case KS_bracketright: return "AD12";
+    case KS_a: case KS_A: return "AC01";
+    case KS_s: case KS_S: return "AC02";
+    case KS_d: case KS_D: return "AC03";
+    case KS_f: case KS_F: return "AC04";
+    case KS_g: case KS_G: return "AC05";
+    case KS_h: case KS_H: return "AC06";
+    case KS_j: case KS_J: return "AC07";
+    case KS_k: case KS_K: return "AC08";
+    case KS_l: case KS_L: return "AC09";
+    case KS_semicolon: return "AC10";
+    case KS_apostrophe: return "AC11";
+    case KS_grave: return "TLDE";
+    case KS_backslash: return "BKSL";
+    case KS_z: case KS_Z: return "AB01";
+    case KS_x: case KS_X: return "AB02";
+    case KS_c: case KS_C: return "AB03";
+    case KS_v: case KS_V: return "AB04";
+    case KS_b: case KS_B: return "AB05";
+    case KS_n: case KS_N: return "AB06";
+    case KS_m: case KS_M: return "AB07";
+    case KS_comma: return "AB08";
+    case KS_period: return "AB09";
+    case KS_slash: return "AB10";
+    case KS_Shift_L: return "LFSH";
+    case KS_Shift_R: return "RTSH";
+    case KS_Control_L: return "LCTL";
+    case KS_Control_R: return "RCTL";
+    case KS_Alt_L: return "LALT";
+    case KS_Alt_R: return "RALT";
+    case KS_Meta_L: return "LWIN";
+    case KS_Meta_R: return "RWIN";
+    case KS_Caps_Lock: return "CAPS";
+    case KS_Num_Lock: return "NMLK";
+    case KS_Up: return "UP";
+    case KS_Down: return "DOWN";
+    case KS_Left: return "LEFT";
+    case KS_Right: return "RGHT";
+    case KS_Home: return "HOME";
+    case KS_End: return "END";
+    case KS_Prior: return "PGUP";
+    case KS_Next: return "PGDN";
+    case KS_Insert: return "INS";
+    case KS_Delete: return "DELE";
+    case KS_Menu: return "MENU";
+    case KS_Pause: return "PAUS";
+    case KS_Print_Screen: return "PRSC";
+    case KS_KP_Enter: return "KPEN";
+    case KS_KP_0: return "KP0";
+    case KS_KP_1: return "KP1";
+    case KS_KP_2: return "KP2";
+    case KS_KP_3: return "KP3";
+    case KS_KP_4: return "KP4";
+    case KS_KP_5: return "KP5";
+    case KS_KP_6: return "KP6";
+    case KS_KP_7: return "KP7";
+    case KS_KP_8: return "KP8";
+    case KS_KP_9: return "KP9";
+    case KS_F1: return "FK01";
+    case KS_F2: return "FK02";
+    case KS_F3: return "FK03";
+    case KS_F4: return "FK04";
+    case KS_F5: return "FK05";
+    case KS_F6: return "FK06";
+    case KS_F7: return "FK07";
+    case KS_F8: return "FK08";
+    case KS_F9: return "FK09";
+    case KS_F10: return "FK10";
+    case KS_F11: return "FK11";
+    case KS_F12: return "FK12";
+    default: return NULL;
+    }
+}
+
+static bool configure_keycodes_from_wscons_map(
+    int descriptor,
+    struct nb_wscons_input_reducer *reducer,
+    const int control_keycodes[NB_WSCONS_CONTROL_KEY_COUNT],
+    int *system_error)
+{
+    struct wskbd_map_data map_data;
+    struct wscons_keymap *map;
+    u_int index;
+    size_t control_index;
+    bool mapped_any = false;
+
+    map = calloc(WSKBDIO_MAXMAPLEN, sizeof(*map));
+    if (map == NULL) {
+        *system_error = ENOMEM;
+        return false;
+    }
+    map_data.maplen = WSKBDIO_MAXMAPLEN;
+    map_data.map = map;
+    if (ioctl(descriptor, WSKBDIO_GETMAP, &map_data) != 0) {
+        *system_error = errno;
+        free(map);
+        return false;
+    }
+    if (map_data.maplen > WSKBDIO_MAXMAPLEN) {
+        *system_error = EOVERFLOW;
+        free(map);
+        return false;
+    }
+    for (index = 0;
+         index < map_data.maplen && index < NB_WSCONS_KEYCODE_CAPACITY;
+         ++index) {
+        const char *name = xkb_name_for_wscons_keysym(map[index].group1[0]);
+
+        if (name != NULL &&
+            nb_wscons_input_reducer_set_keycode(reducer, (int)index, name)) {
+            mapped_any = true;
+        }
+    }
+    for (control_index = 0;
+         control_index < NB_WSCONS_CONTROL_KEY_COUNT;
+         ++control_index) {
+        const int keycode = control_keycodes[control_index];
+
+        if (keycode >= 0 &&
+            !nb_wscons_input_reducer_set_control_keycode(
+                reducer,
+                (enum nb_wscons_control_key)control_index,
+                keycode)) {
+            *system_error = EINVAL;
+            free(map);
+            return false;
+        }
+    }
+    free(map);
+    if (!mapped_any) {
+        *system_error = ENOTSUP;
+    }
+    return mapped_any;
+}
+
 static bool query_control_keycodes(
     int descriptor,
     int keycodes[NB_WSCONS_CONTROL_KEY_COUNT],
@@ -1721,7 +1900,6 @@ bool nb_wscons_input_resume(struct nb_wscons_input *input)
     bool pc_xt_us = false;
     int system_error = 0;
     int keycodes[NB_WSCONS_CONTROL_KEY_COUNT];
-    size_t index;
 
     if (input == NULL || !reducer_is_valid(&input->reducer)) {
         return false;
@@ -1771,18 +1949,14 @@ bool nb_wscons_input_resume(struct nb_wscons_input *input)
             goto keymap_error;
         }
     } else {
-        for (index = 0; index < NB_WSCONS_CONTROL_KEY_COUNT; ++index) {
-            if (keycodes[index] >= 0 &&
-                !nb_wscons_input_reducer_set_control_keycode(
-                    &input->reducer,
-                    (enum nb_wscons_control_key)index,
-                    keycodes[index])) {
-                remember_error(
-                    input,
-                    "Could not configure the wscons control keymap",
-                    EINVAL);
-                goto keymap_error;
-            }
+        if (!configure_keycodes_from_wscons_map(input->keyboard_fd,
+                                                &input->reducer,
+                                                keycodes,
+                                                &system_error)) {
+            remember_error(input,
+                           "Could not configure the wscons keyboard keymap",
+                           system_error);
+            goto keymap_error;
         }
     }
     input->prefer_mouse = true;
