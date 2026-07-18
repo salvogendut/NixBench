@@ -59,6 +59,7 @@ enum {
     PUMP_TIMEOUT_MILLISECONDS = 25,
     SEAT_NAME_CAPACITY = 64,
     OUTPUT_TEXT_CAPACITY = 64,
+    CLIPBOARD_MIME_CAPACITY = 128,
     KEYBOARD_KEY_CAPACITY = 256
 };
 
@@ -105,6 +106,7 @@ struct client_state {
     struct wl_data_device_manager *data_device_manager;
     struct wl_data_device *data_device;
     struct wl_data_source *data_source;
+    struct wl_data_offer *selection_offer;
     struct output_state output;
     struct output_state late_output;
     struct xdg_wm_base *wm_base;
@@ -154,6 +156,12 @@ struct client_state {
     unsigned int seat_capability_sequence;
     unsigned int seat_name_sequence;
     unsigned int data_source_cancelled_count;
+    unsigned int data_source_send_count;
+    unsigned int data_offer_count;
+    unsigned int data_offer_mime_count;
+    const char *data_source_payload;
+    size_t data_source_payload_size;
+    char data_offer_mime[CLIPBOARD_MIME_CAPACITY];
     bool seat_waited_for_data_device_manager;
     unsigned int input_event_sequence;
     unsigned int data_device_selection_count;
@@ -878,10 +886,27 @@ static void data_source_send(void *data,
                              const char *mime_type,
                              int32_t fd)
 {
-    (void)data;
+    struct client_state *state = data;
+    size_t offset = 0;
+
     (void)source;
     (void)mime_type;
+    ++state->data_source_send_count;
     if (fd >= 0) {
+        while (offset < state->data_source_payload_size) {
+            ssize_t count = write(
+                fd,
+                state->data_source_payload + offset,
+                state->data_source_payload_size - offset);
+
+            if (count > 0) {
+                offset += (size_t)count;
+            } else if (count < 0 && errno == EINTR) {
+                continue;
+            } else {
+                break;
+            }
+        }
         (void)close(fd);
     }
 }
@@ -927,13 +952,55 @@ static const struct wl_data_source_listener data_source_listener = {
     .action = data_source_action
 };
 
+static void data_offer_mime(void *data,
+                            struct wl_data_offer *offer,
+                            const char *mime_type)
+{
+    struct client_state *state = data;
+
+    (void)offer;
+    (void)snprintf(state->data_offer_mime,
+                   sizeof(state->data_offer_mime),
+                   "%s",
+                   mime_type);
+    ++state->data_offer_mime_count;
+}
+
+static void data_offer_source_actions(void *data,
+                                      struct wl_data_offer *offer,
+                                      uint32_t source_actions)
+{
+    (void)data;
+    (void)offer;
+    (void)source_actions;
+}
+
+static void data_offer_action(void *data,
+                              struct wl_data_offer *offer,
+                              uint32_t dnd_action)
+{
+    (void)data;
+    (void)offer;
+    (void)dnd_action;
+}
+
+static const struct wl_data_offer_listener data_offer_listener = {
+    .offer = data_offer_mime,
+    .source_actions = data_offer_source_actions,
+    .action = data_offer_action
+};
+
 static void data_device_data_offer(void *data,
                                    struct wl_data_device *device,
                                    struct wl_data_offer *offer)
 {
-    (void)data;
+    struct client_state *state = data;
+
     (void)device;
-    (void)offer;
+    ++state->data_offer_count;
+    CHECK(wl_data_offer_add_listener(offer,
+                                     &data_offer_listener,
+                                     state) == 0);
 }
 
 static void data_device_enter(void *data,
@@ -987,7 +1054,11 @@ static void data_device_selection(void *data,
     struct client_state *state = data;
 
     (void)device;
-    CHECK(offer == NULL);
+    if (state->selection_offer != NULL &&
+        state->selection_offer != offer) {
+        wl_data_offer_destroy(state->selection_offer);
+    }
+    state->selection_offer = offer;
     ++state->data_device_selection_count;
     state->data_device_selection_sequence = ++state->input_event_sequence;
 }
@@ -1399,7 +1470,13 @@ static void test_wayland_surface_lifecycle(void)
     uint64_t root_revision_before_popup = 0;
     uint64_t popup_tree_revision = 0;
     int sockets[2] = {-1, -1};
+    int clipboard_pipe[2] = {-1, -1};
     int shm_fd = -1;
+    const char wayland_clipboard[] = "Wayland clipboard text";
+    const char external_clipboard[] = "X11 clipboard text";
+    char clipboard_buffer[64];
+    const char *cached_clipboard = NULL;
+    size_t cached_clipboard_size = 0;
     uint32_t *pixels = MAP_FAILED;
     const size_t pixel_count =
         (size_t)INITIAL_WIDTH * (size_t)INITIAL_HEIGHT;
@@ -2147,6 +2224,7 @@ static void test_wayland_surface_lifecycle(void)
     REQUIRE(pump_barrier(server, display));
     CHECK(client.keyboard_enter_count == 1);
     CHECK(client.data_device_selection_count == 1);
+    CHECK(client.selection_offer == NULL);
     CHECK(client.data_device_selection_sequence != 0);
     CHECK(client.data_device_selection_sequence <
           client.keyboard_enter_sequence);
@@ -2158,6 +2236,93 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(client.keyboard_mods_latched == 0);
     CHECK(client.keyboard_mods_locked == 0);
     CHECK(client.keyboard_group == 0);
+
+    /* A focused client can own, offer, and transfer bounded text. */
+    client.data_source = wl_data_device_manager_create_data_source(
+        client.data_device_manager);
+    REQUIRE(client.data_source != NULL);
+    REQUIRE(wl_data_source_add_listener(client.data_source,
+                                        &data_source_listener,
+                                        &client) == 0);
+    client.data_source_payload = wayland_clipboard;
+    client.data_source_payload_size = sizeof(wayland_clipboard) - 1;
+    wl_data_source_offer(client.data_source,
+                         "text/plain;charset=utf-8");
+    wl_data_device_set_selection(client.data_device,
+                                 client.data_source,
+                                 client.keyboard_serial);
+    REQUIRE(pump_barrier(server, display));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.data_source_cancelled_count == 2);
+    CHECK(client.data_device_selection_count == 2);
+    REQUIRE(client.selection_offer != NULL);
+    CHECK(client.data_offer_count == 1);
+    CHECK(client.data_offer_mime_count == 1);
+    CHECK(strcmp(client.data_offer_mime,
+                 "text/plain;charset=utf-8") == 0);
+    CHECK(client.data_source_send_count == 1);
+    CHECK(nb_wayland_server_clipboard_text(server,
+                                           &cached_clipboard,
+                                           &cached_clipboard_size));
+    CHECK(cached_clipboard_size == sizeof(wayland_clipboard) - 1);
+    CHECK(memcmp(cached_clipboard,
+                 wayland_clipboard,
+                 cached_clipboard_size) == 0);
+    REQUIRE(pipe(clipboard_pipe) == 0);
+    wl_data_offer_receive(client.selection_offer,
+                          "text/plain;charset=utf-8",
+                          clipboard_pipe[1]);
+    (void)close(clipboard_pipe[1]);
+    clipboard_pipe[1] = -1;
+    REQUIRE(pump_barrier(server, display));
+    memset(clipboard_buffer, 0, sizeof(clipboard_buffer));
+    CHECK(read(clipboard_pipe[0],
+               clipboard_buffer,
+               sizeof(clipboard_buffer)) ==
+          (ssize_t)(sizeof(wayland_clipboard) - 1));
+    CHECK(memcmp(clipboard_buffer,
+                 wayland_clipboard,
+                 sizeof(wayland_clipboard) - 1) == 0);
+    (void)close(clipboard_pipe[0]);
+    clipboard_pipe[0] = -1;
+    CHECK(client.data_source_send_count == 2);
+
+    /* Imported X11 text becomes a regular Wayland selection offer. */
+    CHECK(nb_wayland_server_set_external_clipboard_text(
+        server,
+        external_clipboard,
+        sizeof(external_clipboard) - 1));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.data_source_cancelled_count == 3);
+    CHECK(client.data_device_selection_count == 3);
+    REQUIRE(client.selection_offer != NULL);
+    CHECK(client.data_offer_count == 2);
+    CHECK(client.data_offer_mime_count == 4);
+    REQUIRE(pipe(clipboard_pipe) == 0);
+    wl_data_offer_receive(client.selection_offer,
+                          "text/plain;charset=utf-8",
+                          clipboard_pipe[1]);
+    (void)close(clipboard_pipe[1]);
+    clipboard_pipe[1] = -1;
+    REQUIRE(pump_barrier(server, display));
+    REQUIRE(pump_barrier(server, display));
+    memset(clipboard_buffer, 0, sizeof(clipboard_buffer));
+    CHECK(read(clipboard_pipe[0],
+               clipboard_buffer,
+               sizeof(clipboard_buffer)) ==
+          (ssize_t)(sizeof(external_clipboard) - 1));
+    CHECK(memcmp(clipboard_buffer,
+                 external_clipboard,
+                 sizeof(external_clipboard) - 1) == 0);
+    (void)close(clipboard_pipe[0]);
+    clipboard_pipe[0] = -1;
+    nb_wayland_server_clear_external_clipboard(server);
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.data_device_selection_count == 4);
+    CHECK(client.selection_offer == NULL);
+    wl_data_source_destroy(client.data_source);
+    client.data_source = NULL;
+    REQUIRE(pump_barrier(server, display));
 
     /* A late version-3 keyboard gets focus but no version-4 repeat event. */
     REQUIRE(client.seat_global_name != 0);
@@ -2579,6 +2744,12 @@ cleanup:
     }
     if (shm_fd >= 0) {
         (void)close(shm_fd);
+    }
+    if (clipboard_pipe[0] >= 0) {
+        (void)close(clipboard_pipe[0]);
+    }
+    if (clipboard_pipe[1] >= 0) {
+        (void)close(clipboard_pipe[1]);
     }
     if (sockets[0] >= 0) {
         (void)close(sockets[0]);

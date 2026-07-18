@@ -2177,6 +2177,8 @@ bool nb_desktop_runtime_set_xwayland_interface(
     wayland_interface.configure_window = interface->configure_window;
     wayland_interface.close_window = interface->close_window;
     wayland_interface.focus_window = interface->focus_window;
+    wayland_interface.set_clipboard_owner =
+        interface->set_clipboard_owner;
     nb_wayland_server_set_xwayland_interface(runtime->wayland,
                                              &wayland_interface,
                                              context);
@@ -2306,6 +2308,55 @@ bool nb_desktop_runtime_unmap_xwayland_window(
 #else
     (void)runtime;
     (void)xwindow;
+    return false;
+#endif
+}
+
+bool nb_desktop_runtime_set_external_clipboard_text(
+    struct nb_desktop_runtime *runtime,
+    const char *text,
+    size_t size)
+{
+#if NIXBENCH_HAS_WAYLAND
+    return runtime != NULL && runtime->wayland != NULL &&
+           nb_wayland_server_set_external_clipboard_text(
+               runtime->wayland,
+               text,
+               size);
+#else
+    (void)runtime;
+    (void)text;
+    (void)size;
+    return false;
+#endif
+}
+
+void nb_desktop_runtime_clear_external_clipboard(
+    struct nb_desktop_runtime *runtime)
+{
+#if NIXBENCH_HAS_WAYLAND
+    if (runtime != NULL && runtime->wayland != NULL) {
+        nb_wayland_server_clear_external_clipboard(runtime->wayland);
+    }
+#else
+    (void)runtime;
+#endif
+}
+
+bool nb_desktop_runtime_clipboard_text(
+    const struct nb_desktop_runtime *runtime,
+    const char **text,
+    size_t *size)
+{
+#if NIXBENCH_HAS_WAYLAND
+    return runtime != NULL && runtime->wayland != NULL &&
+           nb_wayland_server_clipboard_text(runtime->wayland,
+                                            text,
+                                            size);
+#else
+    (void)runtime;
+    (void)text;
+    (void)size;
     return false;
 #endif
 }

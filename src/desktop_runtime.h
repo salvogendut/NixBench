@@ -24,6 +24,7 @@ struct nb_desktop_xwayland_interface {
                              int height);
     bool (*close_window)(void *context, uint32_t xwindow);
     bool (*focus_window)(void *context, uint32_t xwindow);
+    bool (*set_clipboard_owner)(void *context, bool available);
 };
 
 enum nb_desktop_launch_request {
@@ -201,6 +202,16 @@ bool nb_desktop_runtime_set_xwayland_fullscreen(
 bool nb_desktop_runtime_unmap_xwayland_window(
     struct nb_desktop_runtime *runtime,
     uint32_t xwindow);
+bool nb_desktop_runtime_set_external_clipboard_text(
+    struct nb_desktop_runtime *runtime,
+    const char *text,
+    size_t size);
+void nb_desktop_runtime_clear_external_clipboard(
+    struct nb_desktop_runtime *runtime);
+bool nb_desktop_runtime_clipboard_text(
+    const struct nb_desktop_runtime *runtime,
+    const char **text,
+    size_t *size);
 
 /* Read-only state seams for deterministic runtime integration tests. */
 size_t nb_desktop_runtime_window_count(

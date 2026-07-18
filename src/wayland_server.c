@@ -12,9 +12,11 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <signal.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <wayland-server-core.h>
@@ -48,7 +50,10 @@ enum {
     NB_WAYLAND_KEY_CAPACITY = 256,
     NB_WAYLAND_KEYBOARD_REPEAT_RATE = 25,
     NB_WAYLAND_KEYBOARD_REPEAT_DELAY = 600,
-    NB_WAYLAND_APPLICATION_MENU_VERSION = 1
+    NB_WAYLAND_APPLICATION_MENU_VERSION = 1,
+    NB_WAYLAND_CLIPBOARD_MAX_MIME_TYPES = 16,
+    NB_WAYLAND_CLIPBOARD_MIME_CAPACITY = 128,
+    NB_WAYLAND_CLIPBOARD_MAX_BYTES = 1024 * 1024
 };
 
 enum { NB_WAYLAND_DAMAGE_TILE_SIZE = 32 };
@@ -64,6 +69,13 @@ enum nb_wayland_surface_role {
 
 struct nb_wayland_server;
 struct nb_wayland_application_menu;
+struct nb_wayland_data_source;
+
+enum nb_wayland_selection_kind {
+    NB_WAYLAND_SELECTION_NONE,
+    NB_WAYLAND_SELECTION_SOURCE,
+    NB_WAYLAND_SELECTION_EXTERNAL
+};
 
 struct nb_wayland_positioner {
     struct wl_resource *resource;
@@ -108,6 +120,44 @@ struct nb_wayland_data_device_resource {
     struct nb_wayland_server *server;
     struct wl_resource *resource;
     struct wl_list link;
+};
+
+struct nb_wayland_data_source {
+    struct nb_wayland_server *server;
+    struct wl_resource *resource;
+    struct wl_list offers;
+    char mime_types[NB_WAYLAND_CLIPBOARD_MAX_MIME_TYPES]
+                   [NB_WAYLAND_CLIPBOARD_MIME_CAPACITY];
+    size_t mime_type_count;
+    bool selection;
+};
+
+struct nb_wayland_data_offer {
+    struct nb_wayland_server *server;
+    struct nb_wayland_data_source *source;
+    struct wl_resource *resource;
+    struct wl_client *recipient;
+    struct wl_list source_link;
+    uint64_t external_generation;
+};
+
+struct nb_wayland_clipboard_read {
+    struct nb_wayland_server *server;
+    struct nb_wayland_data_source *source;
+    struct wl_event_source *event_source;
+    int descriptor;
+    char *data;
+    size_t size;
+};
+
+struct nb_wayland_clipboard_write {
+    struct nb_wayland_server *server;
+    struct wl_event_source *event_source;
+    struct wl_list link;
+    int descriptor;
+    char *data;
+    size_t size;
+    size_t offset;
 };
 
 struct nb_wayland_output_resource {
@@ -209,6 +259,13 @@ struct nb_wayland_server {
     struct wl_list pointer_resources;
     struct wl_list keyboard_resources;
     struct wl_list data_device_resources;
+    struct wl_list clipboard_writes;
+    enum nb_wayland_selection_kind selection_kind;
+    struct nb_wayland_data_source *selection_source;
+    struct nb_wayland_clipboard_read *clipboard_read;
+    char *clipboard_text;
+    size_t clipboard_text_size;
+    uint64_t selection_generation;
     struct xkb_context *xkb_context;
     struct xkb_keymap *xkb_keymap;
     struct xkb_state *xkb_state;
@@ -1251,19 +1308,9 @@ static bool keyboard_resource_belongs_to_client(
            wl_resource_get_client(keyboard->resource) == client;
 }
 
-static void data_device_send_empty_selection_to_client(
+static void data_device_send_selection_to_client(
     struct nb_wayland_server *server,
-    struct wl_client *client)
-{
-    struct nb_wayland_data_device_resource *device;
-
-    wl_list_for_each(device, &server->data_device_resources, link) {
-        if (device->resource != NULL &&
-            wl_resource_get_client(device->resource) == client) {
-            wl_data_device_send_selection(device->resource, NULL);
-        }
-    }
-}
+    struct wl_client *client);
 
 static void keyboard_read_modifiers(struct nb_wayland_server *server,
                                     uint32_t *depressed,
@@ -1389,7 +1436,7 @@ static bool keyboard_change_focus(struct nb_wayland_server *server,
     server->keyboard_focus = new_focus;
     if (new_focus != NULL) {
         if (old_client != new_client) {
-            data_device_send_empty_selection_to_client(server, new_client);
+            data_device_send_selection_to_client(server, new_client);
         }
         wl_list_for_each(keyboard, &server->keyboard_resources, link) {
             if (keyboard_resource_belongs_to_client(keyboard, new_client)) {
@@ -3280,13 +3327,551 @@ static void bind_seat(struct wl_client *client,
                                   WL_SEAT_CAPABILITY_KEYBOARD);
 }
 
-static void data_source_offer(struct wl_client *client,
+static bool clipboard_set_descriptor_flags(int descriptor,
+                                           bool nonblocking)
+{
+    int flags = fcntl(descriptor, F_GETFD);
+
+    if (flags < 0 ||
+        fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC) < 0) {
+        return false;
+    }
+    if (!nonblocking) {
+        return true;
+    }
+    flags = fcntl(descriptor, F_GETFL);
+    return flags >= 0 &&
+           fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+
+static ssize_t clipboard_write_without_sigpipe(int descriptor,
+                                               const void *bytes,
+                                               size_t size)
+{
+    const struct timespec no_wait = {0, 0};
+    sigset_t blocked;
+    sigset_t previous;
+    sigset_t pending;
+    ssize_t count;
+    int saved_error;
+    int was_pending;
+
+    if (sigemptyset(&blocked) != 0 ||
+        sigaddset(&blocked, SIGPIPE) != 0 ||
+        sigprocmask(SIG_BLOCK, &blocked, &previous) != 0) {
+        return -1;
+    }
+    if (sigpending(&pending) != 0 ||
+        (was_pending = sigismember(&pending, SIGPIPE)) < 0) {
+        saved_error = errno;
+        (void)sigprocmask(SIG_SETMASK, &previous, NULL);
+        errno = saved_error;
+        return -1;
+    }
+    count = write(descriptor, bytes, size);
+    saved_error = errno;
+    if (count < 0 && saved_error == EPIPE && was_pending == 0) {
+        int result;
+
+        do {
+            result = sigtimedwait(&blocked, NULL, &no_wait);
+        } while (result < 0 && errno == EINTR);
+    }
+    if (sigprocmask(SIG_SETMASK, &previous, NULL) != 0) {
+        return -1;
+    }
+    errno = saved_error;
+    return count;
+}
+
+static bool clipboard_mime_is_external_text(const char *mime_type)
+{
+    return mime_type != NULL &&
+           (strcmp(mime_type, "text/plain;charset=utf-8") == 0 ||
+            strcmp(mime_type, "text/plain;charset=UTF-8") == 0 ||
+            strcmp(mime_type, "text/plain") == 0 ||
+            strcmp(mime_type, "UTF8_STRING") == 0 ||
+            strcmp(mime_type, "STRING") == 0);
+}
+
+static bool data_source_offers_mime(
+    const struct nb_wayland_data_source *source,
+    const char *mime_type)
+{
+    size_t index;
+
+    if (source == NULL || mime_type == NULL) {
+        return false;
+    }
+    for (index = 0; index < source->mime_type_count; ++index) {
+        if (strcmp(source->mime_types[index], mime_type) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static const char *data_source_preferred_text_mime(
+    const struct nb_wayland_data_source *source)
+{
+    static const char *const preferred[] = {
+        "text/plain;charset=utf-8",
+        "text/plain;charset=UTF-8",
+        "UTF8_STRING",
+        "text/plain",
+        "STRING"
+    };
+    size_t index;
+
+    for (index = 0; index < sizeof(preferred) / sizeof(preferred[0]);
+         ++index) {
+        if (data_source_offers_mime(source, preferred[index])) {
+            return preferred[index];
+        }
+    }
+    return NULL;
+}
+
+static void clipboard_write_destroy(
+    struct nb_wayland_clipboard_write *transfer)
+{
+    if (transfer == NULL) {
+        return;
+    }
+    if (transfer->event_source != NULL) {
+        wl_event_source_remove(transfer->event_source);
+        transfer->event_source = NULL;
+    }
+    if (transfer->descriptor >= 0) {
+        (void)close(transfer->descriptor);
+        transfer->descriptor = -1;
+    }
+    wl_list_remove(&transfer->link);
+    wl_list_init(&transfer->link);
+    free(transfer->data);
+    free(transfer);
+}
+
+static int clipboard_write_ready(int descriptor,
+                                 uint32_t mask,
+                                 void *data)
+{
+    struct nb_wayland_clipboard_write *transfer = data;
+
+    if ((mask & WL_EVENT_ERROR) != 0) {
+        clipboard_write_destroy(transfer);
+        return 0;
+    }
+    while (transfer->offset < transfer->size) {
+        ssize_t count = clipboard_write_without_sigpipe(
+            descriptor,
+            transfer->data + transfer->offset,
+            transfer->size - transfer->offset);
+
+        if (count > 0) {
+            transfer->offset += (size_t)count;
+            continue;
+        }
+        if (count < 0 && errno == EINTR) {
+            continue;
+        }
+        if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            return 0;
+        }
+        clipboard_write_destroy(transfer);
+        return 0;
+    }
+    clipboard_write_destroy(transfer);
+    return 0;
+}
+
+static bool clipboard_start_write(struct nb_wayland_server *server,
+                                  int descriptor,
+                                  const char *data,
+                                  size_t size)
+{
+    struct nb_wayland_clipboard_write *transfer;
+
+    if (descriptor < 0 || data == NULL ||
+        size > NB_WAYLAND_CLIPBOARD_MAX_BYTES ||
+        !clipboard_set_descriptor_flags(descriptor, true)) {
+        if (descriptor >= 0) {
+            (void)close(descriptor);
+        }
+        return false;
+    }
+    transfer = calloc(1, sizeof(*transfer));
+    if (transfer == NULL) {
+        (void)close(descriptor);
+        return false;
+    }
+    transfer->data = malloc(size == 0 ? 1 : size);
+    if (transfer->data == NULL) {
+        (void)close(descriptor);
+        free(transfer);
+        return false;
+    }
+    if (size != 0) {
+        memcpy(transfer->data, data, size);
+    }
+    transfer->server = server;
+    transfer->descriptor = descriptor;
+    transfer->size = size;
+    wl_list_init(&transfer->link);
+    wl_list_insert(&server->clipboard_writes, &transfer->link);
+    transfer->event_source = wl_event_loop_add_fd(
+        server->event_loop,
+        descriptor,
+        WL_EVENT_WRITABLE | WL_EVENT_HANGUP | WL_EVENT_ERROR,
+        clipboard_write_ready,
+        transfer);
+    if (transfer->event_source == NULL) {
+        clipboard_write_destroy(transfer);
+        return false;
+    }
+    if (size == 0) {
+        clipboard_write_destroy(transfer);
+    }
+    return true;
+}
+
+static void data_offer_accept(struct wl_client *client,
                               struct wl_resource *resource,
+                              uint32_t serial,
                               const char *mime_type)
 {
     (void)client;
     (void)resource;
+    (void)serial;
     (void)mime_type;
+}
+
+static void data_offer_receive(struct wl_client *client,
+                               struct wl_resource *resource,
+                               const char *mime_type,
+                               int32_t descriptor)
+{
+    struct nb_wayland_data_offer *offer =
+        wl_resource_get_user_data(resource);
+
+    (void)client;
+    if (offer == NULL || descriptor < 0) {
+        if (descriptor >= 0) {
+            (void)close(descriptor);
+        }
+        return;
+    }
+    if (offer->source != NULL && offer->source->resource != NULL &&
+        data_source_offers_mime(offer->source, mime_type)) {
+        wl_data_source_send_send(offer->source->resource,
+                                 mime_type,
+                                 descriptor);
+        (void)close(descriptor);
+        return;
+    }
+    if (offer->source == NULL &&
+        offer->external_generation != 0 &&
+        offer->server->selection_kind == NB_WAYLAND_SELECTION_EXTERNAL &&
+        offer->external_generation ==
+            offer->server->selection_generation &&
+        clipboard_mime_is_external_text(mime_type) &&
+        offer->server->clipboard_text != NULL) {
+        (void)clipboard_start_write(offer->server,
+                                    descriptor,
+                                    offer->server->clipboard_text,
+                                    offer->server->clipboard_text_size);
+        return;
+    }
+    (void)close(descriptor);
+}
+
+static void data_offer_destroy(struct wl_client *client,
+                               struct wl_resource *resource)
+{
+    (void)client;
+    wl_resource_destroy(resource);
+}
+
+static void data_offer_finish(struct wl_client *client,
+                              struct wl_resource *resource)
+{
+    (void)client;
+    (void)resource;
+}
+
+static void data_offer_set_actions(struct wl_client *client,
+                                   struct wl_resource *resource,
+                                   uint32_t dnd_actions,
+                                   uint32_t preferred_action)
+{
+    (void)client;
+    (void)resource;
+    (void)dnd_actions;
+    (void)preferred_action;
+}
+
+static const struct wl_data_offer_interface data_offer_implementation = {
+    .accept = data_offer_accept,
+    .receive = data_offer_receive,
+    .destroy = data_offer_destroy,
+    .finish = data_offer_finish,
+    .set_actions = data_offer_set_actions
+};
+
+static void data_offer_resource_destroyed(struct wl_resource *resource)
+{
+    struct nb_wayland_data_offer *offer =
+        wl_resource_get_user_data(resource);
+
+    if (offer == NULL) {
+        return;
+    }
+    offer->resource = NULL;
+    if (!wl_list_empty(&offer->source_link)) {
+        wl_list_remove(&offer->source_link);
+        wl_list_init(&offer->source_link);
+    }
+    free(offer);
+}
+
+static void data_source_invalidate_offers(
+    struct nb_wayland_data_source *source)
+{
+    struct nb_wayland_data_offer *offer;
+    struct nb_wayland_data_offer *temporary;
+
+    wl_list_for_each_safe(offer, temporary, &source->offers, source_link) {
+        wl_list_remove(&offer->source_link);
+        wl_list_init(&offer->source_link);
+        offer->source = NULL;
+    }
+}
+
+static void clipboard_notify_xwayland(struct nb_wayland_server *server,
+                                      bool available)
+{
+    if (!server->destroying &&
+        server->xwayland_interface.set_clipboard_owner != NULL &&
+        !server->xwayland_interface.set_clipboard_owner(
+            server->xwayland_context,
+            available)) {
+        fprintf(stderr,
+                "Rootless Xwayland could not %s the text clipboard\n",
+                available ? "publish" : "release");
+    }
+}
+
+static void clipboard_read_finish(
+    struct nb_wayland_clipboard_read *transfer,
+    bool success)
+{
+    struct nb_wayland_server *server;
+
+    if (transfer == NULL) {
+        return;
+    }
+    server = transfer->server;
+    if (transfer->event_source != NULL) {
+        wl_event_source_remove(transfer->event_source);
+        transfer->event_source = NULL;
+    }
+    if (transfer->descriptor >= 0) {
+        (void)close(transfer->descriptor);
+        transfer->descriptor = -1;
+    }
+    if (server->clipboard_read == transfer) {
+        server->clipboard_read = NULL;
+    }
+    if (success &&
+        server->selection_kind == NB_WAYLAND_SELECTION_SOURCE &&
+        server->selection_source == transfer->source &&
+        transfer->source != NULL && transfer->source->resource != NULL) {
+        free(server->clipboard_text);
+        transfer->data[transfer->size] = '\0';
+        server->clipboard_text = transfer->data;
+        server->clipboard_text_size = transfer->size;
+        transfer->data = NULL;
+        clipboard_notify_xwayland(server, true);
+    }
+    free(transfer->data);
+    free(transfer);
+}
+
+static int clipboard_read_ready(int descriptor,
+                                uint32_t mask,
+                                void *data)
+{
+    struct nb_wayland_clipboard_read *transfer = data;
+
+    if ((mask & WL_EVENT_ERROR) != 0) {
+        clipboard_read_finish(transfer, false);
+        return 0;
+    }
+    for (;;) {
+        const size_t remaining =
+            NB_WAYLAND_CLIPBOARD_MAX_BYTES + 1 - transfer->size;
+        ssize_t count;
+
+        if (remaining == 0) {
+            clipboard_read_finish(transfer, false);
+            return 0;
+        }
+        count = read(descriptor,
+                     transfer->data + transfer->size,
+                     remaining);
+        if (count > 0) {
+            transfer->size += (size_t)count;
+            if (transfer->size > NB_WAYLAND_CLIPBOARD_MAX_BYTES) {
+                clipboard_read_finish(transfer, false);
+                return 0;
+            }
+            continue;
+        }
+        if (count == 0) {
+            clipboard_read_finish(transfer, true);
+            return 0;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return 0;
+        }
+        clipboard_read_finish(transfer, false);
+        return 0;
+    }
+}
+
+static void clipboard_cancel_read(struct nb_wayland_server *server)
+{
+    if (server->clipboard_read != NULL) {
+        clipboard_read_finish(server->clipboard_read, false);
+    }
+}
+
+static bool clipboard_start_read(
+    struct nb_wayland_server *server,
+    struct nb_wayland_data_source *source)
+{
+    struct nb_wayland_clipboard_read *transfer;
+    const char *mime_type = data_source_preferred_text_mime(source);
+    int descriptors[2] = {-1, -1};
+
+    if (mime_type == NULL || source->resource == NULL ||
+        pipe(descriptors) != 0 ||
+        !clipboard_set_descriptor_flags(descriptors[0], true) ||
+        !clipboard_set_descriptor_flags(descriptors[1], false)) {
+        if (descriptors[0] >= 0) {
+            (void)close(descriptors[0]);
+        }
+        if (descriptors[1] >= 0) {
+            (void)close(descriptors[1]);
+        }
+        return false;
+    }
+    transfer = calloc(1, sizeof(*transfer));
+    if (transfer == NULL) {
+        (void)close(descriptors[0]);
+        (void)close(descriptors[1]);
+        return false;
+    }
+    transfer->data = malloc(NB_WAYLAND_CLIPBOARD_MAX_BYTES + 1);
+    if (transfer->data == NULL) {
+        (void)close(descriptors[0]);
+        (void)close(descriptors[1]);
+        free(transfer);
+        return false;
+    }
+    transfer->server = server;
+    transfer->source = source;
+    transfer->descriptor = descriptors[0];
+    transfer->event_source = wl_event_loop_add_fd(
+        server->event_loop,
+        descriptors[0],
+        WL_EVENT_READABLE | WL_EVENT_HANGUP | WL_EVENT_ERROR,
+        clipboard_read_ready,
+        transfer);
+    if (transfer->event_source == NULL) {
+        (void)close(descriptors[1]);
+        clipboard_read_finish(transfer, false);
+        return false;
+    }
+    server->clipboard_read = transfer;
+    wl_data_source_send_send(source->resource,
+                             mime_type,
+                             descriptors[1]);
+    (void)close(descriptors[1]);
+    return true;
+}
+
+static void data_source_offer(struct wl_client *client,
+                              struct wl_resource *resource,
+                              const char *mime_type)
+{
+    struct nb_wayland_data_source *source =
+        wl_resource_get_user_data(resource);
+    size_t length;
+
+    if (source == NULL || mime_type == NULL || source->selection) {
+        wl_client_post_implementation_error(
+            client, "invalid wl_data_source MIME offer");
+        return;
+    }
+    length = strlen(mime_type);
+    if (length == 0 ||
+        length >= NB_WAYLAND_CLIPBOARD_MIME_CAPACITY ||
+        source->mime_type_count >=
+            NB_WAYLAND_CLIPBOARD_MAX_MIME_TYPES) {
+        wl_client_post_implementation_error(
+            client, "wl_data_source MIME offer exceeds NixBench limits");
+        return;
+    }
+    if (data_source_offers_mime(source, mime_type)) {
+        return;
+    }
+    memcpy(source->mime_types[source->mime_type_count],
+           mime_type,
+           length + 1);
+    ++source->mime_type_count;
+}
+
+static void data_device_send_selection_to_client(
+    struct nb_wayland_server *server,
+    struct wl_client *client);
+
+static void selection_clear(struct nb_wayland_server *server,
+                            bool cancel_source,
+                            bool notify_client,
+                            bool release_xwayland)
+{
+    struct nb_wayland_data_source *source = server->selection_source;
+    struct wl_client *focused_client = NULL;
+
+    clipboard_cancel_read(server);
+    if (release_xwayland &&
+        server->selection_kind == NB_WAYLAND_SELECTION_SOURCE) {
+        clipboard_notify_xwayland(server, false);
+    }
+    if (source != NULL) {
+        data_source_invalidate_offers(source);
+        source->selection = false;
+        if (cancel_source && source->resource != NULL) {
+            wl_data_source_send_cancelled(source->resource);
+        }
+    }
+    server->selection_source = NULL;
+    server->selection_kind = NB_WAYLAND_SELECTION_NONE;
+    ++server->selection_generation;
+    free(server->clipboard_text);
+    server->clipboard_text = NULL;
+    server->clipboard_text_size = 0;
+    if (notify_client && !server->destroying &&
+        server->keyboard_focus != NULL &&
+        server->keyboard_focus->surface_resource != NULL) {
+        focused_client = wl_resource_get_client(
+            server->keyboard_focus->surface_resource);
+        data_device_send_selection_to_client(server, focused_client);
+    }
 }
 
 static void data_source_destroy(struct wl_client *client,
@@ -3311,10 +3896,38 @@ static const struct wl_data_source_interface data_source_implementation = {
     .set_actions = data_source_set_actions
 };
 
-static void cancel_inert_data_source(struct wl_resource *source)
+static void data_source_resource_destroyed(struct wl_resource *resource)
 {
-    if (source != NULL) {
-        wl_data_source_send_cancelled(source);
+    struct nb_wayland_data_source *source =
+        wl_resource_get_user_data(resource);
+
+    if (source == NULL) {
+        return;
+    }
+    source->resource = NULL;
+    if (source->server->selection_source == source) {
+        selection_clear(source->server,
+                        false,
+                        !source->server->destroying,
+                        !source->server->destroying);
+    }
+    data_source_invalidate_offers(source);
+    free(source);
+}
+
+static void cancel_unused_data_source(struct wl_resource *resource)
+{
+    if (resource != NULL &&
+        wl_resource_instance_of(resource,
+                                &wl_data_source_interface,
+                                &data_source_implementation)) {
+        struct nb_wayland_data_source *source =
+            wl_resource_get_user_data(resource);
+
+        if (source != NULL && !source->selection &&
+            source->resource != NULL) {
+            wl_data_source_send_cancelled(source->resource);
+        }
     }
 }
 
@@ -3330,7 +3943,91 @@ static void data_device_start_drag(struct wl_client *client,
     (void)origin;
     (void)icon;
     (void)serial;
-    cancel_inert_data_source(source);
+    cancel_unused_data_source(source);
+}
+
+static bool data_device_send_selection(
+    struct nb_wayland_data_device_resource *device)
+{
+    struct nb_wayland_server *server = device->server;
+    struct nb_wayland_data_offer *offer;
+    struct wl_client *client;
+    size_t index;
+
+    if (device->resource == NULL) {
+        return false;
+    }
+    if (server->selection_kind == NB_WAYLAND_SELECTION_NONE ||
+        (server->selection_kind == NB_WAYLAND_SELECTION_SOURCE &&
+         (server->selection_source == NULL ||
+          server->selection_source->resource == NULL)) ||
+        (server->selection_kind == NB_WAYLAND_SELECTION_EXTERNAL &&
+         server->clipboard_text == NULL)) {
+        wl_data_device_send_selection(device->resource, NULL);
+        return true;
+    }
+    offer = calloc(1, sizeof(*offer));
+    if (offer == NULL) {
+        wl_client_post_no_memory(
+            wl_resource_get_client(device->resource));
+        return false;
+    }
+    client = wl_resource_get_client(device->resource);
+    offer->server = server;
+    offer->recipient = client;
+    offer->resource = wl_resource_create(
+        client,
+        &wl_data_offer_interface,
+        wl_resource_get_version(device->resource),
+        0);
+    wl_list_init(&offer->source_link);
+    if (offer->resource == NULL) {
+        free(offer);
+        wl_client_post_no_memory(client);
+        return false;
+    }
+    if (server->selection_kind == NB_WAYLAND_SELECTION_SOURCE) {
+        offer->source = server->selection_source;
+        wl_list_insert(&offer->source->offers, &offer->source_link);
+    } else {
+        offer->external_generation = server->selection_generation;
+    }
+    wl_resource_set_implementation(offer->resource,
+                                   &data_offer_implementation,
+                                   offer,
+                                   data_offer_resource_destroyed);
+    wl_data_device_send_data_offer(device->resource, offer->resource);
+    if (offer->source != NULL) {
+        for (index = 0; index < offer->source->mime_type_count; ++index) {
+            wl_data_offer_send_offer(
+                offer->resource,
+                offer->source->mime_types[index]);
+        }
+    } else {
+        wl_data_offer_send_offer(offer->resource,
+                                 "text/plain;charset=utf-8");
+        wl_data_offer_send_offer(offer->resource, "text/plain");
+        wl_data_offer_send_offer(offer->resource, "UTF8_STRING");
+    }
+    wl_data_device_send_selection(device->resource, offer->resource);
+    return true;
+}
+
+static void data_device_send_selection_to_client(
+    struct nb_wayland_server *server,
+    struct wl_client *client)
+{
+    struct nb_wayland_data_device_resource *device;
+
+    if (client == NULL) {
+        return;
+    }
+    wl_list_for_each(device, &server->data_device_resources, link) {
+        if (device->resource != NULL &&
+            wl_resource_get_client(device->resource) == client) {
+            (void)data_device_send_selection(device);
+        }
+    }
 }
 
 static void data_device_set_selection(struct wl_client *client,
@@ -3338,10 +4035,53 @@ static void data_device_set_selection(struct wl_client *client,
                                       struct wl_resource *source,
                                       uint32_t serial)
 {
-    (void)client;
-    (void)resource;
+    struct nb_wayland_data_device_resource *device =
+        wl_resource_get_user_data(resource);
+    struct nb_wayland_server *server;
+    struct nb_wayland_data_source *data_source = NULL;
+    struct wl_client *focused_client = NULL;
+
     (void)serial;
-    cancel_inert_data_source(source);
+    if (device == NULL || device->server == NULL) {
+        return;
+    }
+    server = device->server;
+    if (source != NULL) {
+        if (!wl_resource_instance_of(source,
+                                     &wl_data_source_interface,
+                                     &data_source_implementation) ||
+            wl_resource_get_client(source) != client) {
+            wl_client_post_implementation_error(
+                client, "wl_data_device received a foreign data source");
+            return;
+        }
+        data_source = wl_resource_get_user_data(source);
+    }
+    if (server->keyboard_focus != NULL &&
+        server->keyboard_focus->surface_resource != NULL) {
+        focused_client = wl_resource_get_client(
+            server->keyboard_focus->surface_resource);
+    }
+    if (focused_client != client) {
+        cancel_unused_data_source(source);
+        return;
+    }
+    if (data_source != NULL &&
+        server->selection_kind == NB_WAYLAND_SELECTION_SOURCE &&
+        server->selection_source == data_source) {
+        return;
+    }
+    selection_clear(server, true, false, true);
+    if (data_source != NULL) {
+        server->selection_kind = NB_WAYLAND_SELECTION_SOURCE;
+        server->selection_source = data_source;
+        data_source->selection = true;
+        ++server->selection_generation;
+    }
+    data_device_send_selection_to_client(server, focused_client);
+    if (data_source != NULL) {
+        (void)clipboard_start_read(server, data_source);
+    }
 }
 
 static void data_device_release(struct wl_client *client,
@@ -3376,20 +4116,32 @@ static void data_device_manager_create_data_source(
     struct wl_resource *resource,
     uint32_t id)
 {
-    struct wl_resource *source = wl_resource_create(
+    struct nb_wayland_server *server =
+        wl_resource_get_user_data(resource);
+    struct nb_wayland_data_source *source;
+
+    source = calloc(1, sizeof(*source));
+    if (source == NULL) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    source->server = server;
+    source->resource = wl_resource_create(
         client,
         &wl_data_source_interface,
         wl_resource_get_version(resource),
         id);
 
-    if (source == NULL) {
+    if (source->resource == NULL) {
+        free(source);
         wl_client_post_no_memory(client);
         return;
     }
-    wl_resource_set_implementation(source,
+    wl_list_init(&source->offers);
+    wl_resource_set_implementation(source->resource,
                                    &data_source_implementation,
-                                   wl_resource_get_user_data(resource),
-                                   NULL);
+                                   source,
+                                   data_source_resource_destroyed);
 }
 
 static void data_device_manager_get_data_device(
@@ -3430,6 +4182,12 @@ static void data_device_manager_get_data_device(
                                    &data_device_implementation,
                                    device,
                                    data_device_resource_destroyed);
+    if (server->keyboard_focus != NULL &&
+        server->keyboard_focus->surface_resource != NULL &&
+        wl_resource_get_client(server->keyboard_focus->surface_resource) ==
+            client) {
+        (void)data_device_send_selection(device);
+    }
 }
 
 static const struct wl_data_device_manager_interface
@@ -5231,6 +5989,7 @@ struct nb_wayland_server *nb_wayland_server_create(
     wl_list_init(&server->pointer_resources);
     wl_list_init(&server->keyboard_resources);
     wl_list_init(&server->data_device_resources);
+    wl_list_init(&server->clipboard_writes);
     if (!initialize_keyboard_state(server)) {
         destroy_keyboard_state(server);
         free(server);
@@ -5327,12 +6086,21 @@ struct nb_wayland_server *nb_wayland_server_create(
 
 void nb_wayland_server_destroy(struct nb_wayland_server *server)
 {
+    struct nb_wayland_clipboard_write *transfer;
+    struct nb_wayland_clipboard_write *temporary;
     size_t index;
 
     if (server == NULL) {
         return;
     }
     server->destroying = true;
+    selection_clear(server, false, false, false);
+    wl_list_for_each_safe(transfer,
+                          temporary,
+                          &server->clipboard_writes,
+                          link) {
+        clipboard_write_destroy(transfer);
+    }
     pointer_cancel_internal(server, server->pointer_time, false);
     wl_display_destroy_clients(server->display);
     for (index = 0; index < NB_WAYLAND_MAX_SURFACES; ++index) {
@@ -5807,6 +6575,65 @@ bool nb_wayland_server_unmap_xwayland_window(
         return false;
     }
     unmap_surface(surface, true);
+    return true;
+}
+
+bool nb_wayland_server_set_external_clipboard_text(
+    struct nb_wayland_server *server,
+    const char *text,
+    size_t size)
+{
+    char *copy;
+    struct wl_client *focused_client = NULL;
+
+    if (server == NULL || server->destroying || text == NULL ||
+        size > NB_WAYLAND_CLIPBOARD_MAX_BYTES) {
+        return false;
+    }
+    copy = malloc(size + 1);
+    if (copy == NULL) {
+        return false;
+    }
+    if (size != 0) {
+        memcpy(copy, text, size);
+    }
+    copy[size] = '\0';
+    selection_clear(server, true, false, false);
+    server->selection_kind = NB_WAYLAND_SELECTION_EXTERNAL;
+    server->clipboard_text = copy;
+    server->clipboard_text_size = size;
+    ++server->selection_generation;
+    if (server->keyboard_focus != NULL &&
+        server->keyboard_focus->surface_resource != NULL) {
+        focused_client = wl_resource_get_client(
+            server->keyboard_focus->surface_resource);
+        data_device_send_selection_to_client(server, focused_client);
+    }
+    return true;
+}
+
+void nb_wayland_server_clear_external_clipboard(
+    struct nb_wayland_server *server)
+{
+    if (server != NULL && !server->destroying &&
+        server->selection_kind == NB_WAYLAND_SELECTION_EXTERNAL) {
+        selection_clear(server, false, true, false);
+    }
+}
+
+bool nb_wayland_server_clipboard_text(
+    const struct nb_wayland_server *server,
+    const char **text,
+    size_t *size)
+{
+    if (server == NULL || text == NULL || size == NULL ||
+        server->selection_kind != NB_WAYLAND_SELECTION_SOURCE ||
+        server->selection_source == NULL ||
+        server->clipboard_text == NULL) {
+        return false;
+    }
+    *text = server->clipboard_text;
+    *size = server->clipboard_text_size;
     return true;
 }
 

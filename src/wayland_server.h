@@ -30,6 +30,8 @@ struct nb_wayland_xwayland_interface {
     bool (*close_window)(void *context, uint32_t xwindow);
     /* A zero XID clears X11 focus when focus leaves rootless Xwayland. */
     bool (*focus_window)(void *context, uint32_t xwindow);
+    /* Claim or release the X11 selections for a Wayland text clipboard. */
+    bool (*set_clipboard_owner)(void *context, bool available);
 };
 
 /*
@@ -232,5 +234,23 @@ bool nb_wayland_server_set_xwayland_fullscreen(
 bool nb_wayland_server_unmap_xwayland_window(
     struct nb_wayland_server *server,
     uint32_t xwindow);
+
+/*
+ * Import bounded UTF-8 text from the unprivileged XWM. The compositor copies
+ * data before returning. Clearing affects only an X11-imported selection, so
+ * a stale XFixes notification cannot discard a newer Wayland-owned clipboard.
+ */
+bool nb_wayland_server_set_external_clipboard_text(
+    struct nb_wayland_server *server,
+    const char *text,
+    size_t size);
+void nb_wayland_server_clear_external_clipboard(
+    struct nb_wayland_server *server);
+
+/* Borrow the cached text used while NixBench owns the X11 selections. */
+bool nb_wayland_server_clipboard_text(
+    const struct nb_wayland_server *server,
+    const char **text,
+    size_t *size);
 
 #endif
