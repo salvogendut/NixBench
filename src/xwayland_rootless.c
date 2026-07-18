@@ -53,6 +53,8 @@ struct nb_xwayland_window {
     bool occupied;
     bool associated;
     bool association_pending_reported;
+    bool composite_redirected_by_xwm;
+    bool composite_redirected_externally;
     bool fullscreen;
     char title[NB_WINDOW_TITLE_CAPACITY];
     char application_name[NB_WINDOW_TITLE_CAPACITY];
@@ -1185,31 +1187,73 @@ static void handle_incremental_selection_import(
     free(reply);
 }
 
-static bool redirect_window(struct nb_xwayland_rootless *service,
-                            xcb_window_t window,
-                            bool redirect)
+enum nb_xwayland_redirect_result {
+    NB_XWAYLAND_REDIRECT_FAILED = 0,
+    NB_XWAYLAND_REDIRECT_OWNED,
+    NB_XWAYLAND_REDIRECT_EXTERNAL
+};
+
+static enum nb_xwayland_redirect_result redirect_window(
+    struct nb_xwayland_rootless *service,
+    xcb_window_t window)
 {
-    xcb_void_cookie_t request;
+    xcb_generic_error_t *error;
 
     if (service == NULL || service->connection == NULL || window == 0) {
-        return false;
+        return NB_XWAYLAND_REDIRECT_FAILED;
     }
-    if (redirect) {
-        request = xcb_composite_redirect_window_checked(
-            service->connection,
-            window,
-            XCB_COMPOSITE_REDIRECT_MANUAL);
-    } else {
-        request = xcb_composite_unredirect_window_checked(
-            service->connection,
-            window,
-            XCB_COMPOSITE_REDIRECT_MANUAL);
-    }
-    return checked_request_succeeded(
+    error = xcb_request_check(
         service->connection,
-        request,
-        redirect ? "redirect an X11 top-level's pixels"
-                 : "release an X11 top-level's pixels");
+        xcb_composite_redirect_window_checked(
+            service->connection,
+            window,
+            XCB_COMPOSITE_REDIRECT_MANUAL));
+    if (error == NULL) {
+        return NB_XWAYLAND_REDIRECT_OWNED;
+    }
+    if (error->error_code == XCB_ACCESS) {
+        fprintf(stderr,
+                "Rootless XWM found X window %#x already manually "
+                "redirected; using its existing Composite storage\n",
+                (unsigned int)window);
+        free(error);
+        return NB_XWAYLAND_REDIRECT_EXTERNAL;
+    }
+    fprintf(stderr,
+            "Rootless XWM could not redirect X window %#x's pixels "
+            "(X11 error %u); rejecting only that window\n",
+            (unsigned int)window,
+            (unsigned int)error->error_code);
+    free(error);
+    return NB_XWAYLAND_REDIRECT_FAILED;
+}
+
+static void release_window_redirect(struct nb_xwayland_rootless *service,
+                                    xcb_window_t window)
+{
+    (void)checked_request_succeeded(
+        service->connection,
+        xcb_composite_unredirect_window_checked(
+            service->connection,
+            window,
+            XCB_COMPOSITE_REDIRECT_MANUAL),
+        "release an X11 top-level's pixels");
+}
+
+static void reject_x11_window(struct nb_xwayland_rootless *service,
+                              struct nb_xwayland_window *entry)
+{
+    if (entry == NULL) {
+        return;
+    }
+    (void)checked_request_succeeded(
+        service->connection,
+        xcb_unmap_window_checked(service->connection, entry->window),
+        "unmap a rejected X11 top-level");
+    if (entry->composite_redirected_by_xwm) {
+        release_window_redirect(service, entry->window);
+    }
+    memset(entry, 0, sizeof(*entry));
 }
 
 static bool handle_map_request(struct nb_xwayland_rootless *service,
@@ -1219,9 +1263,18 @@ static bool handle_map_request(struct nb_xwayland_rootless *service,
                                 XCB_EVENT_MASK_STRUCTURE_NOTIFY;
     struct nb_xwayland_window *entry =
         remember_window(service, event->window);
+    enum nb_xwayland_redirect_result redirect_result;
 
     if (entry == NULL) {
-        return false;
+        fprintf(stderr,
+                "Rootless XWM has no free window slot for X window %#x; "
+                "rejecting only that window\n",
+                (unsigned int)event->window);
+        (void)checked_request_succeeded(
+            service->connection,
+            xcb_unmap_window_checked(service->connection, event->window),
+            "unmap an untracked X11 top-level");
+        return true;
     }
     xcb_change_window_attributes(service->connection,
                                  event->window,
@@ -1231,10 +1284,25 @@ static bool handle_map_request(struct nb_xwayland_rootless *service,
     if (!checked_request_succeeded(
             service->connection,
             xcb_map_window_checked(service->connection, event->window),
-            "map an X11 top-level") ||
-        !redirect_window(service, event->window, true)) {
-        return false;
+            "map an X11 top-level")) {
+        memset(entry, 0, sizeof(*entry));
+        return true;
     }
+    if (entry->composite_redirected_by_xwm) {
+        redirect_result = NB_XWAYLAND_REDIRECT_OWNED;
+    } else if (entry->composite_redirected_externally) {
+        redirect_result = NB_XWAYLAND_REDIRECT_EXTERNAL;
+    } else {
+        redirect_result = redirect_window(service, event->window);
+    }
+    if (redirect_result == NB_XWAYLAND_REDIRECT_FAILED) {
+        reject_x11_window(service, entry);
+        return true;
+    }
+    entry->composite_redirected_by_xwm =
+        redirect_result == NB_XWAYLAND_REDIRECT_OWNED;
+    entry->composite_redirected_externally =
+        redirect_result == NB_XWAYLAND_REDIRECT_EXTERNAL;
     fprintf(stderr,
             "Rootless XWM accepted map request for X window %#x (%s)\n",
             (unsigned int)event->window,
@@ -1959,19 +2027,19 @@ bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service)
                 ((const xcb_destroy_notify_event_t *)event)->window);
             break;
         case XCB_UNMAP_NOTIFY:
-            if (find_window(
-                    service,
-                    ((const xcb_unmap_notify_event_t *)event)->window) !=
-                NULL) {
-                (void)redirect_window(
-                    service,
-                    ((const xcb_unmap_notify_event_t *)event)->window,
-                    false);
+        {
+            struct nb_xwayland_window *entry = find_window(
+                service,
+                ((const xcb_unmap_notify_event_t *)event)->window);
+
+            if (entry != NULL && entry->composite_redirected_by_xwm) {
+                release_window_redirect(service, entry->window);
             }
             forget_window(
                 service,
                 ((const xcb_unmap_notify_event_t *)event)->window);
             break;
+        }
         default:
             if (type == (uint8_t)(service->xfixes_event_base +
                                   XCB_XFIXES_SELECTION_NOTIFY)) {

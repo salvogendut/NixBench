@@ -26,7 +26,8 @@ now be supplied by the experimental Wayland shared-memory surface path.
 The standalone session appends an **Applications** menu to the currently
 focused application's menus, so the launcher remains reachable even when a
 client covers the desktop. It contains pinned entries for NixClock and the
-pkgsrc Sakura and Midori executables, plus **Edit Application Pins...**. Pin
+pkgsrc Sakura, Midori, and PCManFM executables, plus **Edit Application
+Pins...**. Pin
 changes are applied immediately and persist in the invoking user's
 `~/.nixbenchrc`. Every launched process inherits the private Wayland display
 and is tracked for orderly session shutdown; a missing executable is reported

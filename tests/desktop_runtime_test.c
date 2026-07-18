@@ -398,6 +398,24 @@ static void test_application_launcher_menu(void)
     CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
     CHECK(update.launch_request == NB_DESKTOP_LAUNCH_MIDORI);
 
+    event = key_event("FK10", true, 60);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RGHT", true, 61);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RGHT", true, 62);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RGHT", true, 63);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("DOWN", true, 64);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("DOWN", true, 65);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("DOWN", true, 66);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    event = key_event("RTRN", true, 67);
+    CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_PCMANFM);
+
     nb_desktop_runtime_destroy(runtime);
 }
 
@@ -438,7 +456,7 @@ static void test_settings_and_application_pins(void)
     CHECK(nb_desktop_runtime_window_count(runtime) == 2);
     CHECK(nb_desktop_runtime_active_window_frame(runtime, &window, &frame));
     CHECK(frame.width == 640);
-    CHECK(frame.height == 550);
+    CHECK(frame.height == 574);
     content = (struct nb_rect){
         frame.x + NB_WINDOW_BORDER_WIDTH,
         frame.y + NB_WINDOW_BORDER_WIDTH + NB_WINDOW_TITLE_HEIGHT,
@@ -481,7 +499,7 @@ static void test_settings_and_application_pins(void)
 
     update = click_runtime(runtime,
                            content.x + 20,
-                           content.y + 351,
+                           content.y + 375,
                            milliseconds);
     milliseconds += 2;
     CHECK(update.preferences_changed);
@@ -489,7 +507,7 @@ static void test_settings_and_application_pins(void)
 
     update = click_runtime(runtime,
                            content.x + 20,
-                           content.y + 375,
+                           content.y + 399,
                            milliseconds);
     milliseconds += 2;
     CHECK(update.preferences_changed);
@@ -512,7 +530,7 @@ static void test_settings_and_application_pins(void)
 
     update = click_runtime(runtime,
                            content.x + 20,
-                           content.y + 475,
+                           content.y + 499,
                            milliseconds);
     milliseconds += 2;
     CHECK(update.preferences_changed);
@@ -520,7 +538,7 @@ static void test_settings_and_application_pins(void)
 
     update = click_runtime(runtime,
                            content.x + 20,
-                           content.y + 451,
+                           content.y + 475,
                            milliseconds);
     milliseconds += 2;
     CHECK(nb_desktop_runtime_window_count(runtime) == 3);

@@ -475,8 +475,8 @@ entry point is:
 ./tools/run-wsdisplay-session.sh
 ```
 
-The session starts with an empty desktop; NixClock, Sakura, and Midori are
-available as persistent pins in **Applications**. **Edit Application Pins...**
+The session starts with an empty desktop; NixClock, Sakura, Midori, and PCManFM
+are available as persistent pins in **Applications**. **Edit Application Pins...**
 opens the ordinary-user Settings panel; the desktop's own **Settings...**
 command opens the same window. The core creates `$HOME/.nixbenchrc` on first
 run, then atomically saves pin, backdrop/gradient, PNG wallpaper placement, and
@@ -551,9 +551,10 @@ full-desktop rendering and copying without weakening privilege separation.
 
 The ordinary-user core also owns a bounded multi-application process table.
 The global **Applications** menu launches NixClock from beside the core and
-the pkgsrc Sakura and Midori executables directly on the private Wayland
-display. Only applications pinned in `~/.nixbenchrc` are listed; the Settings
-entry remains available even when all three applications are unpinned. The
+the pkgsrc Sakura, Midori, and PCManFM executables. GTK applications use the
+private Wayland display; PCManFM uses its rootless Xwayland `DISPLAY`. Only
+applications pinned in `~/.nixbenchrc` are listed; the Settings entry remains
+available even when all four applications are unpinned. The
 launcher menu is appended to the focused client's menu model,
 and all tracked clients receive orderly termination before compositor
 teardown. Missing programs and capacity exhaustion are nonfatal menu-launch

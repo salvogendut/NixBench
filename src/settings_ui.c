@@ -268,19 +268,22 @@ enum nb_settings_action nb_settings_hit_test(struct nb_rect content,
     if (contains(full_row(content, 294), x, y)) {
         return NB_SETTINGS_ACTION_TOGGLE_MIDORI_PIN;
     }
-    if (contains(full_row(content, 346), x, y)) {
-        return NB_SETTINGS_ACTION_TOGGLE_MINIMIZE;
+    if (contains(full_row(content, 318), x, y)) {
+        return NB_SETTINGS_ACTION_TOGGLE_PCMANFM_PIN;
     }
     if (contains(full_row(content, 370), x, y)) {
-        return NB_SETTINGS_ACTION_TOGGLE_MAXIMIZE;
+        return NB_SETTINGS_ACTION_TOGGLE_MINIMIZE;
     }
     if (contains(full_row(content, 394), x, y)) {
+        return NB_SETTINGS_ACTION_TOGGLE_MAXIMIZE;
+    }
+    if (contains(full_row(content, 418), x, y)) {
         return NB_SETTINGS_ACTION_CYCLE_CONTROL_LAYOUT;
     }
-    if (contains(full_row(content, 446), x, y)) {
+    if (contains(full_row(content, 470), x, y)) {
         return NB_SETTINGS_ACTION_CHOOSE_WALLPAPER;
     }
-    if (contains(full_row(content, 470), x, y)) {
+    if (contains(full_row(content, 494), x, y)) {
         return NB_SETTINGS_ACTION_CYCLE_WALLPAPER_MODE;
     }
     return NB_SETTINGS_ACTION_NONE;
@@ -364,13 +367,18 @@ bool nb_settings_render(SDL_Renderer *renderer,
             full_row(content, 294),
             "Midori Web Browser",
             preferences->pinned_applications[NB_PINNED_APPLICATION_MIDORI]) ||
-        !render_heading(renderer, content, 326, "Windows") ||
+        !render_checkbox(
+            renderer,
+            full_row(content, 318),
+            "PCManFM File Manager",
+            preferences->pinned_applications[NB_PINNED_APPLICATION_PCMANFM]) ||
+        !render_heading(renderer, content, 350, "Windows") ||
         !render_checkbox(renderer,
-                         full_row(content, 346),
+                         full_row(content, 370),
                          "Show minimize gadget",
                          preferences->minimize_gadget_visible) ||
         !render_checkbox(renderer,
-                         full_row(content, 370),
+                         full_row(content, 394),
                          "Show maximize gadget",
                          preferences->maximize_gadget_visible)) {
         return false;
@@ -379,10 +387,10 @@ bool nb_settings_render(SDL_Renderer *renderer,
                    sizeof(label),
                    "Window gadget placement: %s",
                    layout_name(preferences->window_control_layout));
-    if (!render_button(renderer, full_row(content, 394), label, false) ||
-        !render_heading(renderer, content, 426, "Wallpaper") ||
+    if (!render_button(renderer, full_row(content, 418), label, false) ||
+        !render_heading(renderer, content, 450, "Wallpaper") ||
         !render_button(renderer,
-                       full_row(content, 446),
+                       full_row(content, 470),
                        preferences->wallpaper[0] == '\0'
                            ? "Choose PNG wallpaper..."
                            : "Change PNG wallpaper...",
@@ -393,7 +401,7 @@ bool nb_settings_render(SDL_Renderer *renderer,
                    sizeof(label),
                    "Placement: %s",
                    wallpaper_mode_name(preferences->wallpaper_mode));
-    if (!render_button(renderer, full_row(content, 470), label, false)) {
+    if (!render_button(renderer, full_row(content, 494), label, false)) {
         return false;
     }
     (void)snprintf(label,
@@ -404,7 +412,7 @@ bool nb_settings_render(SDL_Renderer *renderer,
                        : preferences->wallpaper);
     return render_text(renderer,
                        content.x + SETTINGS_PADDING,
-                       content.y + 498,
+                       content.y + 522,
                        content.x + content.width - SETTINGS_PADDING,
                        label,
                        muted_text);

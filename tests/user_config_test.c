@@ -85,6 +85,7 @@ int main(void)
     CHECK((status.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO)) ==
           (S_IRUSR | S_IWUSR));
     CHECK(preferences.pinned_applications[NB_PINNED_APPLICATION_NIXCLOCK]);
+    CHECK(preferences.pinned_applications[NB_PINNED_APPLICATION_PCMANFM]);
     CHECK(preferences.backdrop_primary.red == 24);
     CHECK(!preferences.backdrop_gradient_enabled);
     CHECK(preferences.minimize_gadget_visible);
@@ -93,6 +94,7 @@ int main(void)
     CHECK(preferences.wallpaper_mode == NB_WALLPAPER_FIT);
 
     preferences.pinned_applications[NB_PINNED_APPLICATION_SAKURA] = false;
+    preferences.pinned_applications[NB_PINNED_APPLICATION_PCMANFM] = false;
     preferences.backdrop_primary = (struct nb_color){1, 2, 3};
     preferences.backdrop_secondary = (struct nb_color){250, 128, 64};
     preferences.backdrop_gradient_enabled = true;
@@ -116,6 +118,7 @@ int main(void)
                                            sizeof(error));
     CHECK(result == NB_USER_CONFIG_LOADED);
     CHECK(!loaded.pinned_applications[NB_PINNED_APPLICATION_SAKURA]);
+    CHECK(!loaded.pinned_applications[NB_PINNED_APPLICATION_PCMANFM]);
     CHECK(nb_color_equal(loaded.backdrop_primary,
                          (struct nb_color){1, 2, 3}));
     CHECK(nb_color_equal(loaded.backdrop_secondary,

@@ -882,6 +882,10 @@ static bool apply_runtime_update(
         software_webkit = true;
         (void)snprintf(path, sizeof(path), "%s", "/usr/pkg/bin/midori");
         break;
+    case NB_DESKTOP_LAUNCH_PCMANFM:
+        name = "PCManFM File Manager";
+        (void)snprintf(path, sizeof(path), "%s", "/usr/pkg/bin/pcmanfm");
+        break;
     default:
         fputs("Desktop requested an unknown application\n", stderr);
         return false;

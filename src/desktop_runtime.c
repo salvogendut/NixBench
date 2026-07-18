@@ -35,7 +35,7 @@ enum {
     NIXBENCH_ABOUT_WINDOW_WIDTH = 430,
     NIXBENCH_ABOUT_WINDOW_HEIGHT = 230,
     NIXBENCH_SETTINGS_WINDOW_WIDTH = 640,
-    NIXBENCH_SETTINGS_WINDOW_HEIGHT = 550,
+    NIXBENCH_SETTINGS_WINDOW_HEIGHT = 574,
     NIXBENCH_WALLPAPER_WINDOW_WIDTH = 800,
     NIXBENCH_WALLPAPER_WINDOW_HEIGHT = 580,
     NIXBENCH_SHELL_KEY_CAPTURE_CAPACITY = 32
@@ -59,6 +59,7 @@ enum {
 #define NIXBENCH_DESKTOP_COMMAND_LAUNCH_SAKURA UINT32_C(0xfffffff1)
 #define NIXBENCH_DESKTOP_COMMAND_LAUNCH_MIDORI UINT32_C(0xfffffff2)
 #define NIXBENCH_DESKTOP_COMMAND_APPLICATION_PINS UINT32_C(0xfffffff3)
+#define NIXBENCH_DESKTOP_COMMAND_LAUNCH_PCMANFM UINT32_C(0xfffffff4)
 
 enum {
     NIXBENCH_ABOUT_COMMAND_CLOSE = 1
@@ -177,7 +178,7 @@ struct nb_desktop_runtime {
     nb_window_id wallpaper_window;
     struct nb_wallpaper_chooser wallpaper_chooser;
     struct nb_user_preferences preferences;
-    struct nb_menu_item_spec launcher_items[5];
+    struct nb_menu_item_spec launcher_items[6];
     struct nb_menu_spec launcher_menus[1];
     struct nb_menu_model launcher_menu_model;
     enum nb_settings_color_target settings_color_target;
@@ -268,6 +269,13 @@ static void rebuild_launcher_menu(struct nb_desktop_runtime *runtime)
         set_launcher_item(&runtime->launcher_items[count++],
                           "Midori Web Browser",
                           NIXBENCH_DESKTOP_COMMAND_LAUNCH_MIDORI,
+                          NB_MENU_ITEM_COMMAND);
+    }
+    if (runtime->preferences.pinned_applications[
+            NB_PINNED_APPLICATION_PCMANFM]) {
+        set_launcher_item(&runtime->launcher_items[count++],
+                          "PCManFM File Manager",
+                          NIXBENCH_DESKTOP_COMMAND_LAUNCH_PCMANFM,
                           NB_MENU_ITEM_COMMAND);
     }
     if (count != 0) {
@@ -719,6 +727,13 @@ static bool apply_settings_action(struct nb_desktop_runtime *runtime,
                 NB_PINNED_APPLICATION_MIDORI];
         changed = true;
         rebuild_launcher_menu(runtime);
+    } else if (action == NB_SETTINGS_ACTION_TOGGLE_PCMANFM_PIN) {
+        runtime->preferences.pinned_applications[
+            NB_PINNED_APPLICATION_PCMANFM] =
+            !runtime->preferences.pinned_applications[
+                NB_PINNED_APPLICATION_PCMANFM];
+        changed = true;
+        rebuild_launcher_menu(runtime);
     } else if (action == NB_SETTINGS_ACTION_TOGGLE_MINIMIZE) {
         runtime->preferences.minimize_gadget_visible =
             !runtime->preferences.minimize_gadget_visible;
@@ -811,6 +826,11 @@ static bool apply_shell_action(struct nb_desktop_runtime *runtime,
         if (action.menu_command ==
             NIXBENCH_DESKTOP_COMMAND_LAUNCH_MIDORI) {
             runtime->pending_launch_request = NB_DESKTOP_LAUNCH_MIDORI;
+            return true;
+        }
+        if (action.menu_command ==
+            NIXBENCH_DESKTOP_COMMAND_LAUNCH_PCMANFM) {
+            runtime->pending_launch_request = NB_DESKTOP_LAUNCH_PCMANFM;
             return true;
         }
         if (action.menu_command ==

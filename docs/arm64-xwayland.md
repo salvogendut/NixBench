@@ -191,6 +191,15 @@ top-level individually, immediately after mapping it, and releases the
 redirect when the window unmaps. The ordering matters: redirecting the window
 before it is mapped did not cause Xwayland to create a Wayland surface.
 
+An X11 client may already hold the single manual Composite redirect allowed
+for its window. PCManFM does this while its first top-level is being mapped,
+so a second redirect request correctly returns X11 `BadAccess`. NixBench
+treats that reply as an externally owned redirect, uses the existing Composite
+storage, and does not try to release it later. Redirect ownership is retained
+across repeated map requests for the same XID. Other per-window map or
+redirect errors reject only the affected X11 window instead of terminating
+the complete desktop session.
+
 This behavior lives in NixBench and is separate from the two Xwayland patches.
 It remains compatible with the existing x86_64 rootless path while avoiding a
 server-specific assumption about redirecting future root children.

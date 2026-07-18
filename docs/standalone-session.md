@@ -24,9 +24,10 @@ client owns keyboard focus, or use the printed supervisor `SIGTERM` command
 from the retained second SSH session.
 
 The desktop starts empty. Use the global **Applications** menu to start
-NixClock, Sakura Terminal, or Midori Web Browser instances. NixClock is
-resolved from the build tree or installed prefix; the GTK entries currently use
-`/usr/pkg/bin/sakura` and `/usr/pkg/bin/midori`. To export GTK application
+NixClock, Sakura Terminal, Midori Web Browser, or PCManFM File Manager.
+NixClock is resolved from the build tree or installed prefix; the external
+entries use `/usr/pkg/bin/sakura`, `/usr/pkg/bin/midori`, and
+`/usr/pkg/bin/pcmanfm`. To export GTK application
 menus into the bar as well, start the session with
 `NIXBENCH_GTK_MENU_BRIDGE=1`.
 
@@ -49,7 +50,7 @@ live and saved atomically. The current panel provides:
 - a native PNG wallpaper chooser with directory navigation, dotfile control,
   paging, validation, and a bounded preview;
 - Center, Tile, Fit, and Fill wallpaper placement modes;
-- persistent pins for NixClock, Sakura, and Midori; and
+- persistent pins for NixClock, Sakura, Midori, and PCManFM; and
 - minimize- and maximize-gadget visibility, with left or right window-gadget
   placement.
 
