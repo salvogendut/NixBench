@@ -82,6 +82,9 @@ instructions before the first hardware run.
   implementation details and recorded NetBSD test results.
 - [Building and hosted development](docs/building.md) — dependencies, CMake
   options, backend probing, and running the desktop in a development window.
+- [ARM64 Xwayland build notes](docs/arm64-xwayland.md) — binary dependency
+  shortcuts, thermal-safe pkgsrc builds, and the current NetBSD 10.1 protocol
+  header/buildlink blocker.
 - [Privilege-separated standalone session](docs/standalone-session.md) —
   installation, configuration, application probes, recovery gates, and
   physical validation.
