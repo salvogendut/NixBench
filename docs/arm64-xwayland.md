@@ -166,7 +166,7 @@ the modular `/usr/pkg/lib/libdrm.so.2`.
 
 ## Required Xwayland 24.1.12 portability fixes
 
-The software-only build exposed two independent Xwayland/Xserver portability
+The software-only build exposed three independent Xwayland/Xserver portability
 problems on this host. The exact upstream-ready diffs and reproduction record
 are preserved under
 [`patches/xwayland-24.1.12`](../patches/xwayland-24.1.12/README.md):
@@ -175,9 +175,12 @@ are preserved under
   parent window's `valdata` unset and crash Xwayland;
 - the filesystem backing `XDG_RUNTIME_DIR` returned `EOPNOTSUPP` from
   `posix_fallocate()`, which Xwayland converted into an X11 `BadAlloc` instead
-  of falling back to `ftruncate()`.
+  of falling back to `ftruncate()`;
+- late redirection could create a rootless Wayland surface without restoring
+  its XDamage tracker, leaving pre-painted GTK2 windows such as PCManFM mapped
+  but permanently bufferless.
 
-Apply both patches to Xwayland 24.1.12 before building. These are candidate
+Apply all three patches to Xwayland 24.1.12 before building. These are candidate
 upstream fixes and are deliberately kept outside NixBench's source. For a
 local pkgsrc port, place equivalent pkgsrc-format patches under
 `/usr/pkgsrc/wayland/xwayland/patches`, update `distinfo` with
@@ -192,15 +195,13 @@ redirect when the window unmaps. The ordering matters: redirecting the window
 before it is mapped did not cause Xwayland to create a Wayland surface.
 
 An X11 client may already hold the single manual Composite redirect allowed
-for its window. PCManFM does this while its first top-level is being mapped,
-so a second redirect request correctly returns X11 `BadAccess`. NixBench
-treats that reply as an externally owned redirect, uses the existing Composite
-storage, and does not try to release it later. Redirect ownership is retained
-across repeated map requests for the same XID. Other per-window map or
-redirect errors reject only the affected X11 window instead of terminating
-the complete desktop session.
+for its window. NixBench treats the resulting X11 `BadAccess` reply as an
+externally owned redirect, uses the existing Composite storage, and does not
+try to release it later. Redirect ownership is retained across repeated map
+requests for the same XID. Other per-window map or redirect errors reject only
+the affected X11 window instead of terminating the complete desktop session.
 
-This behavior lives in NixBench and is separate from the two Xwayland patches.
+This behavior lives in NixBench and is separate from the three Xwayland patches.
 It remains compatible with the existing x86_64 rootless path while avoiding a
 server-specific assumption about redirecting future root children.
 

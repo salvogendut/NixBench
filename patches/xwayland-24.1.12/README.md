@@ -17,12 +17,17 @@ have been accepted upstream.
 2. `0002-xwayland-shm-fallback-when-posix-fallocate-is-unsupported.patch`
    lets Xwayland allocate its shared-memory backing file on a filesystem whose
    `posix_fallocate()` returns `EOPNOTSUPP`, by falling back to `ftruncate()`.
+3. `0003-xwayland-register-damage-for-late-surface.patch` restores the
+   XDamage tracker when per-window Composite redirection creates a rootless
+   Wayland surface after the X window has already been realized. Without it,
+   pre-painted GTK2 windows such as PCManFM remain mapped but bufferless.
 
 Apply them to an unpacked Xwayland 24.1.12 tree:
 
 ```sh
 patch -p1 < 0001-composite-mark-parent-before-validating-late-redirect.patch
 patch -p1 < 0002-xwayland-shm-fallback-when-posix-fallocate-is-unsupported.patch
+patch -p1 < 0003-xwayland-register-damage-for-late-surface.patch
 ```
 
 ## Reproduction evidence
@@ -63,3 +68,13 @@ Rootless XWM associated X window 0x40000c with Wayland surface serial 1
 
 The `xclock` process remained running and visible. A clean shutdown restored
 the wsdisplay console and removed the NixBench recovery record.
+
+PCManFM exposed a second late-redirection failure. Its 640x480 X top-level was
+viewable and associated with an `xwayland_shell_v1` surface, and Xwayland
+allocated matching SHM buffers, but no `wl_surface.attach` followed. PCManFM
+paints before mapping, unlike xclock. The late `SetWindowPixmap` surface path
+had no Damage object, so neither the existing frame nor later explicit X11
+drawing could reach `xwl_window_post_damage()`. Patch 3 registers that missing
+tracker on the next block-handler pass, outside the re-entrant pixmap callback,
+and seeds full-window damage. Normal realize-time surface creation is
+unchanged.

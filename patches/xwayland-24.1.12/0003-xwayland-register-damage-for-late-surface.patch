@@ -1,0 +1,74 @@
+From: NixBench contributors
+Subject: [PATCH 3/3] xwayland: register damage for a late rootless surface
+
+A rootless window can already be realized and mapped when its window manager
+requests per-window Composite redirection. SetWindowPixmap then creates the
+Xwayland surface after RealizeWindow has returned, but this late path does not
+restore the Damage object that RealizeWindow removed when no surface existed.
+The window receives an xwayland_shell_v1 role, but subsequent drawing never
+queues xwl_window_post_damage() and the surface remains bufferless.
+
+Register missing surface-window Damage objects from the next block-handler
+pass, after Composite and SetWindowPixmap have completed. Mark the complete
+window damaged so content painted before redirection is presented. The usual
+realize path already has a Damage object and is unchanged.
+---
+ hw/xwayland/xwayland-screen.c |  1 +
+ hw/xwayland/xwayland-window.c | 20 ++++++++++++++++++++
+ hw/xwayland/xwayland-window.h |  1 +
+ 3 files changed, 22 insertions(+)
+
+diff --git a/hw/xwayland/xwayland-screen.c b/hw/xwayland/xwayland-screen.c
+--- a/hw/xwayland/xwayland-screen.c
++++ b/hw/xwayland/xwayland-screen.c
+@@ -691,6 +691,7 @@ block_handler(void *data, void *timeout)
+ {
+     struct xwl_screen *xwl_screen = data;
+ 
++    xwl_window_register_pending_damage(xwl_screen);
+     xwl_screen_post_damage(xwl_screen);
+ #ifdef XWL_HAS_LIBDECOR
+     if (xwl_screen->libdecor_context) {
+diff --git a/hw/xwayland/xwayland-window.c b/hw/xwayland/xwayland-window.c
+--- a/hw/xwayland/xwayland-window.c
++++ b/hw/xwayland/xwayland-window.c
+@@ -369,6 +369,26 @@ unregister_damage(WindowPtr window)
+     dixSetPrivate(&window->devPrivates, &xwl_damage_private_key, NULL);
+ }
+ 
++void
++xwl_window_register_pending_damage(struct xwl_screen *xwl_screen)
++{
++    struct xwl_window *xwl_window;
++
++    xorg_list_for_each_entry(xwl_window,
++                             &xwl_screen->window_list,
++                             link_window) {
++        WindowPtr surface_window = xwl_window->surface_window;
++
++        if (window_get_damage(surface_window))
++            continue;
++        if (!register_damage(surface_window))
++            continue;
++
++        DamageDamageRegion(&surface_window->drawable,
++                           &surface_window->borderSize);
++    }
++}
++
+ static Bool
+ xwl_window_update_fractional_scale(struct xwl_window *xwl_window,
+                                    int fractional_scale_numerator)
+diff --git a/hw/xwayland/xwayland-window.h b/hw/xwayland/xwayland-window.h
+--- a/hw/xwayland/xwayland-window.h
++++ b/hw/xwayland/xwayland-window.h
+@@ -148,6 +148,7 @@ Bool xwl_destroy_window(WindowPtr window);
+ void xwl_window_post_damage(struct xwl_window *xwl_window);
+ void xwl_window_create_frame_callback(struct xwl_window *xwl_window);
+ void xwl_window_surface_do_destroy(struct xwl_wl_surface *xwl_wl_surface);
++void xwl_window_register_pending_damage(struct xwl_screen *xwl_screen);
+ void xwl_window_set_input_region(struct xwl_window *xwl_window, RegionPtr input_shape);
+ 
+ Bool xwl_window_init(void);
+-- 
+2.50.1
