@@ -179,5 +179,8 @@ PNG through WebKitGTK's snapshot API:
   --snapshot /tmp/nixbench-motif-title.png
 ```
 
-This preview is a renderer bring-up tool, not an application window or the
-final compositor integration path.
+The private compositor endpoint now authenticates one atlas carrier, keeps it
+out of the managed application list, and atomically validates matching pixel,
+tile, and action-region generations. The preview executable does not register
+that carrier yet; it remains a renderer bring-up tool until the WebKit client
+side of the endpoint is enabled in the next milestone.

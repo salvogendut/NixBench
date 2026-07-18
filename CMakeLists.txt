@@ -363,6 +363,22 @@ if(NIXBENCH_WAYLAND_ENABLED)
     NIXBENCH_APPLICATION_MENU_PRIVATE_CODE
     "${NIXBENCH_WAYLAND_GENERATED_DIR}/nixbench-application-menu-v1-protocol.c"
   )
+  set(
+    NIXBENCH_HTML_THEME_XML
+    "${CMAKE_CURRENT_SOURCE_DIR}/protocols/nixbench-html-theme-v1.xml"
+  )
+  set(
+    NIXBENCH_HTML_THEME_SERVER_HEADER
+    "${NIXBENCH_WAYLAND_GENERATED_DIR}/nixbench-html-theme-v1-server-protocol.h"
+  )
+  set(
+    NIXBENCH_HTML_THEME_CLIENT_HEADER
+    "${NIXBENCH_WAYLAND_GENERATED_DIR}/nixbench-html-theme-v1-client-protocol.h"
+  )
+  set(
+    NIXBENCH_HTML_THEME_PRIVATE_CODE
+    "${NIXBENCH_WAYLAND_GENERATED_DIR}/nixbench-html-theme-v1-protocol.c"
+  )
   if(NIXBENCH_WAYLAND_DECORATION_ENABLED)
     set(
       NIXBENCH_XDG_DECORATION_SERVER_HEADER
@@ -392,6 +408,9 @@ if(NIXBENCH_WAYLAND_ENABLED)
       "${NIXBENCH_APPLICATION_MENU_SERVER_HEADER}"
       "${NIXBENCH_APPLICATION_MENU_CLIENT_HEADER}"
       "${NIXBENCH_APPLICATION_MENU_PRIVATE_CODE}"
+      "${NIXBENCH_HTML_THEME_SERVER_HEADER}"
+      "${NIXBENCH_HTML_THEME_CLIENT_HEADER}"
+      "${NIXBENCH_HTML_THEME_PRIVATE_CODE}"
     COMMAND
       "${CMAKE_COMMAND}" -E make_directory
       "${NIXBENCH_WAYLAND_GENERATED_DIR}"
@@ -419,9 +438,22 @@ if(NIXBENCH_WAYLAND_ENABLED)
       "${NIXBENCH_WAYLAND_SCANNER}" --strict private-code
       "${NIXBENCH_APPLICATION_MENU_XML}"
       "${NIXBENCH_APPLICATION_MENU_PRIVATE_CODE}"
+    COMMAND
+      "${NIXBENCH_WAYLAND_SCANNER}" --strict server-header
+      "${NIXBENCH_HTML_THEME_XML}"
+      "${NIXBENCH_HTML_THEME_SERVER_HEADER}"
+    COMMAND
+      "${NIXBENCH_WAYLAND_SCANNER}" --strict client-header
+      "${NIXBENCH_HTML_THEME_XML}"
+      "${NIXBENCH_HTML_THEME_CLIENT_HEADER}"
+    COMMAND
+      "${NIXBENCH_WAYLAND_SCANNER}" --strict private-code
+      "${NIXBENCH_HTML_THEME_XML}"
+      "${NIXBENCH_HTML_THEME_PRIVATE_CODE}"
     DEPENDS
       "${NIXBENCH_XDG_SHELL_XML}"
       "${NIXBENCH_APPLICATION_MENU_XML}"
+      "${NIXBENCH_HTML_THEME_XML}"
     COMMENT "Generating the Wayland protocol bindings"
     VERBATIM
   )
@@ -487,6 +519,9 @@ if(NIXBENCH_WAYLAND_ENABLED)
       "${NIXBENCH_APPLICATION_MENU_SERVER_HEADER}"
       "${NIXBENCH_APPLICATION_MENU_CLIENT_HEADER}"
       "${NIXBENCH_APPLICATION_MENU_PRIVATE_CODE}"
+      "${NIXBENCH_HTML_THEME_SERVER_HEADER}"
+      "${NIXBENCH_HTML_THEME_CLIENT_HEADER}"
+      "${NIXBENCH_HTML_THEME_PRIVATE_CODE}"
   )
 
   add_library(
@@ -494,6 +529,7 @@ if(NIXBENCH_WAYLAND_ENABLED)
     src/wayland_server.c
     "${NIXBENCH_XDG_SHELL_PRIVATE_CODE}"
     "${NIXBENCH_APPLICATION_MENU_PRIVATE_CODE}"
+    "${NIXBENCH_HTML_THEME_PRIVATE_CODE}"
   )
   if(NIXBENCH_WAYLAND_DECORATION_ENABLED)
     target_sources(
@@ -675,10 +711,22 @@ target_include_directories(
 )
 nixbench_configure_c_target(nixbench_theme_atlas)
 
+if(NIXBENCH_WAYLAND_ENABLED)
+  target_link_libraries(nixbench_wayland PRIVATE nixbench_theme_atlas)
+endif()
+
 if(NIXBENCH_HTML_THEMES_AVAILABLE)
   add_executable(
     nixbench-html-theme-renderer
     src/html_theme_renderer.c
+    "${NIXBENCH_HTML_THEME_PRIVATE_CODE}"
+  )
+  add_dependencies(nixbench-html-theme-renderer nixbench_wayland_protocol)
+  target_include_directories(
+    nixbench-html-theme-renderer
+    PRIVATE
+      "${NIXBENCH_WAYLAND_GENERATED_DIR}"
+      "${NIXBENCH_WAYLAND_CLIENT_INCLUDE_DIR}"
   )
   target_compile_definitions(
     nixbench-html-theme-renderer
@@ -690,6 +738,7 @@ if(NIXBENCH_HTML_THEMES_AVAILABLE)
       nixbench_themes
       nixbench_theme_atlas
       "${NIXBENCH_WEBKITGTK_TARGET}"
+      "${NIXBENCH_WAYLAND_CLIENT_LIBRARY}"
   )
   nixbench_configure_c_target(nixbench-html-theme-renderer)
   install(

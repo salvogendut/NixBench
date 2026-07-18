@@ -8,6 +8,7 @@
 
 #include "damage_region.h"
 #include "shell.h"
+#include "theme_atlas.h"
 
 enum {
     NB_WAYLAND_MAX_SURFACES = NB_DESKTOP_MAX_WINDOWS,
@@ -66,6 +67,11 @@ struct nb_wayland_surface_snapshot {
     uint64_t revision;
 };
 
+struct nb_wayland_html_theme_snapshot {
+    struct nb_wayland_surface_snapshot surface;
+    const struct nb_theme_atlas_layout *layout;
+};
+
 /*
  * The shell and fallback menu model are borrowed and must outlive the server.
  * menu_source identifies the fallback model. The caller keeps that ID and the
@@ -79,6 +85,23 @@ struct nb_wayland_server *nb_wayland_server_create(
     int output_width,
     int output_height);
 void nb_wayland_server_destroy(struct nb_wayland_server *server);
+
+/*
+ * Enable the private ordinary-user HTML renderer before publishing clients.
+ * Strings are copied. The token should be an unguessable per-session value;
+ * the selected bundle has already been canonicalized and validated by the
+ * caller. Classic sessions do not call this function.
+ */
+bool nb_wayland_server_enable_html_theme(
+    struct nb_wayland_server *server,
+    const char *token,
+    const char *theme_id,
+    const char *theme_directory);
+bool nb_wayland_server_html_theme_connected(
+    const struct nb_wayland_server *server);
+bool nb_wayland_server_html_theme_snapshot(
+    const struct nb_wayland_server *server,
+    struct nb_wayland_html_theme_snapshot *snapshot);
 
 /*
  * Publish a standard Wayland socket beneath XDG_RUNTIME_DIR. The returned

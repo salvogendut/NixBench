@@ -21,11 +21,21 @@
       not map the registered surface as an application window.
     </description>
 
+    <enum name="error">
+      <entry name="invalid_token" value="1"
+             summary="renderer registration token did not match"/>
+      <entry name="already_registered" value="2"
+             summary="the session already has an atlas renderer"/>
+      <entry name="invalid_surface" value="3"
+             summary="surface is already buffered or privately assigned"/>
+    </enum>
+
     <request name="register_atlas">
       <description summary="register the browser atlas surface">
         Register surface as the session's HTML chrome atlas. The token must
         match the token retained by the desktop core. Registration must occur
-        before the surface's first buffer commit.
+        before the surface's first non-null buffer attachment. Toolkit setup
+        commits which do not attach pixels are allowed.
       </description>
       <arg name="id" type="new_id" interface="nixbench_html_theme_atlas_v1"/>
       <arg name="surface" type="object" interface="wl_surface"/>
@@ -43,6 +53,13 @@
       The core composes every tile independently. Renderer coordinates never
       become authoritative window geometry or input policy.
     </description>
+
+    <enum name="error">
+      <entry name="invalid_layout" value="1"
+             summary="atlas layout transaction was malformed"/>
+      <entry name="stale_state" value="2"
+             summary="state acknowledgement was not current"/>
+    </enum>
 
     <enum name="window_state" bitfield="true">
       <entry name="active" value="1" summary="window has keyboard focus"/>
