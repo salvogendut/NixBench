@@ -1215,6 +1215,17 @@ bool nb_xwayland_rootless_dispatch(struct nb_xwayland_rootless *service)
             const xcb_client_message_event_t *message =
                 (const xcb_client_message_event_t *)event;
 
+            if (getenv("NIXBENCH_TRACE_WAYLAND") != NULL &&
+                strcmp(getenv("NIXBENCH_TRACE_WAYLAND"), "1") == 0) {
+                fprintf(stderr,
+                        "Rootless XWM received client message type %#x for "
+                        "X window %#x: %#x %#x\n",
+                        (unsigned int)message->type,
+                        (unsigned int)message->window,
+                        message->data.data32[0],
+                        message->data.data32[1]);
+            }
+
             if (handle_wm_state_message(service, message)) {
                 break;
             }
