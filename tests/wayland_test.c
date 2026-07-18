@@ -2000,6 +2000,68 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(snapshot.revision > root_revision_before_popup);
     popup_tree_revision = snapshot.revision;
 
+    /*
+     * A popup is composited into its parent's NixBench window, but pointer
+     * focus and button grabs belong to the popup's own wl_surface.  This is
+     * the path used by GTK context menus.
+     */
+    CHECK(nb_wayland_server_pointer_motion(
+        server,
+        window,
+        content.x + POPUP_EXPECTED_X + 10,
+        content.y + POPUP_EXPECTED_Y + 11,
+        UINT32_C(900)));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.pointer_enter_count == 1);
+    CHECK(client.pointer_enter_surface == popup_surface);
+    CHECK(client.pointer_enter_x == wl_fixed_from_int(10));
+    CHECK(client.pointer_enter_y == wl_fixed_from_int(11));
+    CHECK(nb_wayland_server_pointer_button(
+        server,
+        window,
+        content.x + POPUP_EXPECTED_X + 10,
+        content.y + POPUP_EXPECTED_Y + 11,
+        UINT32_C(901),
+        NB_WAYLAND_POINTER_BUTTON_LEFT,
+        true));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.pointer_button_count == 1);
+    CHECK(client.pointer_button == WAYLAND_POINTER_BUTTON_LEFT);
+    CHECK(client.pointer_button_state == WL_POINTER_BUTTON_STATE_PRESSED);
+    CHECK(nb_wayland_server_pointer_grab_window(server) == window);
+    CHECK(nb_wayland_server_pointer_button(
+        server,
+        window,
+        content.x + POPUP_EXPECTED_X + 10,
+        content.y + POPUP_EXPECTED_Y + 11,
+        UINT32_C(902),
+        NB_WAYLAND_POINTER_BUTTON_LEFT,
+        false));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.pointer_button_count == 2);
+    CHECK(client.pointer_button_state == WL_POINTER_BUTTON_STATE_RELEASED);
+    CHECK(nb_wayland_server_pointer_grab_window(server) ==
+          NB_WINDOW_ID_NONE);
+    CHECK(nb_wayland_server_pointer_motion(server,
+                                           window,
+                                           content.x + INITIAL_WIDTH - 4,
+                                           content.y + INITIAL_HEIGHT - 4,
+                                           UINT32_C(903)));
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.pointer_leave_count == 1);
+    CHECK(client.pointer_leave_surface == popup_surface);
+    CHECK(client.pointer_enter_count == 2);
+    CHECK(client.pointer_enter_surface == surface);
+    nb_wayland_server_pointer_cancel(server, UINT32_C(904));
+    REQUIRE(pump_barrier(server, display));
+    client.pointer_enter_surface = NULL;
+    client.pointer_leave_surface = NULL;
+    client.pointer_enter_count = 0;
+    client.pointer_leave_count = 0;
+    client.pointer_motion_count = 0;
+    client.pointer_button_count = 0;
+    client.pointer_frame_count = 0;
+
     /* Client-driven popup destruction unmaps only the child surface. */
     xdg_popup_destroy(popup);
     popup = NULL;

@@ -1552,20 +1552,28 @@ static bool pointer_surface_coordinates(
     wl_fixed_t *surface_x,
     wl_fixed_t *surface_y)
 {
+    const struct nb_wayland_surface *root;
     const struct nb_window *window;
     struct nb_rect content;
+    wl_fixed_t root_x;
+    wl_fixed_t root_y;
+    int64_t origin_x;
+    int64_t origin_y;
     int geometry_x;
     int geometry_y;
     int geometry_width;
     int geometry_height;
 
-    if (surface == NULL || surface->window == NB_WINDOW_ID_NONE ||
-        surface->width <= 0 || surface->height <= 0 ||
-        surface->surface_resource == NULL) {
+    if (surface == NULL || surface->width <= 0 || surface->height <= 0 ||
+        surface->surface_resource == NULL || !surface_is_mapped(surface)) {
+        return false;
+    }
+    root = surface_root_toplevel_const(surface);
+    if (root == NULL || root->window == NB_WINDOW_ID_NONE) {
         return false;
     }
     window = nb_desktop_find_window(&surface->server->shell->desktop,
-                                    surface->window);
+                                    root->window);
     if (window == NULL) {
         return false;
     }
@@ -1573,7 +1581,7 @@ static bool pointer_surface_coordinates(
     if (content.width <= 0 || content.height <= 0) {
         return false;
     }
-    surface_window_geometry(surface,
+    surface_window_geometry(root,
                             &geometry_x,
                             &geometry_y,
                             &geometry_width,
@@ -1581,19 +1589,31 @@ static bool pointer_surface_coordinates(
     if (geometry_width <= 0 || geometry_height <= 0) {
         geometry_x = 0;
         geometry_y = 0;
-        geometry_width = surface->width;
-        geometry_height = surface->height;
+        geometry_width = root->width;
+        geometry_height = root->height;
     }
-    *surface_x = pointer_fixed_coordinate(desktop_x,
-                                          content.x,
-                                          content.width,
-                                          geometry_width) +
-                 wl_fixed_from_int(geometry_x);
-    *surface_y = pointer_fixed_coordinate(desktop_y,
-                                          content.y,
-                                          content.height,
-                                          geometry_height) +
-                 wl_fixed_from_int(geometry_y);
+    root_x = pointer_fixed_coordinate(desktop_x,
+                                      content.x,
+                                      content.width,
+                                      geometry_width) +
+             wl_fixed_from_int(geometry_x);
+    root_y = pointer_fixed_coordinate(desktop_y,
+                                      content.y,
+                                      content.height,
+                                      geometry_height) +
+             wl_fixed_from_int(geometry_y);
+    if (surface == root) {
+        *surface_x = root_x;
+        *surface_y = root_y;
+        return true;
+    }
+    if (!surface_buffer_origin_in_root(surface, &origin_x, &origin_y) ||
+        origin_x < INT32_MIN / 256 || origin_x > INT32_MAX / 256 ||
+        origin_y < INT32_MIN / 256 || origin_y > INT32_MAX / 256) {
+        return false;
+    }
+    *surface_x = root_x - wl_fixed_from_int((int)origin_x);
+    *surface_y = root_y - wl_fixed_from_int((int)origin_y);
     return true;
 }
 
@@ -6644,18 +6664,47 @@ bool nb_wayland_server_clipboard_text(
 
 static struct nb_wayland_surface *pointer_hover_surface(
     struct nb_wayland_server *server,
-    nb_window_id hover_window)
+    nb_window_id hover_window,
+    int desktop_x,
+    int desktop_y)
 {
-    struct nb_wayland_surface *surface =
+    struct nb_wayland_surface *root =
         find_surface_by_window(server, hover_window);
+    struct nb_wayland_surface *target;
+    uint64_t target_sequence = 0;
+    size_t index;
 
-    if (surface == NULL ||
-        (surface->role != NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL &&
-         surface->role != NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL) ||
-        surface->surface_resource == NULL || surface->pixels == NULL) {
+    if (root == NULL ||
+        (root->role != NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL &&
+         root->role != NB_WAYLAND_SURFACE_ROLE_XWAYLAND_TOPLEVEL) ||
+        root->surface_resource == NULL || root->pixels == NULL) {
         return NULL;
     }
-    return surface;
+    target = root;
+    for (index = 0; index < NB_WAYLAND_MAX_SURFACES; ++index) {
+        struct nb_wayland_surface *candidate = &server->surfaces[index];
+        wl_fixed_t candidate_x;
+        wl_fixed_t candidate_y;
+
+        if (!candidate->occupied || !surface_is_mapped(candidate) ||
+            (candidate->role != NB_WAYLAND_SURFACE_ROLE_XDG_POPUP &&
+             candidate->role != NB_WAYLAND_SURFACE_ROLE_SUBSURFACE) ||
+            surface_root_toplevel(candidate) != root ||
+            candidate->popup_sequence < target_sequence ||
+            !pointer_surface_coordinates(candidate,
+                                         desktop_x,
+                                         desktop_y,
+                                         &candidate_x,
+                                         &candidate_y) ||
+            candidate_x < 0 || candidate_y < 0 ||
+            wl_fixed_to_double(candidate_x) >= candidate->width ||
+            wl_fixed_to_double(candidate_y) >= candidate->height) {
+            continue;
+        }
+        target = candidate;
+        target_sequence = candidate->popup_sequence;
+    }
+    return target;
 }
 
 bool nb_wayland_server_pointer_motion(struct nb_wayland_server *server,
@@ -6676,7 +6725,10 @@ bool nb_wayland_server_pointer_motion(struct nb_wayland_server *server,
     server->pointer_position_valid = true;
     target = server->pointer_grab != NULL
                  ? server->pointer_grab
-                 : pointer_hover_surface(server, hover_window);
+                 : pointer_hover_surface(server,
+                                         hover_window,
+                                         desktop_x,
+                                         desktop_y);
     focus_changed = server->pointer_focus != target;
     pointer_change_focus(server, target);
 
@@ -6737,7 +6789,10 @@ bool nb_wayland_server_pointer_button(
     if (pressed) {
         target = server->pointer_grab != NULL
                      ? server->pointer_grab
-                     : pointer_hover_surface(server, hover_window);
+                     : pointer_hover_surface(server,
+                                             hover_window,
+                                             desktop_x,
+                                             desktop_y);
         if ((server->pointer_buttons & mask) != 0) {
             return true;
         }
@@ -6776,7 +6831,9 @@ bool nb_wayland_server_pointer_button(
         server->pointer_grab = NULL;
         pointer_change_focus(server,
                              pointer_hover_surface(server,
-                                                   hover_window));
+                                                   hover_window,
+                                                   desktop_x,
+                                                   desktop_y));
     }
     return true;
 }
@@ -6794,11 +6851,14 @@ void nb_wayland_server_pointer_cancel(struct nb_wayland_server *server,
 nb_window_id nb_wayland_server_pointer_grab_window(
     const struct nb_wayland_server *server)
 {
+    const struct nb_wayland_surface *root;
+
     if (server == NULL || server->pointer_grab == NULL ||
         server->pointer_buttons == 0) {
         return NB_WINDOW_ID_NONE;
     }
-    return server->pointer_grab->window;
+    root = surface_root_toplevel_const(server->pointer_grab);
+    return root != NULL ? root->window : NB_WINDOW_ID_NONE;
 }
 
 bool nb_wayland_server_keyboard_focus(
