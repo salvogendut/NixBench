@@ -362,6 +362,28 @@ static bool render_window_content(SDL_Renderer *renderer,
     return nb_window_render_default_content(renderer, window);
 }
 
+static bool render_window_decoration(SDL_Renderer *renderer,
+                                     nb_window_id id,
+                                     const struct nb_window *window,
+                                     void *context)
+{
+    struct nb_desktop_runtime *runtime = context;
+
+#if NIXBENCH_HAS_WAYLAND
+    if (runtime->wayland != NULL && runtime->wayland_renderer != NULL) {
+        return nb_wayland_render_decoration(renderer,
+                                            id,
+                                            window,
+                                            runtime->wayland_renderer);
+    }
+#else
+    (void)renderer;
+    (void)id;
+    (void)window;
+#endif
+    return true;
+}
+
 static bool sync_application_focus(struct nb_desktop_runtime *runtime)
 {
     if (!nb_application_host_sync_focus(&runtime->applications)) {
@@ -428,6 +450,16 @@ static void start_wayland(struct nb_desktop_runtime *runtime)
                     "Could not initialize the nested Wayland display; "
                     "continuing without Wayland clients");
         return;
+    }
+    if (runtime->options.html_theme_token != NULL &&
+        !nb_wayland_server_enable_html_theme(
+            runtime->wayland,
+            runtime->options.html_theme_token,
+            runtime->options.html_theme_id,
+            runtime->options.html_theme_directory)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Could not enable the private HTML theme endpoint; "
+                    "continuing with Classic decorations");
     }
     runtime->wayland_renderer =
         nb_wayland_renderer_create(runtime->wayland);
@@ -1219,6 +1251,7 @@ static bool process_pointer_event(const struct nb_host_event *event,
                 return false;
             }
 #if NIXBENCH_HAS_WAYLAND
+            nb_wayland_server_html_theme_state_changed(runtime->wayland);
             {
                 const nb_window_id hover_window =
                     wayland_hover_window(runtime, target);
@@ -1323,6 +1356,7 @@ static bool process_pointer_event(const struct nb_host_event *event,
                                                 x,
                                                 y,
                                                 runtime->viewport);
+            nb_wayland_server_html_theme_state_changed(runtime->wayland);
             if (!update_wayland_pointer(runtime,
                                         target,
                                         x,
@@ -1733,6 +1767,14 @@ struct nb_desktop_runtime *nb_desktop_runtime_create(
         options = &defaults;
     }
     if (options->publish_wayland_socket && !options->enable_wayland) {
+        return NULL;
+    }
+    if ((options->html_theme_token != NULL ||
+         options->html_theme_id != NULL ||
+         options->html_theme_directory != NULL) &&
+        (!options->enable_wayland || options->html_theme_token == NULL ||
+         options->html_theme_id == NULL ||
+         options->html_theme_directory == NULL)) {
         return NULL;
     }
     if (options->preferences != NULL &&
@@ -2281,12 +2323,13 @@ bool nb_desktop_runtime_render_region(
                                         renderer,
                                         runtime->viewport,
                                         &runtime->preferences) &&
-               nb_shell_render_with_content(renderer,
-                                            &runtime->shell,
-                                            runtime->viewport,
-                                            bar_text,
-                                            render_window_content,
-                                            runtime) &&
+               nb_shell_render_with_callbacks(renderer,
+                                              &runtime->shell,
+                                              runtime->viewport,
+                                              bar_text,
+                                              render_window_decoration,
+                                              render_window_content,
+                                              runtime) &&
                render_screenshot_status(renderer, runtime) &&
                (!runtime->pointer_visible ||
                 render_software_pointer(renderer,

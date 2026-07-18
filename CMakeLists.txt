@@ -1513,6 +1513,21 @@ if(
       "NB_SESSION_INSTALLED_NIXCLOCK_PATH=\"${CMAKE_INSTALL_FULL_BINDIR}/nixclock\""
       "NB_SESSION_INSTALLED_GTK_MODULE_PATH=\"${CMAKE_INSTALL_FULL_LIBDIR}/gtk-3.0/modules/${CMAKE_SHARED_MODULE_PREFIX}nixbench_gtk_menu_bridge${CMAKE_SHARED_MODULE_SUFFIX}\""
   )
+  if(NIXBENCH_HTML_THEMES_AVAILABLE)
+    target_link_libraries(nixbench_session_core PRIVATE nixbench_themes)
+    target_compile_definitions(
+      nixbench_session_core
+      PRIVATE
+        NIXBENCH_HAS_HTML_THEMES=1
+        "NB_SESSION_INSTALLED_HTML_RENDERER_PATH=\"${CMAKE_INSTALL_FULL_LIBEXECDIR}/nixbench/nixbench-html-theme-renderer\""
+        "NB_SESSION_INSTALLED_THEME_DIRECTORY=\"${CMAKE_INSTALL_FULL_DATADIR}/nixbench/themes\""
+    )
+  else()
+    target_compile_definitions(
+      nixbench_session_core
+      PRIVATE NIXBENCH_HAS_HTML_THEMES=0
+    )
+  endif()
   if(NIXBENCH_ROOTLESS_XWAYLAND_AVAILABLE)
     target_link_libraries(
       nixbench_session_core

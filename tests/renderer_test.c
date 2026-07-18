@@ -32,6 +32,13 @@ struct callback_state {
     size_t fail_on_call;
 };
 
+struct callback_pair {
+    struct callback_state content;
+    nb_window_id decoration_ids[NB_DESKTOP_MAX_WINDOWS];
+    SDL_Rect decoration_clips[NB_DESKTOP_MAX_WINDOWS];
+    size_t decoration_count;
+};
+
 static bool rects_equal(SDL_Rect left, SDL_Rect right)
 {
     return left.x == right.x && left.y == right.y &&
@@ -129,6 +136,27 @@ static bool record_content(SDL_Renderer *renderer,
            state->call_count != state->fail_on_call;
 }
 
+static bool record_decoration(SDL_Renderer *renderer,
+                              nb_window_id id,
+                              const struct nb_window *window,
+                              void *context)
+{
+    struct callback_pair *pair = context;
+    SDL_Rect clip;
+    const size_t call = pair->decoration_count;
+
+    CHECK(window != NULL);
+    CHECK(call < NB_DESKTOP_MAX_WINDOWS);
+    CHECK(SDL_RenderClipEnabled(renderer));
+    CHECK(SDL_GetRenderClipRect(renderer, &clip));
+    if (call < NB_DESKTOP_MAX_WINDOWS) {
+        pair->decoration_ids[call] = id;
+        pair->decoration_clips[call] = clip;
+    }
+    ++pair->decoration_count;
+    return true;
+}
+
 static void reset_callback(struct callback_state *state,
                            size_t fail_on_call)
 {
@@ -220,6 +248,25 @@ static void test_content_callback_and_clip_restoration(void)
     CHECK(SDL_RenderClipEnabled(renderer));
     CHECK(SDL_GetRenderClipRect(renderer, &restored));
     CHECK(rects_equal(restored, prior_clip));
+
+    {
+        struct callback_pair pair = {0};
+
+        reset_callback(&pair.content, 0);
+        CHECK(nb_desktop_render_with_callbacks(renderer,
+                                                &desktop,
+                                                record_decoration,
+                                                record_content,
+                                                &pair));
+        CHECK(pair.decoration_count == 2);
+        CHECK(pair.content.call_count == 2);
+        CHECK(pair.decoration_ids[0] == first);
+        CHECK(pair.decoration_ids[1] == second);
+        CHECK(rects_equal(pair.decoration_clips[0], prior_clip));
+        CHECK(rects_equal(pair.decoration_clips[1], prior_clip));
+        CHECK(rects_equal(pair.content.clips[0], expected_first_clip));
+        CHECK(rects_equal(pair.content.clips[1], expected_second_clip));
+    }
 
     reset_callback(&state, 2);
     CHECK(!nb_desktop_render_with_content(renderer,

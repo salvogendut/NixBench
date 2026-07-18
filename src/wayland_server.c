@@ -706,6 +706,9 @@ static bool surface_is_mapped(const struct nb_wayland_surface *surface)
         surface->surface_resource == NULL) {
         return false;
     }
+    if (surface->html_theme_atlas) {
+        return surface->toplevel_resource != NULL;
+    }
     if (surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL) {
         return surface->toplevel_resource != NULL &&
                surface->window != NB_WINDOW_ID_NONE;
@@ -5850,6 +5853,11 @@ static void send_html_theme_state(struct nb_wayland_server *server)
         server->html_theme_token[0] == '\0') {
         return;
     }
+    if (server->html_theme_atlas.pending_active) {
+        nb_theme_atlas_abort(&server->html_theme_atlas);
+        server->html_theme_begin_revision = 0;
+        server->html_theme_layout_state_serial = 0;
+    }
     serial = server->html_theme_state_serial + 1U;
     if (serial == 0) {
         serial = 1;
@@ -5869,19 +5877,20 @@ static void send_html_theme_state(struct nb_wayland_server *server)
     nixbench_html_theme_atlas_v1_send_clear_windows(
         server->html_theme_atlas_resource,
         serial);
-    for (index = 0; index < NB_WAYLAND_MAX_SURFACES; ++index) {
-        const struct nb_wayland_surface *surface = &server->surfaces[index];
-        const struct nb_window *window;
+    for (index = 0;
+         index < nb_desktop_window_count(&server->shell->desktop);
+         ++index) {
+        const nb_window_id desktop_id = nb_desktop_window_id_at(
+            &server->shell->desktop,
+            index);
+        const struct nb_window *window = nb_desktop_window_at(
+            &server->shell->desktop,
+            index);
         uint32_t flags = 0;
         uint64_t window_id;
 
-        if (!surface->occupied || surface->html_theme_atlas ||
-            surface->window == NB_WINDOW_ID_NONE) {
-            continue;
-        }
-        window = nb_desktop_find_window(&server->shell->desktop,
-                                        surface->window);
-        if (window == NULL || !window->visible) {
+        if (window == NULL || desktop_id == NB_WINDOW_ID_NONE ||
+            !window->visible) {
             continue;
         }
         if (window->active) {
@@ -5905,7 +5914,7 @@ static void send_html_theme_state(struct nb_wayland_server *server)
         if (window->control_layout == NB_WINDOW_CONTROLS_LEFT) {
             flags |= NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_CONTROLS_LEFT;
         }
-        window_id = (uint64_t)surface->window;
+        window_id = (uint64_t)desktop_id;
         nixbench_html_theme_atlas_v1_send_window(
             server->html_theme_atlas_resource,
             serial,
@@ -6589,7 +6598,9 @@ bool nb_wayland_server_html_theme_snapshot(
         return false;
     }
     snapshot->surface = (struct nb_wayland_surface_snapshot){
-        surface->pixels,
+        surface->composite_pixels != NULL
+            ? surface->composite_pixels
+            : surface->pixels,
         surface->width,
         surface->height,
         surface->width * (int)sizeof(uint32_t),
@@ -6602,6 +6613,12 @@ bool nb_wayland_server_html_theme_snapshot(
     };
     snapshot->layout = &server->html_theme_atlas.published;
     return true;
+}
+
+void nb_wayland_server_html_theme_state_changed(
+    struct nb_wayland_server *server)
+{
+    send_html_theme_state(server);
 }
 
 void nb_wayland_server_destroy(struct nb_wayland_server *server)

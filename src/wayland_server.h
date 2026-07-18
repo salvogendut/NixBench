@@ -102,6 +102,9 @@ bool nb_wayland_server_html_theme_connected(
 bool nb_wayland_server_html_theme_snapshot(
     const struct nb_wayland_server *server,
     struct nb_wayland_html_theme_snapshot *snapshot);
+/* Publish current shell state after a native (non-Wayland) shell mutation. */
+void nb_wayland_server_html_theme_state_changed(
+    struct nb_wayland_server *server);
 
 /*
  * Publish a standard Wayland socket beneath XDG_RUNTIME_DIR. The returned

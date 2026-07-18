@@ -179,8 +179,25 @@ PNG through WebKitGTK's snapshot API:
   --snapshot /tmp/nixbench-motif-title.png
 ```
 
-The private compositor endpoint now authenticates one atlas carrier, keeps it
-out of the managed application list, and atomically validates matching pixel,
-tile, and action-region generations. The preview executable does not register
-that carrier yet; it remains a renderer bring-up tool until the WebKit client
-side of the endpoint is enabled in the next milestone.
+The private compositor endpoint authenticates one atlas carrier, keeps it out
+of the managed application list, and atomically validates matching pixel,
+tile, and action-region generations. The same executable is also the live
+renderer. The session core creates a fresh 256-bit token, enables the endpoint,
+and starts the renderer with the token kept out of the environment.
+
+The first live milestone is intentionally opt-in and paints one complete
+visible window frame. Native NixBench geometry and hit testing remain in use,
+and the native Classic frame remains underneath as an immediate fallback. In
+a development checkout, select a bundle for one standalone session with:
+
+```sh
+NIXBENCH_HTML_THEME=motif ./tools/run-wsdisplay-session.sh
+```
+
+The accepted identifiers are `fantasy`, `motif`, and `beos`. A non-Classic
+`windows.theme` value in the user configuration selects the same renderer;
+the environment variable takes precedence for short experiments. Unknown or
+unavailable bundles, renderer startup failure, and renderer disconnect all
+leave Classic decorations operational. Multi-window atlas packing, HTML menu
+and desktop tiles, renderer restart policy, and the Settings selector remain
+later milestones.

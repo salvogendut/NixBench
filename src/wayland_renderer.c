@@ -16,6 +16,7 @@ struct nb_wayland_renderer {
     const struct nb_wayland_server *server;
     struct nb_damage_region damage;
     bool damage_valid;
+    struct nb_wayland_texture_cache_entry atlas_entry;
     struct nb_wayland_texture_cache_entry
         entries[NB_WAYLAND_MAX_SURFACES];
 };
@@ -53,6 +54,7 @@ void nb_wayland_renderer_reset(struct nb_wayland_renderer *renderer)
     for (index = 0; index < NB_WAYLAND_MAX_SURFACES; ++index) {
         clear_entry(&renderer->entries[index]);
     }
+    clear_entry(&renderer->atlas_entry);
 }
 
 void nb_wayland_renderer_destroy(struct nb_wayland_renderer *renderer)
@@ -217,6 +219,87 @@ static bool update_texture(
         entry->revision = snapshot->revision;
     }
     return updated;
+}
+
+static bool update_atlas_texture(
+    struct nb_wayland_texture_cache_entry *entry,
+    SDL_Renderer *renderer,
+    const struct nb_wayland_surface_snapshot *snapshot)
+{
+    if (entry->texture == NULL || entry->renderer != renderer ||
+        entry->width != snapshot->width ||
+        entry->height != snapshot->height) {
+        clear_entry(entry);
+        entry->texture = SDL_CreateTexture(renderer,
+                                           SDL_PIXELFORMAT_ARGB8888,
+                                           SDL_TEXTUREACCESS_STREAMING,
+                                           snapshot->width,
+                                           snapshot->height);
+        if (entry->texture == NULL) {
+            return false;
+        }
+        entry->renderer = renderer;
+        entry->width = snapshot->width;
+        entry->height = snapshot->height;
+    }
+    if (!SDL_SetTextureBlendMode(entry->texture, SDL_BLENDMODE_BLEND)) {
+        return false;
+    }
+    if (entry->revision != snapshot->revision) {
+        if (!SDL_UpdateTexture(entry->texture,
+                               NULL,
+                               snapshot->pixels,
+                               snapshot->stride)) {
+            return false;
+        }
+        entry->revision = snapshot->revision;
+    }
+    return true;
+}
+
+bool nb_wayland_render_decoration(SDL_Renderer *renderer,
+                                  nb_window_id id,
+                                  const struct nb_window *window,
+                                  void *context)
+{
+    struct nb_wayland_renderer *wayland_renderer = context;
+    struct nb_wayland_html_theme_snapshot snapshot;
+    const struct nb_theme_tile *tile;
+    SDL_FRect source;
+    SDL_FRect destination;
+
+    if (renderer == NULL || window == NULL || wayland_renderer == NULL ||
+        id == NB_WINDOW_ID_NONE) {
+        return false;
+    }
+    if (!nb_wayland_server_html_theme_snapshot(wayland_renderer->server,
+                                                &snapshot)) {
+        return true;
+    }
+    tile = nb_theme_atlas_find_tile(snapshot.layout,
+                                    NB_THEME_TILE_WINDOW,
+                                    (uint64_t)id);
+    if (tile == NULL || tile->atlas_rect.width != window->frame.width ||
+        tile->atlas_rect.height != window->frame.height) {
+        return true;
+    }
+    if (!update_atlas_texture(&wayland_renderer->atlas_entry,
+                              renderer,
+                              &snapshot.surface)) {
+        return false;
+    }
+    source = (SDL_FRect){(float)tile->atlas_rect.x,
+                         (float)tile->atlas_rect.y,
+                         (float)tile->atlas_rect.width,
+                         (float)tile->atlas_rect.height};
+    destination = (SDL_FRect){(float)window->frame.x,
+                              (float)window->frame.y,
+                              (float)window->frame.width,
+                              (float)window->frame.height};
+    return SDL_RenderTexture(renderer,
+                             wayland_renderer->atlas_entry.texture,
+                             &source,
+                             &destination);
 }
 
 bool nb_wayland_render_content(SDL_Renderer *renderer,

@@ -58,9 +58,10 @@ static bool render_clipped_content(
     return content_rendered && clip_restored;
 }
 
-bool nb_desktop_render_with_content(
+bool nb_desktop_render_with_callbacks(
     SDL_Renderer *renderer,
     const struct nb_desktop *desktop,
+    nb_window_decoration_render_callback render_decoration,
     nb_window_content_render_callback render_content,
     void *context)
 {
@@ -81,6 +82,8 @@ bool nb_desktop_render_with_content(
                 return false;
             }
         } else if (!nb_window_render_base(renderer, window) ||
+                   (render_decoration != NULL && !window->fullscreen &&
+                    !render_decoration(renderer, id, window, context)) ||
                    !render_clipped_content(renderer,
                                            id,
                                            window,
@@ -91,6 +94,19 @@ bool nb_desktop_render_with_content(
     }
 
     return true;
+}
+
+bool nb_desktop_render_with_content(
+    SDL_Renderer *renderer,
+    const struct nb_desktop *desktop,
+    nb_window_content_render_callback render_content,
+    void *context)
+{
+    return nb_desktop_render_with_callbacks(renderer,
+                                             desktop,
+                                             NULL,
+                                             render_content,
+                                             context);
 }
 
 bool nb_desktop_render(SDL_Renderer *renderer,

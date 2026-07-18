@@ -18,6 +18,12 @@ void nb_wayland_renderer_set_damage(
     struct nb_wayland_renderer *renderer,
     const struct nb_damage_region *damage);
 
+/* Overlay one validated HTML atlas tile; absence preserves native chrome. */
+bool nb_wayland_render_decoration(SDL_Renderer *renderer,
+                                  nb_window_id id,
+                                  const struct nb_window *window,
+                                  void *context);
+
 /* Matches nb_window_content_render_callback. */
 bool nb_wayland_render_content(SDL_Renderer *renderer,
                                nb_window_id id,
