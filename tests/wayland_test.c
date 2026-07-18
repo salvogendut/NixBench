@@ -2349,6 +2349,21 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(memcmp(cached_clipboard,
                  wayland_clipboard,
                  cached_clipboard_size) == 0);
+
+    /*
+     * GTK claims the clipboard before appending SAVE_TARGETS, repeats text
+     * aliases, and then repeats set_selection for the same source.  Late and
+     * duplicate offers are valid and must not disconnect the client.
+     */
+    wl_data_source_offer(client.data_source, "SAVE_TARGETS");
+    wl_data_source_offer(client.data_source,
+                         "text/plain;charset=utf-8");
+    wl_data_device_set_selection(client.data_device,
+                                 client.data_source,
+                                 client.keyboard_serial);
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.data_offer_mime_count == 2);
+    CHECK(strcmp(client.data_offer_mime, "SAVE_TARGETS") == 0);
     xwayland_interface.set_clipboard_owner = record_clipboard_owner;
     nb_wayland_server_set_xwayland_interface(server,
                                              &xwayland_interface,
@@ -2384,7 +2399,7 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(client.data_device_selection_count == 3);
     REQUIRE(client.selection_offer != NULL);
     CHECK(client.data_offer_count == 2);
-    CHECK(client.data_offer_mime_count == 4);
+    CHECK(client.data_offer_mime_count == 5);
     REQUIRE(pipe(clipboard_pipe) == 0);
     wl_data_offer_receive(client.selection_offer,
                           "text/plain;charset=utf-8",

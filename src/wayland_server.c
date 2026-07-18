@@ -3830,9 +3830,10 @@ static void data_source_offer(struct wl_client *client,
 {
     struct nb_wayland_data_source *source =
         wl_resource_get_user_data(resource);
+    struct nb_wayland_data_offer *offer;
     size_t length;
 
-    if (source == NULL || mime_type == NULL || source->selection) {
+    if (source == NULL || mime_type == NULL) {
         wl_client_post_implementation_error(
             client, "invalid wl_data_source MIME offer");
         return;
@@ -3853,6 +3854,11 @@ static void data_source_offer(struct wl_client *client,
            mime_type,
            length + 1);
     ++source->mime_type_count;
+    wl_list_for_each(offer, &source->offers, source_link) {
+        if (offer->resource != NULL) {
+            wl_data_offer_send_offer(offer->resource, mime_type);
+        }
+    }
 }
 
 static void data_device_send_selection_to_client(
