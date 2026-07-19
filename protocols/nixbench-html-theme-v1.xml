@@ -58,7 +58,7 @@
       <entry name="invalid_layout" value="1"
              summary="atlas layout transaction was malformed"/>
       <entry name="stale_state" value="2"
-             summary="state acknowledgement was not current"/>
+             summary="state acknowledgement was zero or not yet issued"/>
     </enum>
 
     <enum name="window_state" bitfield="true">
@@ -99,7 +99,11 @@
     <request name="ack_state">
       <description summary="acknowledge a complete state transaction">
         The renderer has applied state serial to its DOM. This does not imply
-        that the corresponding pixels have been painted.
+        that the corresponding pixels have been painted. The core may publish
+        a newer transaction before this request is dispatched; in that case
+        acknowledgement of the superseded, previously issued serial is
+        accepted and ignored. Only acknowledgement of the current serial
+        makes a subsequent atlas layout eligible.
       </description>
       <arg name="serial" type="uint"/>
     </request>

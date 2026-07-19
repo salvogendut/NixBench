@@ -28,10 +28,6 @@ enum component_kind {
     COMPONENT_MENUBAR
 };
 
-enum {
-    LIVE_RENDER_CONFIGURE_BARRIER_MS = 100
-};
-
 struct renderer_options {
     const char *theme_directory;
     const char *snapshot_path;
@@ -65,6 +61,7 @@ struct renderer_state {
     bool live_atlas;
     bool state_theme_valid;
     bool state_window_available;
+    bool gtk_window_configured;
     bool layout_in_flight;
     bool snapshot_started;
     int exit_status;
@@ -507,6 +504,37 @@ static gboolean begin_live_render_idle(gpointer user_data)
     return G_SOURCE_REMOVE;
 }
 
+static void schedule_live_render(struct renderer_state *state)
+{
+    if (!state->gtk_window_configured || !state->state_window_available ||
+        state->layout_in_flight || state->render_source != 0) {
+        return;
+    }
+    state->render_source = g_idle_add(begin_live_render_idle, state);
+}
+
+static gboolean live_window_configure(GtkWidget *widget,
+                                      GdkEventConfigure *event,
+                                      gpointer user_data)
+{
+    struct renderer_state *state = user_data;
+
+    (void)widget;
+    (void)event;
+    if (state->gtk_window_configured) {
+        return FALSE;
+    }
+    state->gtk_window_configured = true;
+    /*
+     * GDK has now received and acknowledged the initial xdg_surface
+     * configure on its private Wayland event queue.  Defer WebKit work once
+     * more so no child surface or buffer commit is created from inside the
+     * configure-event dispatch itself.
+     */
+    schedule_live_render(state);
+    return FALSE;
+}
+
 static void atlas_configure(
     void *data,
     struct nixbench_html_theme_atlas_v1 *atlas,
@@ -530,6 +558,10 @@ static void atlas_configure(
     state->state_theme_valid = false;
     state->state_window_available = false;
     state->layout_in_flight = false;
+    if (state->render_source != 0) {
+        g_source_remove(state->render_source);
+        state->render_source = 0;
+    }
     if (state->publish_source != 0) {
         g_source_remove(state->publish_source);
         state->publish_source = 0;
@@ -612,18 +644,16 @@ static void atlas_state_done(
     if (!state->state_window_available && state->render_source != 0) {
         g_source_remove(state->render_source);
         state->render_source = 0;
-    } else if (state->state_window_available && state->render_source == 0) {
+    } else if (state->state_window_available) {
         /*
          * Do not enter WebKit from a Wayland listener. GTK and WebKit share
          * this display and may perform their own synchronization while a
          * direct roundtrip is dispatching the initial atlas transaction.
-         * Coalescing onto the main loop also avoids rendering intermediate
-         * title/app-id state emitted while the private GTK surface maps.
+         * Rendering is additionally gated by the GtkWindow configure event,
+         * which proves GDK has completed the private surface's initial XDG
+         * configure/acknowledge handshake on its own event queue.
          */
-        state->render_source = g_timeout_add(
-            LIVE_RENDER_CONFIGURE_BARRIER_MS,
-            begin_live_render_idle,
-            state);
+        schedule_live_render(state);
     }
 }
 
@@ -889,6 +919,12 @@ int main(int argc, char **argv)
     state.web_view = web_view;
     state.snapshot_path = options.snapshot_path;
     state.live_atlas = options.atlas_token != NULL;
+    if (state.live_atlas) {
+        g_signal_connect(window,
+                         "configure-event",
+                         G_CALLBACK(live_window_configure),
+                         &state);
+    }
     g_signal_connect(web_view, "load-changed", G_CALLBACK(load_changed), &state);
     g_signal_connect(web_view, "load-failed", G_CALLBACK(load_failed), &state);
     g_signal_connect(web_view, "decide-policy", G_CALLBACK(decide_policy), NULL);

@@ -5845,6 +5845,11 @@ static uint64_t html_theme_object_id(uint32_t high, uint32_t low)
     return ((uint64_t)high << 32U) | (uint64_t)low;
 }
 
+static bool html_theme_serial_precedes(uint32_t serial, uint32_t current)
+{
+    return (int32_t)(serial - current) < 0;
+}
+
 static void send_html_theme_state(struct nb_wayland_server *server)
 {
     uint32_t serial;
@@ -5963,12 +5968,24 @@ static void html_theme_atlas_ack_state(struct wl_client *client,
     struct nb_wayland_server *server = wl_resource_get_user_data(resource);
 
     (void)client;
-    if (serial == 0 || serial != server->html_theme_state_serial) {
+    if (serial == 0 ||
+        (serial != server->html_theme_state_serial &&
+         !html_theme_serial_precedes(serial,
+                                     server->html_theme_state_serial))) {
         wl_resource_post_error(
             resource,
             NIXBENCH_HTML_THEME_ATLAS_V1_ERROR_STALE_STATE,
-            "HTML theme renderer acknowledged stale state %u",
+            "HTML theme renderer acknowledged unknown state %u",
             serial);
+        return;
+    }
+    /*
+     * State changes may be emitted faster than the renderer's requests are
+     * dispatched.  An acknowledgement for a superseded transaction is still
+     * ordered and valid, but it must not make that old state eligible for a
+     * new atlas layout.
+     */
+    if (serial != server->html_theme_state_serial) {
         return;
     }
     server->html_theme_acked_serial = serial;

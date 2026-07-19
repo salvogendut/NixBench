@@ -1594,6 +1594,7 @@ static void test_wayland_surface_lifecycle(void)
     struct nb_damage_region redraw_region;
     nb_window_id window = NB_WINDOW_ID_NONE;
     uint32_t parent_pixel_under_popup = 0;
+    uint32_t first_html_theme_state_serial = 0;
     uint64_t root_revision_before_popup = 0;
     uint64_t popup_tree_revision = 0;
     int sockets[2] = {-1, -1};
@@ -1872,6 +1873,16 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(client.html_theme_configure_count == 1);
     CHECK(client.html_theme_window_count == 1);
     CHECK(client.html_theme_state_done_count == 1);
+    first_html_theme_state_serial = client.html_theme_state_serial;
+    nb_wayland_server_html_theme_state_changed(server);
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.html_theme_configure_count == 2);
+    CHECK(client.html_theme_state_serial != first_html_theme_state_serial);
+    CHECK(client.html_theme_window_count == 1);
+    CHECK(client.html_theme_state_done_count == 2);
+    nixbench_html_theme_atlas_v1_ack_state(
+        client.html_theme_atlas,
+        first_html_theme_state_serial);
     nixbench_html_theme_atlas_v1_ack_state(
         client.html_theme_atlas,
         client.html_theme_state_serial);
