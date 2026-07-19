@@ -62,6 +62,23 @@ managed as an application window. The core sends immutable window state and
 geometry to the renderer. The renderer returns a committed atlas generation
 and hit regions associated with stable action identifiers.
 
+### Window geometry contract
+
+A window atlas tile has the exact dimensions of the outer NixBench frame. The
+renderer injects these CSS custom properties from the native geometry model:
+
+- `--nixbench-frame-border` (currently 3px);
+- `--nixbench-title-height` (currently 24px);
+- `--nixbench-footer-height` (currently 20px);
+- `--nixbench-gadget-margin` (currently 4px); and
+- `--nixbench-control-size` (currently 16px).
+
+The native application content begins immediately after the frame border and
+title area. Window HTML must therefore finish its title bar at that boundary;
+content is composited later and intentionally covers the middle of the atlas
+tile. Bundled themes use the injected variables so their visible controls,
+separators, and client-content inset remain aligned with native hit testing.
+
 The first state vocabulary is:
 
 - window identifier, title, size, scale, and active state;
@@ -103,12 +120,18 @@ The repository begins with three personalities:
 - **Fantasy**, an original expressive theme intended to exercise SVG,
   gradients, irregular decoration silhouettes, and animation;
 - **Motif**, a restrained original recreation of the visual conventions of
-  1990s Unix workstations; and
+  1990s Unix workstations, with CDE-style warm-gray bevels, orange focused
+  title bars, slate inactive title bars, and a blue-gray workspace; and
 - **BeOS-inspired**, an original theme with compact offset title tabs and warm
   yellow controls.
 
 Names describe the inspiration. Bundles must use original or compatibly
 licensed artwork and may not copy proprietary system assets.
+
+The Motif personality also takes visual-direction cues from the MIT-licensed
+[CDE/Motif desktop HTML simulation](https://github.com/igtoth/cde-motif-desktop),
+while retaining NixBench's own markup, geometry contract, compositor policy,
+and implementation.
 
 ## Safety policy
 
@@ -185,8 +208,8 @@ tile, and action-region generations. The same executable is also the live
 renderer. The session core creates a fresh 256-bit token, enables the endpoint,
 and starts the renderer with the token kept out of the environment.
 
-The first live milestone is intentionally opt-in and paints one complete
-visible window frame. Native NixBench geometry and hit testing remain in use,
+The live renderer is intentionally opt-in and paints every eligible visible
+window frame from one packed atlas. Native NixBench geometry and hit testing remain in use,
 and the native Classic frame remains underneath as an immediate fallback. In
 a development checkout, select a bundle for one standalone session with:
 
@@ -202,6 +225,5 @@ The accepted identifiers are `fantasy`, `motif`, and `beos`. A non-Classic
 `windows.theme` value in the user configuration selects the same renderer;
 the environment variable takes precedence for short experiments. Unknown or
 unavailable bundles, renderer startup failure, and renderer disconnect all
-leave Classic decorations operational. Multi-window atlas packing, HTML menu
-and desktop tiles, renderer restart policy, and the Settings selector remain
-later milestones.
+leave Classic decorations operational. HTML menu and desktop tiles, renderer
+restart policy, and the Settings selector remain later milestones.

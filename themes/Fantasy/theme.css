@@ -19,7 +19,7 @@ html, body { margin: 0; background: transparent; overflow: hidden; }
 }
 
 .titlebar {
-  height: 30px;
+  height: var(--nixbench-title-height);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -43,8 +43,8 @@ html, body { margin: 0; background: transparent; overflow: hidden; }
 
 .mane { width: 8px; height: 20px; background: repeating-linear-gradient(#f15bb5 0 4px, #fee440 4px 8px, #31d7f2 8px 12px); }
 .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-shadow: 1px 1px var(--fantasy-ink); }
-.window-controls { display: flex; gap: 4px; }
-.window-controls button { width: 21px; height: 21px; padding: 0; color: var(--fantasy-ink); border: 1px solid var(--fantasy-ink); border-radius: 50%; background: rgba(255,255,255,.72); font-weight: 800; }
+.window-controls { display: flex; gap: var(--nixbench-gadget-margin); padding: var(--nixbench-gadget-margin); }
+.window-controls button { width: var(--nixbench-control-size); height: var(--nixbench-control-size); padding: 0; color: var(--fantasy-ink); border: 1px solid var(--fantasy-ink); border-radius: 50%; background: rgba(255,255,255,.72); font-size: 10px; line-height: 10px; font-weight: 800; }
 .window-controls button:hover { transform: translateY(-1px); background: white; }
 .tail { width: 18px; height: 20px; border-radius: 0 100% 100% 0; background: repeating-linear-gradient(135deg, #f15bb5 0 4px, #fee440 4px 8px, #31d7f2 8px 12px); }
 

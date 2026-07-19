@@ -1,11 +1,153 @@
-:root { --motif-face: #bdbdbd; --motif-light: #ffffff; --motif-mid: #888888; --motif-dark: #303030; --motif-title: #173f78; }
+:root {
+  --motif-desk: #617a8c;
+  --motif-face: #bab6b0;
+  --motif-light: #ddd9d0;
+  --motif-shadow: #6a6560;
+  --motif-dark: #302d2a;
+  --motif-active-top: #d07830;
+  --motif-active-bottom: #a85c18;
+  --motif-inactive-top: #708898;
+  --motif-inactive-bottom: #506070;
+}
+
 * { box-sizing: border-box; }
-html, body { margin: 0; background: transparent; overflow: hidden; font-family: sans-serif; }
-.motif-window { width: 100%; height: 100%; padding: 5px; background: var(--motif-face); border-top: 2px solid var(--motif-light); border-left: 2px solid var(--motif-light); border-right: 2px solid var(--motif-dark); border-bottom: 2px solid var(--motif-dark); }
-.titlebar { height: 25px; display: flex; align-items: center; padding-left: 7px; color: white; background: var(--motif-title); font: 700 13px sans-serif; }
-.title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.window-controls { display: flex; align-self: stretch; }
-.window-controls button { width: 25px; padding: 0; color: #111; background: var(--motif-face); border-top: 2px solid var(--motif-light); border-left: 2px solid var(--motif-light); border-right: 2px solid var(--motif-dark); border-bottom: 2px solid var(--motif-dark); border-radius: 0; font-weight: 700; }
-.window-controls button:active { border-color: var(--motif-dark) var(--motif-light) var(--motif-light) var(--motif-dark); }
-.motif-desktop { width: 100%; height: 100%; background: #587f7f; }
-.motif-menubar { height: 26px; display: flex; align-items: center; justify-content: space-between; padding: 0 7px; color: #111; background: var(--motif-face); border-bottom: 2px solid var(--motif-dark); font: 700 12px sans-serif; }
+
+html,
+body {
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+  font-family: monospace;
+}
+
+.motif-window {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+  background: var(--motif-face);
+  border: var(--nixbench-frame-border) solid;
+  border-color: var(--motif-light) var(--motif-shadow)
+                var(--motif-shadow) var(--motif-light);
+  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, .32),
+              inset -1px -1px 0 rgba(0, 0, 0, .28);
+}
+
+.titlebar {
+  position: relative;
+  height: var(--nixbench-title-height);
+  display: flex;
+  align-items: center;
+  color: #eeeeea;
+  background: linear-gradient(
+    to bottom,
+    var(--motif-inactive-top),
+    var(--motif-inactive-bottom)
+  );
+  border-top: 1px solid rgba(255, 255, 255, .38);
+  border-bottom: 2px solid rgba(0, 0, 0, .42);
+  font: 700 12px monospace;
+  letter-spacing: .25px;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, .55);
+}
+
+.title {
+  position: absolute;
+  left: 0;
+  right: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 76px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.window-controls {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-self: stretch;
+  gap: var(--nixbench-gadget-margin);
+  margin-left: auto;
+  padding: var(--nixbench-gadget-margin);
+}
+
+.window-controls button {
+  flex: 0 0 var(--nixbench-control-size);
+  width: var(--nixbench-control-size);
+  height: var(--nixbench-control-size);
+  padding: 0;
+  color: #28231f;
+  background: var(--motif-inactive-top);
+  border: 2px solid;
+  border-color: #aebdc5 #374651 #374651 #aebdc5;
+  border-radius: 0;
+  font: 700 9px/9px monospace;
+  text-shadow: none;
+}
+
+.window-controls button:active {
+  border-color: #374651 #aebdc5 #aebdc5 #374651;
+}
+
+.nixbench-atlas-tile[data-nixbench-active="true"] .motif-window {
+  border-color: #e8a870 #704016 #704016 #e8a870;
+}
+
+.nixbench-atlas-tile[data-nixbench-active="true"] .titlebar {
+  color: #ffffff;
+  background: linear-gradient(
+    to bottom,
+    var(--motif-active-top),
+    var(--motif-active-bottom)
+  );
+}
+
+.nixbench-atlas-tile[data-nixbench-active="true"]
+  .window-controls button {
+  background: var(--motif-active-top);
+  border-color: #e8a870 #704016 #704016 #e8a870;
+}
+
+.nixbench-atlas-tile[data-nixbench-active="true"]
+  .window-controls button:active {
+  border-color: #704016 #e8a870 #e8a870 #704016;
+}
+
+.motif-desktop {
+  width: 100%;
+  height: 100%;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(0, 0, 0, .025) 0,
+      rgba(0, 0, 0, .025) 1px,
+      transparent 1px,
+      transparent 4px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      rgba(0, 0, 0, .025) 0,
+      rgba(0, 0, 0, .025) 1px,
+      transparent 1px,
+      transparent 4px
+    ),
+    linear-gradient(135deg, #5a7082, var(--motif-desk) 60%, #5a7082);
+}
+
+.motif-menubar {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 8px;
+  color: #211f1c;
+  background: var(--motif-face);
+  border: 2px solid;
+  border-color: var(--motif-light) var(--motif-shadow)
+                var(--motif-shadow) var(--motif-light);
+  font: 700 12px monospace;
+}

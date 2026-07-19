@@ -313,6 +313,20 @@ static gchar *build_document(const struct nb_theme_bundle *bundle,
                                   sizeof(middle) + fragment_length +
                                   sizeof(suffix));
     g_string_append(document, prefix);
+    if (component == COMPONENT_WINDOW) {
+        g_string_append_printf(
+            document,
+            ":root{--nixbench-frame-border:%dpx;"
+            "--nixbench-title-height:%dpx;"
+            "--nixbench-footer-height:%dpx;"
+            "--nixbench-gadget-margin:%dpx;"
+            "--nixbench-control-size:%dpx}",
+            NB_WINDOW_BORDER_WIDTH,
+            NB_WINDOW_TITLE_HEIGHT,
+            NB_WINDOW_FOOTER_HEIGHT,
+            NB_WINDOW_GADGET_MARGIN,
+            NB_WINDOW_CLOSE_SIZE);
+    }
     g_string_append_len(document, stylesheet, (gssize)stylesheet_length);
     if (component == COMPONENT_WINDOW &&
         (window_state &
@@ -384,6 +398,18 @@ static gchar *build_window_atlas_document(
                                   window_count * (fragment_length + 256) +
                                   sizeof(suffix));
     g_string_append(document, prefix);
+    g_string_append_printf(
+        document,
+        ":root{--nixbench-frame-border:%dpx;"
+        "--nixbench-title-height:%dpx;"
+        "--nixbench-footer-height:%dpx;"
+        "--nixbench-gadget-margin:%dpx;"
+        "--nixbench-control-size:%dpx}",
+        NB_WINDOW_BORDER_WIDTH,
+        NB_WINDOW_TITLE_HEIGHT,
+        NB_WINDOW_FOOTER_HEIGHT,
+        NB_WINDOW_GADGET_MARGIN,
+        NB_WINDOW_CLOSE_SIZE);
     g_string_append_len(document, stylesheet, (gssize)stylesheet_length);
     g_string_append(document, middle);
     for (index = 0; index < window_count; ++index) {
