@@ -28,6 +28,20 @@ enum component_kind {
     COMPONENT_MENUBAR
 };
 
+enum {
+    LIVE_ATLAS_PREFERRED_ROW_WIDTH = 2048
+};
+
+struct renderer_window {
+    uint64_t id;
+    uint32_t state;
+    int width;
+    int height;
+    int atlas_x;
+    int atlas_y;
+    char title[NB_WINDOW_TITLE_CAPACITY];
+};
+
 struct renderer_options {
     const char *theme_directory;
     const char *snapshot_path;
@@ -49,12 +63,11 @@ struct renderer_state {
     uint32_t maximum_width;
     uint32_t maximum_height;
     uint32_t state_serial;
-    uint64_t window_id;
     uint64_t render_generation;
-    uint32_t window_state;
     int render_width;
     int render_height;
-    char window_title[NB_WINDOW_TITLE_CAPACITY];
+    struct renderer_window windows[NB_THEME_ATLAS_MAX_TILES];
+    size_t window_count;
     guint render_source;
     guint publish_source;
     unsigned int publish_attempts;
@@ -324,6 +337,164 @@ static gchar *build_document(const struct nb_theme_bundle *bundle,
     return g_string_free(document, FALSE);
 }
 
+static gchar *build_window_atlas_document(
+    const struct nb_theme_bundle *bundle,
+    const struct renderer_window *windows,
+    size_t window_count)
+{
+    static const char prefix[] =
+        "<!doctype html><html><head><meta charset=\"utf-8\">"
+        "<meta http-equiv=\"Content-Security-Policy\" content=\""
+        "default-src 'none'; script-src 'none'; connect-src 'none'; "
+        "style-src 'unsafe-inline'; img-src data:; font-src data:; "
+        "media-src 'none'; object-src 'none'; frame-src 'none'; "
+        "form-action 'none'; base-uri 'none'\">"
+        "<style>html,body{width:100%;height:100%;margin:0;overflow:hidden;"
+        "background:transparent}"
+        ".nixbench-atlas-tile{position:absolute;overflow:hidden}"
+        ".nixbench-atlas-tile>[data-nixbench-window]{"
+        "width:100%!important;height:100%!important}"
+        ".nixbench-hide-minimize "
+        "[data-nixbench-action=minimize]{display:none!important}"
+        ".nixbench-hide-maximize "
+        "[data-nixbench-action=maximize]{display:none!important}"
+        "</style><style>";
+    static const char middle[] = "</style></head><body>";
+    static const char suffix[] = "</body></html>";
+    gchar *stylesheet = NULL;
+    gchar *fragment = NULL;
+    gsize stylesheet_length = 0;
+    gsize fragment_length = 0;
+    GString *document;
+    size_t index;
+
+    if (windows == NULL || window_count == 0 ||
+        !read_text_file(bundle->stylesheet_path,
+                        &stylesheet,
+                        &stylesheet_length) ||
+        !read_text_file(bundle->window_path,
+                        &fragment,
+                        &fragment_length)) {
+        g_free(stylesheet);
+        g_free(fragment);
+        return NULL;
+    }
+    document = g_string_sized_new(sizeof(prefix) + stylesheet_length +
+                                  sizeof(middle) +
+                                  window_count * (fragment_length + 256) +
+                                  sizeof(suffix));
+    g_string_append(document, prefix);
+    g_string_append_len(document, stylesheet, (gssize)stylesheet_length);
+    g_string_append(document, middle);
+    for (index = 0; index < window_count; ++index) {
+        const struct renderer_window *window = &windows[index];
+        const bool show_minimize =
+            (window->state &
+             NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_SHOW_MINIMIZE) != 0;
+        const bool show_maximize =
+            (window->state &
+             NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_SHOW_MAXIMIZE) != 0;
+        const bool active =
+            (window->state &
+             NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_ACTIVE) != 0;
+        gchar *updated_fragment = set_fragment_title(
+            fragment, fragment_length, window->title);
+
+        if (updated_fragment == NULL) {
+            g_string_free(document, TRUE);
+            g_free(stylesheet);
+            g_free(fragment);
+            return NULL;
+        }
+        g_string_append_printf(
+            document,
+            "<section class=\"nixbench-atlas-tile%s%s\" "
+            "data-nixbench-window-id=\"%" G_GUINT64_FORMAT "\" "
+            "data-nixbench-active=\"%s\" "
+            "style=\"left:%dpx;top:%dpx;width:%dpx;height:%dpx\">",
+            show_minimize ? "" : " nixbench-hide-minimize",
+            show_maximize ? "" : " nixbench-hide-maximize",
+            (guint64)window->id,
+            active ? "true" : "false",
+            window->atlas_x,
+            window->atlas_y,
+            window->width,
+            window->height);
+        g_string_append(document, updated_fragment);
+        g_string_append(document, "</section>");
+        g_free(updated_fragment);
+    }
+    g_string_append(document, suffix);
+    g_free(stylesheet);
+    g_free(fragment);
+    return g_string_free(document, FALSE);
+}
+
+static bool pack_live_windows(struct renderer_state *state)
+{
+    const int maximum_width = (int)state->maximum_width;
+    const int maximum_height = (int)state->maximum_height;
+    int row_limit = LIVE_ATLAS_PREFERRED_ROW_WIDTH;
+    int atlas_width = 0;
+    int atlas_height = 0;
+    int x = 0;
+    int y = 0;
+    int row_height = 0;
+    size_t input_index;
+    size_t packed_count = 0;
+
+    if (maximum_width <= 0 || maximum_height <= 0) {
+        return false;
+    }
+    if (row_limit > maximum_width) {
+        row_limit = maximum_width;
+    }
+    for (input_index = 0;
+         input_index < state->window_count;
+         ++input_index) {
+        if (state->windows[input_index].width > row_limit &&
+            state->windows[input_index].width <= maximum_width) {
+            row_limit = state->windows[input_index].width;
+        }
+    }
+    for (input_index = 0;
+         input_index < state->window_count;
+         ++input_index) {
+        struct renderer_window window = state->windows[input_index];
+
+        if (window.width <= 0 || window.height <= 0 ||
+            window.width > maximum_width || window.height > maximum_height) {
+            continue;
+        }
+        if (x > 0 && window.width > row_limit - x) {
+            x = 0;
+            y += row_height;
+            row_height = 0;
+        }
+        if (window.height > maximum_height - y) {
+            continue;
+        }
+        window.atlas_x = x;
+        window.atlas_y = y;
+        state->windows[packed_count++] = window;
+        x += window.width;
+        if (window.height > row_height) {
+            row_height = window.height;
+        }
+        if (x > atlas_width) {
+            atlas_width = x;
+        }
+        if (y + row_height > atlas_height) {
+            atlas_height = y + row_height;
+        }
+    }
+    state->window_count = packed_count;
+    state->render_width = atlas_width;
+    state->render_height = atlas_height;
+    state->state_window_available = packed_count != 0;
+    return state->state_window_available;
+}
+
 static void renderer_registry_global(void *data,
                                      struct wl_registry *registry,
                                      uint32_t name,
@@ -391,8 +562,7 @@ static gboolean publish_live_layout(gpointer user_data)
     const uint32_t generation_hi =
         (uint32_t)(state->render_generation >> 32U);
     const uint32_t generation_lo = (uint32_t)state->render_generation;
-    const uint32_t window_hi = (uint32_t)(state->window_id >> 32U);
-    const uint32_t window_lo = (uint32_t)state->window_id;
+    size_t index;
 
     if (!state->layout_in_flight || state->theme_atlas == NULL) {
         state->publish_source = 0;
@@ -416,15 +586,19 @@ static gboolean publish_live_layout(gpointer user_data)
         gtk_main_quit();
         return G_SOURCE_REMOVE;
     }
-    nixbench_html_theme_atlas_v1_tile(
-        state->theme_atlas,
-        NIXBENCH_HTML_THEME_ATLAS_V1_TILE_KIND_WINDOW,
-        window_hi,
-        window_lo,
-        0,
-        0,
-        state->render_width,
-        state->render_height);
+    for (index = 0; index < state->window_count; ++index) {
+        const struct renderer_window *window = &state->windows[index];
+
+        nixbench_html_theme_atlas_v1_tile(
+            state->theme_atlas,
+            NIXBENCH_HTML_THEME_ATLAS_V1_TILE_KIND_WINDOW,
+            (uint32_t)(window->id >> 32U),
+            (uint32_t)window->id,
+            window->atlas_x,
+            window->atlas_y,
+            window->width,
+            window->height);
+    }
     nixbench_html_theme_atlas_v1_commit_layout(
         state->theme_atlas,
         generation_hi,
@@ -446,16 +620,15 @@ static bool begin_live_render(struct renderer_state *state)
     uint32_t generation_lo;
 
     if (!state->state_theme_valid || !state->state_window_available ||
-        state->window_id == 0 || state->render_width <= 0 ||
+        state->window_count == 0 || state->render_width <= 0 ||
         state->render_height <= 0 ||
         (uint32_t)state->render_width > state->maximum_width ||
         (uint32_t)state->render_height > state->maximum_height) {
         return false;
     }
-    document = build_document(state->bundle,
-                              COMPONENT_WINDOW,
-                              state->window_title,
-                              state->window_state);
+    document = build_window_atlas_document(state->bundle,
+                                           state->windows,
+                                           state->window_count);
     if (document == NULL) {
         return false;
     }
@@ -547,7 +720,7 @@ static void atlas_configure(
 
     (void)atlas;
     if (serial == 0 || maximum_width == 0 || maximum_height == 0 ||
-        scale != 1) {
+        maximum_width > INT_MAX || maximum_height > INT_MAX || scale != 1) {
         state->exit_status = 1;
         gtk_main_quit();
         return;
@@ -557,6 +730,9 @@ static void atlas_configure(
     state->maximum_height = maximum_height;
     state->state_theme_valid = false;
     state->state_window_available = false;
+    state->window_count = 0;
+    state->render_width = 0;
+    state->render_height = 0;
     state->layout_in_flight = false;
     if (state->render_source != 0) {
         g_source_remove(state->render_source);
@@ -592,7 +768,9 @@ static void atlas_clear_windows(
     (void)atlas;
     if (serial == state->state_serial) {
         state->state_window_available = false;
-        state->window_id = 0;
+        state->window_count = 0;
+        state->render_width = 0;
+        state->render_height = 0;
     }
 }
 
@@ -608,24 +786,30 @@ static void atlas_window(
     const char *title)
 {
     struct renderer_state *state = data;
+    struct renderer_window *window;
+    const uint64_t window_id =
+        ((uint64_t)window_hi << 32U) | window_lo;
 
     (void)atlas;
-    if (serial != state->state_serial || state->state_window_available ||
+    if (serial != state->state_serial ||
+        state->window_count == NB_THEME_ATLAS_MAX_TILES || window_id == 0 ||
         width == 0 || height == 0 || width > INT_MAX || height > INT_MAX ||
         (window_state &
          (NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_MINIMIZED |
           NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_FULLSCREEN)) != 0) {
         return;
     }
-    state->window_id = ((uint64_t)window_hi << 32U) | window_lo;
-    state->render_width = (int)width;
-    state->render_height = (int)height;
-    state->window_state = window_state;
-    (void)snprintf(state->window_title,
-                   sizeof(state->window_title),
+    window = &state->windows[state->window_count++];
+    *window = (struct renderer_window){
+        .id = window_id,
+        .state = window_state,
+        .width = (int)width,
+        .height = (int)height
+    };
+    (void)snprintf(window->title,
+                   sizeof(window->title),
                    "%s",
                    title != NULL ? title : "Window");
-    state->state_window_available = state->window_id != 0;
 }
 
 static void atlas_state_done(
@@ -640,6 +824,7 @@ static void atlas_state_done(
         gtk_main_quit();
         return;
     }
+    (void)pack_live_windows(state);
     nixbench_html_theme_atlas_v1_ack_state(atlas, serial);
     if (!state->state_window_available && state->render_source != 0) {
         g_source_remove(state->render_source);

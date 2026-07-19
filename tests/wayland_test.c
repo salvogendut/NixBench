@@ -1939,15 +1939,15 @@ static void test_wayland_surface_lifecycle(void)
     html_theme_buffer = wl_shm_pool_create_buffer(
         pool,
         0,
-        64,
+        128,
         32,
-        64 * BYTES_PER_PIXEL,
+        128 * BYTES_PER_PIXEL,
         WL_SHM_FORMAT_ARGB8888);
     REQUIRE(html_theme_buffer != NULL);
     nixbench_html_theme_atlas_v1_begin_layout(
-        client.html_theme_atlas, 0, 1, 64, 32);
+        client.html_theme_atlas, 0, 1, 128, 32);
     wl_surface_attach(html_theme_surface, html_theme_buffer, 0, 0);
-    wl_surface_damage(html_theme_surface, 0, 0, 64, 32);
+    wl_surface_damage(html_theme_surface, 0, 0, 128, 32);
     wl_surface_commit(html_theme_surface);
     nixbench_html_theme_atlas_v1_tile(
         client.html_theme_atlas,
@@ -1955,6 +1955,15 @@ static void test_wayland_surface_lifecycle(void)
         (uint32_t)((uint64_t)window >> 32U),
         (uint32_t)window,
         0,
+        0,
+        64,
+        32);
+    nixbench_html_theme_atlas_v1_tile(
+        client.html_theme_atlas,
+        NIXBENCH_HTML_THEME_ATLAS_V1_TILE_KIND_WINDOW,
+        (uint32_t)(((uint64_t)window + 1) >> 32U),
+        (uint32_t)((uint64_t)window + 1),
+        64,
         0,
         64,
         32);
@@ -1973,13 +1982,16 @@ static void test_wayland_surface_lifecycle(void)
     REQUIRE(pump_barrier(server, display));
     REQUIRE(nb_wayland_server_html_theme_snapshot(
         server, &html_theme_snapshot));
-    CHECK(html_theme_snapshot.surface.width == 64);
+    CHECK(html_theme_snapshot.surface.width == 128);
     CHECK(html_theme_snapshot.surface.height == 32);
     REQUIRE(html_theme_snapshot.layout != NULL);
     CHECK(html_theme_snapshot.layout->generation == 1);
     CHECK(nb_theme_atlas_find_tile(html_theme_snapshot.layout,
                                    NB_THEME_TILE_WINDOW,
                                    (uint64_t)window) != NULL);
+    CHECK(nb_theme_atlas_find_tile(html_theme_snapshot.layout,
+                                   NB_THEME_TILE_WINDOW,
+                                   (uint64_t)window + 1) != NULL);
     CHECK(nb_theme_atlas_hit_test(html_theme_snapshot.layout,
                                   NB_THEME_TILE_WINDOW,
                                   (uint64_t)window,
