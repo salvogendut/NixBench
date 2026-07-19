@@ -194,6 +194,10 @@ a development checkout, select a bundle for one standalone session with:
 NIXBENCH_HTML_THEME=motif ./tools/run-wsdisplay-session.sh
 ```
 
+The development launcher forwards this selector explicitly across the
+privilege boundary and, like the installed `nixbench-session` command, enables
+rootless Xwayland by default when an Xwayland executable is available.
+
 The accepted identifiers are `fantasy`, `motif`, and `beos`. A non-Classic
 `windows.theme` value in the user configuration selects the same renderer;
 the environment variable takes precedence for short experiments. Unknown or

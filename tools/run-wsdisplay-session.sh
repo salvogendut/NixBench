@@ -58,10 +58,11 @@ fi
 application=${NIXBENCH_APPLICATION:-}
 trace_wayland=${NIXBENCH_TRACE_WAYLAND:-}
 trace_wayland_log=${NIXBENCH_TRACE_WAYLAND_LOG:-}
-xwayland_rootless=${NIXBENCH_XWAYLAND_ROOTLESS:-0}
+xwayland_rootless=${NIXBENCH_XWAYLAND_ROOTLESS:-1}
 xwayland=${NIXBENCH_XWAYLAND:-}
 xwayland_legacy_association=${NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION:-0}
 gtk_menu_bridge=${NIXBENCH_GTK_MENU_BRIDGE:-0}
+html_theme=${NIXBENCH_HTML_THEME:-}
 case "$gtk_menu_bridge" in
     0|1) ;;
     *)
@@ -108,9 +109,16 @@ case "$xwayland_legacy_association" in
     0|1) ;;
     *) fail "NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION must be 0 or 1" ;;
 esac
+case "$html_theme" in
+    ''|classic|fantasy|motif|beos) ;;
+    *)
+        fail "NIXBENCH_HTML_THEME must be classic, fantasy, motif, or beos"
+        ;;
+esac
 unset NIXBENCH_TRACE_WAYLAND NIXBENCH_TRACE_WAYLAND_LOG
 unset NIXBENCH_XWAYLAND_ROOTLESS NIXBENCH_XWAYLAND
 unset NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION
+unset NIXBENCH_HTML_THEME
 
 script_path=$0
 case "$script_path" in
@@ -417,6 +425,7 @@ run_privileged_session()
                     NIXBENCH_XWAYLAND_ROOTLESS="$xwayland_rootless" \
                     NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION="$xwayland_legacy_association" \
                     NIXBENCH_XWAYLAND="$xwayland" \
+                    NIXBENCH_HTML_THEME="$html_theme" \
                     NIXBENCH_TRACE_WAYLAND_LOG="$trace_wayland_log" \
                     "$staged_session" --acknowledge-console-takeover \
                     --core "$core" --application "$application" "$@"
@@ -427,6 +436,7 @@ run_privileged_session()
                     NIXBENCH_XWAYLAND_ROOTLESS="$xwayland_rootless" \
                     NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION="$xwayland_legacy_association" \
                     NIXBENCH_XWAYLAND="$xwayland" \
+                    NIXBENCH_HTML_THEME="$html_theme" \
                     "$staged_session" --acknowledge-console-takeover \
                     --core "$core" --application "$application" "$@"
             fi
@@ -436,6 +446,7 @@ run_privileged_session()
                 NIXBENCH_XWAYLAND_ROOTLESS="$xwayland_rootless" \
                 NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION="$xwayland_legacy_association" \
                 NIXBENCH_XWAYLAND="$xwayland" \
+                NIXBENCH_HTML_THEME="$html_theme" \
                 "$staged_session" --acknowledge-console-takeover \
                 --core "$core" --application "$application" "$@"
         fi
@@ -448,6 +459,7 @@ run_privileged_session()
                     NIXBENCH_XWAYLAND_ROOTLESS="$xwayland_rootless" \
                     NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION="$xwayland_legacy_association" \
                     NIXBENCH_XWAYLAND="$xwayland" \
+                    NIXBENCH_HTML_THEME="$html_theme" \
                     NIXBENCH_TRACE_WAYLAND_LOG="$trace_wayland_log" \
                     "$staged_session" --acknowledge-console-takeover \
                     --core "$core" "$@"
@@ -458,6 +470,7 @@ run_privileged_session()
                     NIXBENCH_XWAYLAND_ROOTLESS="$xwayland_rootless" \
                     NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION="$xwayland_legacy_association" \
                     NIXBENCH_XWAYLAND="$xwayland" \
+                    NIXBENCH_HTML_THEME="$html_theme" \
                     "$staged_session" --acknowledge-console-takeover \
                     --core "$core" "$@"
             fi
@@ -467,6 +480,7 @@ run_privileged_session()
                 NIXBENCH_XWAYLAND_ROOTLESS="$xwayland_rootless" \
                 NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION="$xwayland_legacy_association" \
                 NIXBENCH_XWAYLAND="$xwayland" \
+                NIXBENCH_HTML_THEME="$html_theme" \
                 "$staged_session" --acknowledge-console-takeover \
                 --core "$core" "$@"
         fi

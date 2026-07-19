@@ -175,6 +175,7 @@ env PATH="$temporary/bin:/usr/bin:/bin" \
     NIXBENCH_SESSION_HELPER="$installed_helper" \
     NIXBENCH_SESSION_CORE="$installed_core" \
     NIXBENCH_GTK_MENU_BRIDGE=1 \
+    NIXBENCH_HTML_THEME=motif \
     NB_LAUNCH_STATUS=0 \
     NB_ABSENCE_STATUS=0 \
     NB_INITIAL_VT=1 \
@@ -185,6 +186,8 @@ env PATH="$temporary/bin:/usr/bin:/bin" \
 grep -F -- "$installed_helper --acknowledge-console-takeover" \
     "$installed_log" >/dev/null
 grep -F -- 'NIXBENCH_GTK_MENU_BRIDGE=1' "$installed_log" >/dev/null
+grep -F -- 'NIXBENCH_HTML_THEME=motif' "$installed_log" >/dev/null
+grep -F -- 'NIXBENCH_XWAYLAND_ROOTLESS=1' "$installed_log" >/dev/null
 grep -F -- 'NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION=0' \
     "$installed_log" >/dev/null
 if grep -F -- '/usr/bin/install' "$installed_log" >/dev/null ||
@@ -241,6 +244,7 @@ grep -F -- "--application $test_application" "$application_log" >/dev/null
 grep -F -- "application-argument=$test_application" "$application_log" \
     >/dev/null
 grep -F -- 'NIXBENCH_GTK_MENU_BRIDGE=1' "$application_log" >/dev/null
+grep -F -- 'NIXBENCH_XWAYLAND_ROOTLESS=1' "$application_log" >/dev/null
 grep -F -- 'NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION=0' \
     "$application_log" >/dev/null
 grep -F -- 'selected initial application will open automatically' \
@@ -348,6 +352,21 @@ if run_session 0 stall 0 0 1 \
 fi
 grep -F -- 'NIXBENCH_EXPECT_CORE_FAILURE must be crash or hang' \
     "$invalid_core_output" >/dev/null
+
+invalid_theme_log=$temporary/invalid-theme.log
+invalid_theme_output=$temporary/invalid-theme.out
+if printf '%s\n' START-NIXBENCH | \
+    env PATH="$temporary/bin:/usr/bin:/bin" \
+        SSH_CONNECTION='test test test test' \
+        NIXBENCH_BUILD_DIR="$temporary/build" \
+        NIXBENCH_HTML_THEME='../unsafe' \
+        NB_TEST_LOG="$invalid_theme_log" \
+        "$runner" >"$invalid_theme_output" 2>&1; then
+    echo "invalid NIXBENCH_HTML_THEME value was accepted" >&2
+    exit 1
+fi
+grep -F -- 'NIXBENCH_HTML_THEME must be classic, fantasy, motif, or beos' \
+    "$invalid_theme_output" >/dev/null
 
 relative_application_log=$temporary/relative-application.log
 relative_application_output=$temporary/relative-application.out
