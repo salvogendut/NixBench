@@ -789,6 +789,14 @@ _Noreturn void nb_session_credentials_drop_and_exec(
     const bool enable_legacy_xwayland_association =
         legacy_xwayland_association != NULL &&
         strcmp(legacy_xwayland_association, "1") == 0;
+    const char *html_theme = getenv("NIXBENCH_HTML_THEME");
+    const bool preserve_html_theme =
+        html_theme != NULL &&
+        (strcmp(html_theme, "classic") == 0 ||
+         strcmp(html_theme, "fantasy") == 0 ||
+         strcmp(html_theme, "cde") == 0 ||
+         strcmp(html_theme, "motif") == 0 ||
+         strcmp(html_theme, "beos") == 0);
     const char *trace_wayland = getenv("NIXBENCH_TRACE_WAYLAND");
     const bool enable_wayland_trace =
         trace_wayland != NULL && strcmp(trace_wayland, "1") == 0;
@@ -804,11 +812,12 @@ _Noreturn void nb_session_credentials_drop_and_exec(
     char xwayland_environment[NB_SESSION_CREDENTIALS_PATH_CAPACITY + 20];
     char legacy_xwayland_association_environment[] =
         "NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION=1";
+    char html_theme_environment[64];
     char trace_wayland_environment[] = "NIXBENCH_TRACE_WAYLAND=1";
     struct nb_session_group_list expected_groups;
     size_t environment_count = 0;
     int ipc_environment_length;
-    char *environment[12];
+    char *environment[13];
 
     if (!credential_record_is_valid(credentials) || core_path == NULL ||
         core_path[0] != '/' || core_argv == NULL || core_argv[0] == NULL ||
@@ -977,6 +986,17 @@ _Noreturn void nb_session_credentials_drop_and_exec(
     if (enable_legacy_xwayland_association) {
         environment[environment_count++] =
             legacy_xwayland_association_environment;
+    }
+    if (preserve_html_theme) {
+        if (!append_environment(html_theme_environment,
+                                sizeof(html_theme_environment),
+                                "NIXBENCH_HTML_THEME",
+                                html_theme)) {
+            child_failure(NB_SESSION_CREDENTIALS_SETUP_EXIT,
+                          "could not preserve the HTML theme selector",
+                          EOVERFLOW);
+        }
+        environment[environment_count++] = html_theme_environment;
     }
     if (enable_wayland_trace) {
         environment[environment_count++] = trace_wayland_environment;

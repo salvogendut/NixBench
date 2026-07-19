@@ -38,7 +38,28 @@ enum {
     NIXBENCH_SETTINGS_WINDOW_HEIGHT = 574,
     NIXBENCH_WALLPAPER_WINDOW_WIDTH = 800,
     NIXBENCH_WALLPAPER_WINDOW_HEIGHT = 580,
-    NIXBENCH_SHELL_KEY_CAPTURE_CAPACITY = 32
+    NIXBENCH_SHELL_KEY_CAPTURE_CAPACITY = 32,
+    NIXBENCH_CDE_DOCK_PREFERRED_WIDTH = 920,
+    NIXBENCH_CDE_DOCK_HEIGHT = 92,
+    NIXBENCH_CDE_DOCK_MARGIN = 12,
+    NIXBENCH_CDE_DOCK_CLOCK_WIDTH = 122,
+    NIXBENCH_CDE_DOCK_LAUNCH_X = 188,
+    NIXBENCH_CDE_DOCK_LAUNCH_WIDTH = 152,
+    NIXBENCH_CDE_DOCK_MINIMIZED_X = 340,
+    NIXBENCH_CDE_DOCK_MINIMIZED_WIDTH = 206,
+    NIXBENCH_CDE_DOCK_MINIMIZED_CAPACITY = 4,
+    NIXBENCH_FANTASY_DOCK_PREFERRED_WIDTH = 1200,
+    NIXBENCH_FANTASY_DOCK_HEIGHT = 210,
+    NIXBENCH_FANTASY_DOCK_MARGIN = 6,
+    NIXBENCH_FANTASY_INSET_LEFT = 100,
+    NIXBENCH_FANTASY_INSET_TOP = 205,
+    NIXBENCH_FANTASY_INSET_RIGHT = 105,
+    NIXBENCH_FANTASY_INSET_BOTTOM = 85,
+    NIXBENCH_FANTASY_CONTROL_TOP = 142,
+    NIXBENCH_FANTASY_CONTROL_RIGHT = 88,
+    NIXBENCH_FANTASY_CONTROL_WIDTH = 40,
+    NIXBENCH_FANTASY_CONTROL_HEIGHT = 62,
+    NIXBENCH_FANTASY_CONTROL_GAP = 6
 };
 
 #define NIXBENCH_MENU_SOURCE_DESKTOP UINT64_C(1)
@@ -185,6 +206,14 @@ struct nb_desktop_runtime {
     enum nb_settings_action settings_pressed_action;
     struct nb_wallpaper_chooser_action wallpaper_pressed_action;
     bool pending_preferences_changed;
+    bool cde_theme;
+    bool fantasy_theme;
+    struct nb_rect cde_dock;
+    bool cde_dock_dragging;
+    bool cde_dock_moved;
+    bool cde_context_button_down;
+    int cde_dock_drag_offset_x;
+    char cde_clock[16];
 #if NIXBENCH_HAS_WAYLAND
     struct nb_wayland_server *wayland;
     struct nb_wayland_renderer *wayland_renderer;
@@ -209,6 +238,190 @@ struct nb_desktop_runtime {
     bool render_damage_valid;
     struct nb_damage_region render_damage;
 };
+
+static bool has_theme_dock(const struct nb_desktop_runtime *runtime)
+{
+    return runtime != NULL &&
+           (runtime->cde_theme || runtime->fantasy_theme);
+}
+
+static bool rect_contains(struct nb_rect rect, int x, int y)
+{
+    return rect.width > 0 && rect.height > 0 && x >= rect.x && y >= rect.y &&
+           x < rect.x + rect.width && y < rect.y + rect.height;
+}
+
+static void layout_cde_dock(struct nb_desktop_runtime *runtime,
+                            bool preserve_horizontal_position)
+{
+    int width;
+    int height;
+    int x;
+
+    const int margin = runtime != NULL && runtime->fantasy_theme
+                           ? NIXBENCH_FANTASY_DOCK_MARGIN
+                           : NIXBENCH_CDE_DOCK_MARGIN;
+    const int preferred_width = runtime != NULL && runtime->fantasy_theme
+                                    ? NIXBENCH_FANTASY_DOCK_PREFERRED_WIDTH
+                                    : NIXBENCH_CDE_DOCK_PREFERRED_WIDTH;
+    const int preferred_height = runtime != NULL && runtime->fantasy_theme
+                                     ? NIXBENCH_FANTASY_DOCK_HEIGHT
+                                     : NIXBENCH_CDE_DOCK_HEIGHT;
+
+    if (!has_theme_dock(runtime) || runtime->viewport.width <= 0 ||
+        runtime->viewport.height <= 0) {
+        return;
+    }
+    width = runtime->viewport.width - (2 * margin);
+    if (width > preferred_width) {
+        width = preferred_width;
+    }
+    if (width < 1) {
+        width = runtime->viewport.width;
+    }
+    height = preferred_height;
+    if (height > runtime->viewport.height - margin) {
+        height = runtime->viewport.height - margin;
+    }
+    if (height < 1) {
+        height = runtime->viewport.height;
+    }
+    x = preserve_horizontal_position ? runtime->cde_dock.x
+                                     : (runtime->viewport.width - width) / 2;
+    if (x < 0) {
+        x = 0;
+    }
+    if (x > runtime->viewport.width - width) {
+        x = runtime->viewport.width - width;
+    }
+    runtime->cde_dock = (struct nb_rect){
+        x,
+        runtime->viewport.height - height - margin,
+        width,
+        height
+    };
+    if (runtime->cde_dock.y < 0) {
+        runtime->cde_dock.y = 0;
+    }
+}
+
+static enum nb_desktop_launch_request cde_dock_launcher_at(
+    const struct nb_desktop_runtime *runtime,
+    int x,
+    int y)
+{
+    int relative_x;
+    int launch_x;
+    int launch_width;
+    int slot;
+
+    if (runtime == NULL || !rect_contains(runtime->cde_dock, x, y)) {
+        return NB_DESKTOP_LAUNCH_NONE;
+    }
+    relative_x = x - runtime->cde_dock.x;
+    launch_x = runtime->fantasy_theme
+                   ? (runtime->cde_dock.width * 25) / 100
+                   : NIXBENCH_CDE_DOCK_LAUNCH_X;
+    launch_width = runtime->fantasy_theme
+                       ? (runtime->cde_dock.width * 225) / 1200
+                       : NIXBENCH_CDE_DOCK_LAUNCH_WIDTH;
+    if (launch_width <= 0 || relative_x < launch_x ||
+        relative_x >= launch_x + launch_width) {
+        return NB_DESKTOP_LAUNCH_NONE;
+    }
+    slot = ((relative_x - launch_x) * 3) / launch_width;
+    if (slot == 0) {
+        return NB_DESKTOP_LAUNCH_SAKURA;
+    }
+    if (slot == 1) {
+        return NB_DESKTOP_LAUNCH_MIDORI;
+    }
+    return NB_DESKTOP_LAUNCH_THUNAR;
+}
+
+static nb_window_id cde_dock_minimized_window_at(
+    const struct nb_desktop_runtime *runtime,
+    int x,
+    int y)
+{
+    size_t index;
+    size_t minimized_index = 0;
+    size_t requested_index;
+    int relative_x;
+    int relative_y;
+    int minimized_x;
+    int minimized_width;
+    int minimized_y;
+    int minimized_height;
+    int column;
+    int row;
+
+    if (runtime == NULL || !rect_contains(runtime->cde_dock, x, y)) {
+        return NB_WINDOW_ID_NONE;
+    }
+    relative_x = x - runtime->cde_dock.x;
+    relative_y = y - runtime->cde_dock.y;
+    minimized_x = runtime->fantasy_theme
+                      ? (runtime->cde_dock.width * 47) / 100
+                      : NIXBENCH_CDE_DOCK_MINIMIZED_X;
+    minimized_width = runtime->fantasy_theme
+                          ? (runtime->cde_dock.width * 36) / 100
+                          : NIXBENCH_CDE_DOCK_MINIMIZED_WIDTH;
+    minimized_y = runtime->fantasy_theme
+                      ? runtime->cde_dock.height - 93
+                      : 0;
+    minimized_height = runtime->fantasy_theme
+                           ? 67
+                           : runtime->cde_dock.height;
+    if (minimized_y < 0) {
+        minimized_y = 0;
+        minimized_height = runtime->cde_dock.height;
+    }
+    if (minimized_width <= 0 || minimized_height <= 0 ||
+        relative_x < minimized_x ||
+        relative_x >= minimized_x + minimized_width ||
+        relative_y < minimized_y ||
+        relative_y >= minimized_y + minimized_height) {
+        return NB_WINDOW_ID_NONE;
+    }
+    column = ((relative_x - minimized_x) * 2) / minimized_width;
+    row = ((relative_y - minimized_y) * 2) / minimized_height;
+    if (column < 0 || column > 1 || row < 0 || row > 1) {
+        return NB_WINDOW_ID_NONE;
+    }
+    requested_index = (size_t)(row * 2 + column);
+    for (index = 0;
+         index < nb_desktop_window_count(&runtime->shell.desktop);
+         ++index) {
+        const struct nb_window *window =
+            nb_desktop_window_at(&runtime->shell.desktop, index);
+
+        if (window == NULL || !window->visible || !window->minimized) {
+            continue;
+        }
+        if (minimized_index == requested_index) {
+            return nb_desktop_window_id_at(&runtime->shell.desktop, index);
+        }
+        if (++minimized_index == NIXBENCH_CDE_DOCK_MINIMIZED_CAPACITY) {
+            break;
+        }
+    }
+    return NB_WINDOW_ID_NONE;
+}
+
+static void apply_window_control_preferences(
+    struct nb_desktop_runtime *runtime)
+{
+    if (runtime == NULL) {
+        return;
+    }
+    nb_shell_set_window_controls(
+        &runtime->shell,
+        runtime->preferences.minimize_gadget_visible,
+        runtime->preferences.maximize_gadget_visible,
+        runtime->cde_theme ? NB_WINDOW_CONTROLS_SPLIT
+                           : runtime->preferences.window_control_layout);
+}
 
 static void clear_update(struct nb_desktop_runtime_update *update)
 {
@@ -362,6 +575,71 @@ static bool render_window_content(SDL_Renderer *renderer,
     return nb_window_render_default_content(renderer, window);
 }
 
+static bool render_window_decoration(SDL_Renderer *renderer,
+                                     nb_window_id id,
+                                     const struct nb_window *window,
+                                     void *context)
+{
+    struct nb_desktop_runtime *runtime = context;
+
+#if NIXBENCH_HAS_WAYLAND
+    if (runtime->wayland != NULL && runtime->wayland_renderer != NULL) {
+        if (runtime->fantasy_theme) {
+            return true;
+        }
+        return nb_wayland_render_decoration(renderer,
+                                            id,
+                                            window,
+                                            runtime->wayland_renderer);
+    }
+#else
+    (void)renderer;
+    (void)id;
+    (void)window;
+    (void)runtime;
+#endif
+    return true;
+}
+
+static bool render_window_base(SDL_Renderer *renderer,
+                               nb_window_id id,
+                               const struct nb_window *window,
+                               void *context)
+{
+    const struct nb_desktop_runtime *runtime = context;
+
+    (void)id;
+    if (runtime != NULL && runtime->fantasy_theme && !window->fullscreen) {
+        /* Preserve wallpaper through the irregular transparent silhouette. */
+        return true;
+    }
+    return nb_window_render_base(renderer, window);
+}
+
+static bool render_window_overlay(SDL_Renderer *renderer,
+                                  nb_window_id id,
+                                  const struct nb_window *window,
+                                  void *context)
+{
+    struct nb_desktop_runtime *runtime = context;
+
+#if NIXBENCH_HAS_WAYLAND
+    if (runtime->fantasy_theme && runtime->wayland != NULL &&
+        runtime->wayland_renderer != NULL) {
+        return nb_wayland_render_decoration(renderer,
+                                            id,
+                                            window,
+                                            runtime->wayland_renderer);
+    }
+#else
+    (void)renderer;
+    (void)id;
+    (void)window;
+    (void)runtime;
+#endif
+    return true;
+}
+
 static bool sync_application_focus(struct nb_desktop_runtime *runtime)
 {
     if (!nb_application_host_sync_focus(&runtime->applications)) {
@@ -428,6 +706,23 @@ static void start_wayland(struct nb_desktop_runtime *runtime)
                     "Could not initialize the nested Wayland display; "
                     "continuing without Wayland clients");
         return;
+    }
+    if (runtime->options.html_theme_token != NULL &&
+        !nb_wayland_server_enable_html_theme(
+            runtime->wayland,
+            runtime->options.html_theme_token,
+            runtime->options.html_theme_id,
+            runtime->options.html_theme_directory)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Could not enable the private HTML theme endpoint; "
+                    "continuing with Classic decorations");
+    }
+    if (has_theme_dock(runtime) &&
+        !nb_wayland_server_set_html_theme_shell_state(runtime->wayland,
+                                                       runtime->cde_dock,
+                                                       "00:00")) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Could not initialize the HTML desktop dock state");
     }
     runtime->wayland_renderer =
         nb_wayland_renderer_create(runtime->wayland);
@@ -738,20 +1033,12 @@ static bool apply_settings_action(struct nb_desktop_runtime *runtime,
         runtime->preferences.minimize_gadget_visible =
             !runtime->preferences.minimize_gadget_visible;
         changed = true;
-        nb_shell_set_window_controls(
-            &runtime->shell,
-            runtime->preferences.minimize_gadget_visible,
-            runtime->preferences.maximize_gadget_visible,
-            runtime->preferences.window_control_layout);
+        apply_window_control_preferences(runtime);
     } else if (action == NB_SETTINGS_ACTION_TOGGLE_MAXIMIZE) {
         runtime->preferences.maximize_gadget_visible =
             !runtime->preferences.maximize_gadget_visible;
         changed = true;
-        nb_shell_set_window_controls(
-            &runtime->shell,
-            runtime->preferences.minimize_gadget_visible,
-            runtime->preferences.maximize_gadget_visible,
-            runtime->preferences.window_control_layout);
+        apply_window_control_preferences(runtime);
     } else if (action == NB_SETTINGS_ACTION_CYCLE_CONTROL_LAYOUT) {
         runtime->preferences.window_control_layout =
             runtime->preferences.window_control_layout ==
@@ -759,11 +1046,7 @@ static bool apply_settings_action(struct nb_desktop_runtime *runtime,
                 ? NB_WINDOW_CONTROLS_RIGHT
                 : NB_WINDOW_CONTROLS_LEFT;
         changed = true;
-        nb_shell_set_window_controls(
-            &runtime->shell,
-            runtime->preferences.minimize_gadget_visible,
-            runtime->preferences.maximize_gadget_visible,
-            runtime->preferences.window_control_layout);
+        apply_window_control_preferences(runtime);
     } else if (action == NB_SETTINGS_ACTION_CHOOSE_WALLPAPER) {
         return show_wallpaper_window(runtime);
     } else if (action == NB_SETTINGS_ACTION_CYCLE_WALLPAPER_MODE) {
@@ -896,7 +1179,10 @@ static bool apply_shell_action(struct nb_desktop_runtime *runtime,
         return sync_application_focus(runtime);
     }
     if (action.type == NB_SHELL_ACTION_WINDOW_MAXIMIZE_TOGGLED) {
-        const struct nb_rect bounds = nb_menu_work_area(runtime->viewport);
+        const struct nb_rect bounds =
+            nb_shell_uses_floating_menu(&runtime->shell)
+                ? runtime->viewport
+                : nb_menu_work_area(runtime->viewport);
 
         if (!nb_desktop_toggle_window_maximized(&runtime->shell.desktop,
                                                 action.window,
@@ -1098,21 +1384,6 @@ static bool update_wayland_pointer(
                                             (uint32_t)milliseconds);
 }
 
-static bool maybe_resize_wayland_window(struct nb_desktop_runtime *runtime)
-{
-    nb_window_id window;
-
-    if (runtime->wayland == NULL ||
-        runtime->shell.pointer_owner != NB_SHELL_POINTER_WINDOW) {
-        return true;
-    }
-    window = runtime->shell.desktop.pointer_window;
-    if (window == NB_WINDOW_ID_NONE ||
-        !nb_wayland_server_owns_window(runtime->wayland, window)) {
-        return true;
-    }
-    return nb_wayland_server_window_resized(runtime->wayland, window);
-}
 #endif
 
 static bool process_pointer_event(const struct nb_host_event *event,
@@ -1126,6 +1397,29 @@ static bool process_pointer_event(const struct nb_host_event *event,
         x = event->data.pointer_motion.x;
         y = event->data.pointer_motion.y;
         remember_pointer(runtime, x, y);
+        if (runtime->cde_dock_dragging) {
+            int dock_x = x - runtime->cde_dock_drag_offset_x;
+
+            if (dock_x < 0) {
+                dock_x = 0;
+            }
+            if (dock_x > runtime->viewport.width - runtime->cde_dock.width) {
+                dock_x = runtime->viewport.width - runtime->cde_dock.width;
+            }
+            if (dock_x != runtime->cde_dock.x) {
+                runtime->cde_dock.x = dock_x;
+                runtime->cde_dock_moved = true;
+#if NIXBENCH_HAS_WAYLAND
+                if (runtime->wayland != NULL &&
+                    !nb_wayland_server_set_html_theme_shell_state(
+                        runtime->wayland,
+                        runtime->cde_dock,
+                        runtime->cde_clock)) {
+                    return false;
+                }
+#endif
+            }
+        }
         if (nb_shell_wants_pointer_motion(&runtime->shell)) {
             (void)nb_shell_pointer_move(&runtime->shell,
                                         x,
@@ -1177,6 +1471,15 @@ static bool process_pointer_event(const struct nb_host_event *event,
                     true);
             }
 #endif
+            /* HTML docks are composited above application windows, so their
+             * input region must take the same precedence as their pixels. */
+            if (has_theme_dock(runtime) &&
+                rect_contains(runtime->cde_dock, x, y)) {
+                runtime->cde_dock_dragging = true;
+                runtime->cde_dock_moved = false;
+                runtime->cde_dock_drag_offset_x = x - runtime->cde_dock.x;
+                return true;
+            }
             runtime->settings_pressed_action = NB_SETTINGS_ACTION_NONE;
             runtime->wallpaper_pressed_action =
                 (struct nb_wallpaper_chooser_action){
@@ -1219,6 +1522,7 @@ static bool process_pointer_event(const struct nb_host_event *event,
                 return false;
             }
 #if NIXBENCH_HAS_WAYLAND
+            nb_wayland_server_html_theme_state_changed(runtime->wayland);
             {
                 const nb_window_id hover_window =
                     wayland_hover_window(runtime, target);
@@ -1272,6 +1576,55 @@ static bool process_pointer_event(const struct nb_host_event *event,
                     false);
             }
 #endif
+            if (runtime->cde_dock_dragging) {
+                const int clock_x = runtime->fantasy_theme
+                                        ? runtime->cde_dock.x +
+                                              (runtime->cde_dock.width * 16) /
+                                                  100
+                                        : runtime->cde_dock.x;
+                const int clock_width = runtime->fantasy_theme
+                                            ? 76
+                                            : NIXBENCH_CDE_DOCK_CLOCK_WIDTH;
+                const bool clock_clicked =
+                    !runtime->cde_dock_moved &&
+                    x >= clock_x && x < clock_x + clock_width &&
+                    y >= runtime->cde_dock.y &&
+                    y < runtime->cde_dock.y + runtime->cde_dock.height;
+                const enum nb_desktop_launch_request launch_request =
+                    !runtime->cde_dock_moved
+                        ? cde_dock_launcher_at(runtime, x, y)
+                        : NB_DESKTOP_LAUNCH_NONE;
+                const nb_window_id minimized_window =
+                    !runtime->cde_dock_moved
+                        ? cde_dock_minimized_window_at(runtime, x, y)
+                        : NB_WINDOW_ID_NONE;
+
+                runtime->cde_dock_dragging = false;
+                if (launch_request != NB_DESKTOP_LAUNCH_NONE) {
+                    runtime->pending_launch_request = launch_request;
+                } else if (minimized_window != NB_WINDOW_ID_NONE) {
+                    const struct nb_shell_action restore_action = {
+                        NB_SHELL_ACTION_WINDOW_MINIMIZE_TOGGLED,
+                        minimized_window,
+                        NB_MENU_SOURCE_NONE,
+                        NB_MENU_COMMAND_NONE
+                    };
+
+                    if (!apply_shell_action(runtime, restore_action)) {
+                        return false;
+                    }
+#if NIXBENCH_HAS_WAYLAND
+                    if (runtime->wayland != NULL) {
+                        nb_wayland_server_html_theme_state_changed(
+                            runtime->wayland);
+                    }
+#endif
+                } else if (clock_clicked) {
+                    runtime->pending_launch_request =
+                        NB_DESKTOP_LAUNCH_NIXCLOCK;
+                }
+                return true;
+            }
             {
                 const struct nb_shell_action action =
                     nb_shell_pointer_up(&runtime->shell,
@@ -1323,6 +1676,7 @@ static bool process_pointer_event(const struct nb_host_event *event,
                                                 x,
                                                 y,
                                                 runtime->viewport);
+            nb_wayland_server_html_theme_state_changed(runtime->wayland);
             if (!update_wayland_pointer(runtime,
                                         target,
                                         x,
@@ -1331,6 +1685,29 @@ static bool process_pointer_event(const struct nb_host_event *event,
                 return false;
             }
 #endif
+        }
+        return true;
+    }
+
+    if (has_theme_dock(runtime) &&
+        event->data.pointer_button.button == NB_HOST_POINTER_BUTTON_RIGHT &&
+        (runtime->cde_context_button_down ||
+         target.window == NB_WINDOW_ID_NONE)) {
+        if (event->data.pointer_button.pressed) {
+            runtime->cde_context_button_down =
+                nb_shell_open_context_menu(&runtime->shell,
+                                           x,
+                                           y,
+                                           runtime->viewport);
+            if (!runtime->cde_context_button_down ||
+                !sync_application_focus(runtime)) {
+                return false;
+            }
+#if NIXBENCH_HAS_WAYLAND
+            nb_wayland_server_html_theme_state_changed(runtime->wayland);
+#endif
+        } else {
+            runtime->cde_context_button_down = false;
         }
         return true;
     }
@@ -1543,6 +1920,8 @@ static void cancel_pointer_input(struct nb_desktop_runtime *runtime,
                                  uint64_t milliseconds)
 {
     runtime->settings_pressed_action = NB_SETTINGS_ACTION_NONE;
+    runtime->cde_dock_dragging = false;
+    runtime->cde_context_button_down = false;
     nb_shell_pointer_cancel(&runtime->shell);
 #if NIXBENCH_HAS_WAYLAND
     nb_wayland_server_pointer_cancel(runtime->wayland,
@@ -1735,6 +2114,14 @@ struct nb_desktop_runtime *nb_desktop_runtime_create(
     if (options->publish_wayland_socket && !options->enable_wayland) {
         return NULL;
     }
+    if ((options->html_theme_token != NULL ||
+         options->html_theme_id != NULL ||
+         options->html_theme_directory != NULL) &&
+        (!options->enable_wayland || options->html_theme_token == NULL ||
+         options->html_theme_id == NULL ||
+         options->html_theme_directory == NULL)) {
+        return NULL;
+    }
     if (options->preferences != NULL &&
         !nb_user_preferences_is_valid(options->preferences)) {
         return NULL;
@@ -1745,6 +2132,14 @@ struct nb_desktop_runtime *nb_desktop_runtime_create(
         return NULL;
     }
     runtime->options = *options;
+    runtime->cde_theme = options->html_theme_id != NULL &&
+                         strcmp(options->html_theme_id, "cde") == 0;
+    runtime->fantasy_theme = options->html_theme_id != NULL &&
+                             strcmp(options->html_theme_id, "fantasy") == 0;
+    (void)snprintf(runtime->cde_clock,
+                   sizeof(runtime->cde_clock),
+                   "%s",
+                   "00:00");
     runtime->about_window = NB_WINDOW_ID_NONE;
     runtime->settings_window = NB_WINDOW_ID_NONE;
     runtime->wallpaper_window = NB_WINDOW_ID_NONE;
@@ -1763,11 +2158,34 @@ struct nb_desktop_runtime *nb_desktop_runtime_create(
     nb_shell_init(&runtime->shell,
                   NIXBENCH_MENU_SOURCE_DESKTOP,
                   &desktop_menu_model);
-    nb_shell_set_window_controls(
-        &runtime->shell,
-        runtime->preferences.minimize_gadget_visible,
-        runtime->preferences.maximize_gadget_visible,
-        runtime->preferences.window_control_layout);
+    apply_window_control_preferences(runtime);
+    if (has_theme_dock(runtime)) {
+        nb_shell_set_floating_menu(&runtime->shell, true);
+    }
+    if (runtime->cde_theme) {
+        nb_shell_set_window_menu_height(&runtime->shell,
+                                        NB_WINDOW_MENU_HEIGHT);
+    } else if (runtime->fantasy_theme) {
+        nb_shell_set_window_decoration_insets(
+            &runtime->shell,
+            (struct nb_window_decoration_insets){
+                NIXBENCH_FANTASY_INSET_LEFT,
+                NIXBENCH_FANTASY_INSET_TOP,
+                NIXBENCH_FANTASY_INSET_RIGHT,
+                NIXBENCH_FANTASY_INSET_BOTTOM
+            });
+        nb_shell_set_window_decoration_controls(
+            &runtime->shell,
+            (struct nb_window_decoration_controls){
+                NIXBENCH_FANTASY_CONTROL_TOP,
+                NIXBENCH_FANTASY_CONTROL_RIGHT,
+                NIXBENCH_FANTASY_CONTROL_WIDTH,
+                NIXBENCH_FANTASY_CONTROL_HEIGHT,
+                NIXBENCH_FANTASY_CONTROL_GAP
+            });
+        nb_shell_set_window_decoration_frame_draggable(&runtime->shell,
+                                                        true);
+    }
     rebuild_launcher_menu(runtime);
     if (!nb_application_host_init(&runtime->applications,
                                   &runtime->shell)) {
@@ -1874,6 +2292,7 @@ bool nb_desktop_runtime_set_output(
     runtime->canvas = canvas;
     runtime->output = *output;
     runtime->viewport = viewport;
+    layout_cde_dock(runtime, false);
     runtime->pointer_x = clamp_coordinate(runtime->pointer_x,
                                           viewport.width);
     runtime->pointer_y = clamp_coordinate(runtime->pointer_y,
@@ -2264,6 +2683,17 @@ bool nb_desktop_runtime_render_region(
         bar_text = countdown_text;
     }
 #if NIXBENCH_HAS_WAYLAND
+    if (has_theme_dock(runtime) && runtime->wayland != NULL) {
+        (void)snprintf(runtime->cde_clock,
+                       sizeof(runtime->cde_clock),
+                       "%s",
+                       clock_text);
+        if (!nb_wayland_server_set_html_theme_shell_state(runtime->wayland,
+                                                           runtime->cde_dock,
+                                                           runtime->cde_clock)) {
+            return false;
+        }
+    }
     nb_wayland_renderer_set_damage(runtime->wayland_renderer, damage);
 #endif
     if (damage != NULL) {
@@ -2280,13 +2710,25 @@ bool nb_desktop_runtime_render_region(
     rendered = nb_backdrop_cache_render(runtime->backdrop_cache,
                                         renderer,
                                         runtime->viewport,
-                                        &runtime->preferences) &&
-               nb_shell_render_with_content(renderer,
-                                            &runtime->shell,
-                                            runtime->viewport,
-                                            bar_text,
-                                            render_window_content,
-                                            runtime) &&
+                                        &runtime->preferences);
+#if NIXBENCH_HAS_WAYLAND
+    if (rendered && runtime->wayland_renderer != NULL) {
+        rendered = nb_wayland_render_desktop(renderer,
+                                             runtime->viewport,
+                                             runtime->wayland_renderer);
+    }
+#endif
+    rendered = rendered &&
+               nb_shell_render_with_layer_callbacks(
+                   renderer,
+                   &runtime->shell,
+                   runtime->viewport,
+                   bar_text,
+                   render_window_base,
+                   render_window_decoration,
+                   render_window_content,
+                   render_window_overlay,
+                   runtime) &&
                render_screenshot_status(renderer, runtime) &&
                (!runtime->pointer_visible ||
                 render_software_pointer(renderer,
@@ -2355,7 +2797,8 @@ bool nb_desktop_runtime_wants_pointer_capture(
     if (runtime == NULL) {
         return false;
     }
-    wanted = nb_shell_has_pointer_interaction(&runtime->shell);
+    wanted = nb_shell_has_pointer_interaction(&runtime->shell) ||
+             runtime->cde_dock_dragging;
 #if NIXBENCH_HAS_WAYLAND
     wanted = wanted ||
              (runtime->wayland != NULL &&

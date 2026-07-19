@@ -47,6 +47,29 @@ option(
 )
 
 set(
+  NIXBENCH_HTML_THEMES "AUTO"
+  CACHE STRING "Build the experimental WebKitGTK HTML theme renderer (AUTO, ON, or OFF)"
+)
+set_property(CACHE NIXBENCH_HTML_THEMES PROPERTY STRINGS AUTO ON OFF)
+string(TOUPPER "${NIXBENCH_HTML_THEMES}" NIXBENCH_HTML_THEMES)
+set(
+  NIXBENCH_HTML_THEMES "${NIXBENCH_HTML_THEMES}"
+  CACHE STRING "Build the experimental WebKitGTK HTML theme renderer (AUTO, ON, or OFF)"
+  FORCE
+)
+if(
+  NOT NIXBENCH_HTML_THEMES STREQUAL "AUTO"
+  AND NOT NIXBENCH_HTML_THEMES STREQUAL "ON"
+  AND NOT NIXBENCH_HTML_THEMES STREQUAL "OFF"
+)
+  message(
+    FATAL_ERROR
+    "NIXBENCH_HTML_THEMES must be one of AUTO, ON, or OFF "
+    "(received '${NIXBENCH_HTML_THEMES}')"
+  )
+endif()
+
+set(
   NIXBENCH_LIBDRM "AUTO"
   CACHE STRING "Build detailed DRM/KMS capability queries (AUTO, ON, or OFF)"
 )
@@ -340,6 +363,22 @@ if(NIXBENCH_WAYLAND_ENABLED)
     NIXBENCH_APPLICATION_MENU_PRIVATE_CODE
     "${NIXBENCH_WAYLAND_GENERATED_DIR}/nixbench-application-menu-v1-protocol.c"
   )
+  set(
+    NIXBENCH_HTML_THEME_XML
+    "${CMAKE_CURRENT_SOURCE_DIR}/protocols/nixbench-html-theme-v1.xml"
+  )
+  set(
+    NIXBENCH_HTML_THEME_SERVER_HEADER
+    "${NIXBENCH_WAYLAND_GENERATED_DIR}/nixbench-html-theme-v1-server-protocol.h"
+  )
+  set(
+    NIXBENCH_HTML_THEME_CLIENT_HEADER
+    "${NIXBENCH_WAYLAND_GENERATED_DIR}/nixbench-html-theme-v1-client-protocol.h"
+  )
+  set(
+    NIXBENCH_HTML_THEME_PRIVATE_CODE
+    "${NIXBENCH_WAYLAND_GENERATED_DIR}/nixbench-html-theme-v1-protocol.c"
+  )
   if(NIXBENCH_WAYLAND_DECORATION_ENABLED)
     set(
       NIXBENCH_XDG_DECORATION_SERVER_HEADER
@@ -369,6 +408,9 @@ if(NIXBENCH_WAYLAND_ENABLED)
       "${NIXBENCH_APPLICATION_MENU_SERVER_HEADER}"
       "${NIXBENCH_APPLICATION_MENU_CLIENT_HEADER}"
       "${NIXBENCH_APPLICATION_MENU_PRIVATE_CODE}"
+      "${NIXBENCH_HTML_THEME_SERVER_HEADER}"
+      "${NIXBENCH_HTML_THEME_CLIENT_HEADER}"
+      "${NIXBENCH_HTML_THEME_PRIVATE_CODE}"
     COMMAND
       "${CMAKE_COMMAND}" -E make_directory
       "${NIXBENCH_WAYLAND_GENERATED_DIR}"
@@ -396,9 +438,22 @@ if(NIXBENCH_WAYLAND_ENABLED)
       "${NIXBENCH_WAYLAND_SCANNER}" --strict private-code
       "${NIXBENCH_APPLICATION_MENU_XML}"
       "${NIXBENCH_APPLICATION_MENU_PRIVATE_CODE}"
+    COMMAND
+      "${NIXBENCH_WAYLAND_SCANNER}" --strict server-header
+      "${NIXBENCH_HTML_THEME_XML}"
+      "${NIXBENCH_HTML_THEME_SERVER_HEADER}"
+    COMMAND
+      "${NIXBENCH_WAYLAND_SCANNER}" --strict client-header
+      "${NIXBENCH_HTML_THEME_XML}"
+      "${NIXBENCH_HTML_THEME_CLIENT_HEADER}"
+    COMMAND
+      "${NIXBENCH_WAYLAND_SCANNER}" --strict private-code
+      "${NIXBENCH_HTML_THEME_XML}"
+      "${NIXBENCH_HTML_THEME_PRIVATE_CODE}"
     DEPENDS
       "${NIXBENCH_XDG_SHELL_XML}"
       "${NIXBENCH_APPLICATION_MENU_XML}"
+      "${NIXBENCH_HTML_THEME_XML}"
     COMMENT "Generating the Wayland protocol bindings"
     VERBATIM
   )
@@ -464,6 +519,9 @@ if(NIXBENCH_WAYLAND_ENABLED)
       "${NIXBENCH_APPLICATION_MENU_SERVER_HEADER}"
       "${NIXBENCH_APPLICATION_MENU_CLIENT_HEADER}"
       "${NIXBENCH_APPLICATION_MENU_PRIVATE_CODE}"
+      "${NIXBENCH_HTML_THEME_SERVER_HEADER}"
+      "${NIXBENCH_HTML_THEME_CLIENT_HEADER}"
+      "${NIXBENCH_HTML_THEME_PRIVATE_CODE}"
   )
 
   add_library(
@@ -471,6 +529,7 @@ if(NIXBENCH_WAYLAND_ENABLED)
     src/wayland_server.c
     "${NIXBENCH_XDG_SHELL_PRIVATE_CODE}"
     "${NIXBENCH_APPLICATION_MENU_PRIVATE_CODE}"
+    "${NIXBENCH_HTML_THEME_PRIVATE_CODE}"
   )
   if(NIXBENCH_WAYLAND_DECORATION_ENABLED)
     target_sources(
@@ -566,6 +625,67 @@ if(NIXBENCH_WAYLAND_ENABLED)
   endif()
 endif()
 
+set(NIXBENCH_HTML_THEMES_AVAILABLE FALSE)
+set(NIXBENCH_WEBKITGTK_TARGET "")
+if(NIXBENCH_HTML_THEMES STREQUAL "OFF")
+  message(STATUS "HTML theme renderer disabled")
+elseif(NOT NIXBENCH_WAYLAND_ENABLED OR NOT NIXBENCH_WAYLAND_CLIENT_AVAILABLE)
+  if(NIXBENCH_HTML_THEMES STREQUAL "ON")
+    message(
+      FATAL_ERROR
+      "The HTML theme renderer requires Wayland server and client support"
+    )
+  else()
+    message(STATUS "HTML theme renderer unavailable: Wayland support disabled")
+  endif()
+else()
+  find_package(PkgConfig QUIET)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(
+      NIXBENCH_WEBKITGTK_41
+      QUIET IMPORTED_TARGET
+      webkit2gtk-4.1
+      gdk-wayland-3.0
+    )
+    if(NIXBENCH_WEBKITGTK_41_FOUND)
+      set(NIXBENCH_HTML_THEMES_AVAILABLE TRUE)
+      set(NIXBENCH_WEBKITGTK_TARGET PkgConfig::NIXBENCH_WEBKITGTK_41)
+      set(NIXBENCH_WEBKITGTK_API "4.1")
+    else()
+      pkg_check_modules(
+        NIXBENCH_WEBKITGTK_40
+        QUIET IMPORTED_TARGET
+        webkit2gtk-4.0
+        gdk-wayland-3.0
+      )
+      if(NIXBENCH_WEBKITGTK_40_FOUND)
+        set(NIXBENCH_HTML_THEMES_AVAILABLE TRUE)
+        set(NIXBENCH_WEBKITGTK_TARGET PkgConfig::NIXBENCH_WEBKITGTK_40)
+        set(NIXBENCH_WEBKITGTK_API "4.0")
+      endif()
+    endif()
+  endif()
+
+  if(NIXBENCH_HTML_THEMES_AVAILABLE)
+    message(
+      STATUS
+      "HTML theme renderer dependencies found (WebKitGTK ${NIXBENCH_WEBKITGTK_API})"
+    )
+  elseif(NIXBENCH_HTML_THEMES STREQUAL "ON")
+    message(
+      FATAL_ERROR
+      "The HTML theme renderer was requested, but WebKitGTK 4.0/4.1 and "
+      "gdk-wayland-3.0 were not found"
+    )
+  else()
+    message(
+      STATUS
+      "HTML theme renderer unavailable: WebKitGTK 4.0/4.1 or "
+      "gdk-wayland-3.0 not found"
+    )
+  endif()
+endif()
+
 add_library(
   nixbench_preferences STATIC
   src/preferences.c
@@ -576,6 +696,66 @@ target_include_directories(
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 nixbench_configure_c_target(nixbench_preferences)
+
+add_library(nixbench_themes STATIC src/theme_bundle.c)
+target_include_directories(
+  nixbench_themes
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+nixbench_configure_c_target(nixbench_themes)
+
+add_library(nixbench_theme_atlas STATIC src/theme_atlas.c)
+target_include_directories(
+  nixbench_theme_atlas
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+nixbench_configure_c_target(nixbench_theme_atlas)
+
+if(NIXBENCH_WAYLAND_ENABLED)
+  target_link_libraries(nixbench_wayland PRIVATE nixbench_theme_atlas)
+endif()
+
+if(NIXBENCH_HTML_THEMES_AVAILABLE)
+  add_executable(
+    nixbench-html-theme-renderer
+    src/html_theme_renderer.c
+    "${NIXBENCH_HTML_THEME_PRIVATE_CODE}"
+  )
+  add_dependencies(nixbench-html-theme-renderer nixbench_wayland_protocol)
+  target_include_directories(
+    nixbench-html-theme-renderer
+    PRIVATE
+      "${NIXBENCH_WAYLAND_GENERATED_DIR}"
+      "${NIXBENCH_WAYLAND_CLIENT_INCLUDE_DIR}"
+  )
+  target_compile_definitions(
+    nixbench-html-theme-renderer
+    PRIVATE NIXBENCH_HTML_THEME_RENDERER_VERSION="${PROJECT_VERSION}"
+  )
+  target_link_libraries(
+    nixbench-html-theme-renderer
+    PRIVATE
+      nixbench_themes
+      nixbench_theme_atlas
+      "${NIXBENCH_WEBKITGTK_TARGET}"
+      "${NIXBENCH_WAYLAND_CLIENT_LIBRARY}"
+  )
+  nixbench_configure_c_target(nixbench-html-theme-renderer)
+  install(
+    TARGETS nixbench-html-theme-renderer
+    RUNTIME DESTINATION "${CMAKE_INSTALL_LIBEXECDIR}/nixbench"
+  )
+  if(BUILD_TESTING)
+    add_test(
+      NAME nixbench.html-theme-renderer.help
+      COMMAND nixbench-html-theme-renderer --help
+    )
+    add_test(
+      NAME nixbench.html-theme-renderer.version
+      COMMAND nixbench-html-theme-renderer --version
+    )
+  endif()
+endif()
 
 add_library(
   nixbench_filesystem STATIC
@@ -952,6 +1132,17 @@ install(
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
 
+install(
+  DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/themes/"
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/nixbench/themes"
+  FILES_MATCHING
+    PATTERN "theme.conf"
+    PATTERN "*.html"
+    PATTERN "*.css"
+    PATTERN "*.svg"
+    PATTERN "*.png"
+)
+
 set(NIXBENCH_WAYLAND_DEMO_AVAILABLE FALSE)
 if(
   NIXBENCH_WAYLAND_ENABLED
@@ -1322,6 +1513,21 @@ if(
       "NB_SESSION_INSTALLED_NIXCLOCK_PATH=\"${CMAKE_INSTALL_FULL_BINDIR}/nixclock\""
       "NB_SESSION_INSTALLED_GTK_MODULE_PATH=\"${CMAKE_INSTALL_FULL_LIBDIR}/gtk-3.0/modules/${CMAKE_SHARED_MODULE_PREFIX}nixbench_gtk_menu_bridge${CMAKE_SHARED_MODULE_SUFFIX}\""
   )
+  if(NIXBENCH_HTML_THEMES_AVAILABLE)
+    target_link_libraries(nixbench_session_core PRIVATE nixbench_themes)
+    target_compile_definitions(
+      nixbench_session_core
+      PRIVATE
+        NIXBENCH_HAS_HTML_THEMES=1
+        "NB_SESSION_INSTALLED_HTML_RENDERER_PATH=\"${CMAKE_INSTALL_FULL_LIBEXECDIR}/nixbench/nixbench-html-theme-renderer\""
+        "NB_SESSION_INSTALLED_THEME_DIRECTORY=\"${CMAKE_INSTALL_FULL_DATADIR}/nixbench/themes\""
+    )
+  else()
+    target_compile_definitions(
+      nixbench_session_core
+      PRIVATE NIXBENCH_HAS_HTML_THEMES=0
+    )
+  endif()
   if(NIXBENCH_ROOTLESS_XWAYLAND_AVAILABLE)
     target_link_libraries(
       nixbench_session_core
@@ -1647,6 +1853,25 @@ if(BUILD_TESTING)
     PRIVATE nixbench_preferences
   )
   nixbench_configure_c_target(nixbench_user_config_tests)
+
+  add_executable(nixbench_theme_bundle_tests tests/theme_bundle_test.c)
+  target_compile_definitions(
+    nixbench_theme_bundle_tests
+    PRIVATE
+      NIXBENCH_SOURCE_THEME_DIR="${CMAKE_CURRENT_SOURCE_DIR}/themes"
+  )
+  target_link_libraries(
+    nixbench_theme_bundle_tests
+    PRIVATE nixbench_themes
+  )
+  nixbench_configure_c_target(nixbench_theme_bundle_tests)
+
+  add_executable(nixbench_theme_atlas_tests tests/theme_atlas_test.c)
+  target_link_libraries(
+    nixbench_theme_atlas_tests
+    PRIVATE nixbench_theme_atlas
+  )
+  nixbench_configure_c_target(nixbench_theme_atlas_tests)
 
   add_executable(
     nixbench_framebuffer_format_tests
@@ -2017,6 +2242,8 @@ if(BUILD_TESTING)
   )
   add_test(NAME nixbench.window.model COMMAND nixbench_window_tests)
   add_test(NAME nixbench.user-config COMMAND nixbench_user_config_tests)
+  add_test(NAME nixbench.theme-bundles COMMAND nixbench_theme_bundle_tests)
+  add_test(NAME nixbench.theme-atlas COMMAND nixbench_theme_atlas_tests)
   add_test(NAME nixbench.menu.model COMMAND nixbench_menu_tests)
   add_test(NAME nixbench.shell.model COMMAND nixbench_shell_tests)
   add_test(NAME nixbench.application.model COMMAND nixbench_application_tests)

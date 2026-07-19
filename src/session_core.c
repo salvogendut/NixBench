@@ -26,11 +26,27 @@
 #define NB_SESSION_INSTALLED_GTK_MODULE_PATH ""
 #endif
 
+#ifndef NB_SESSION_INSTALLED_HTML_RENDERER_PATH
+#define NB_SESSION_INSTALLED_HTML_RENDERER_PATH ""
+#endif
+
+#ifndef NB_SESSION_INSTALLED_THEME_DIRECTORY
+#define NB_SESSION_INSTALLED_THEME_DIRECTORY ""
+#endif
+
 #include "desktop_runtime.h"
 #include "host.h"
 #include "host_privsep_client.h"
 #include "session_frame_pacing.h"
 #include "user_config.h"
+
+#ifndef NIXBENCH_HAS_HTML_THEMES
+#define NIXBENCH_HAS_HTML_THEMES 0
+#endif
+
+#if NIXBENCH_HAS_HTML_THEMES
+#include "theme_bundle.h"
+#endif
 
 #ifndef NIXBENCH_HAS_ROOTLESS_XWAYLAND
 #define NIXBENCH_HAS_ROOTLESS_XWAYLAND 0
@@ -50,7 +66,10 @@ enum {
     NB_SESSION_CORE_APPLICATION_EXIT_TIMEOUT_MS = 2000,
     NB_SESSION_CORE_APPLICATION_WAIT_SLICE_MS = 20,
     NB_SESSION_CORE_CLOCK_FALLBACK_WAIT_MS = 1000,
-    NB_SESSION_CORE_MAX_APPLICATIONS = 16
+    NB_SESSION_CORE_MAX_APPLICATIONS = 16,
+    NB_SESSION_CORE_HTML_TOKEN_BYTES = 32,
+    NB_SESSION_CORE_HTML_TOKEN_CAPACITY =
+        NB_SESSION_CORE_HTML_TOKEN_BYTES * 2 + 1
 };
 
 #define NB_SESSION_CORE_SHUTDOWN_TOKEN UINT64_C(0x4e4253485554444e)
@@ -65,6 +84,7 @@ struct nb_session_runtime_directory {
 struct nb_session_application {
     pid_t pid;
     bool initial;
+    bool service;
     char path[PATH_MAX];
 };
 
@@ -299,6 +319,113 @@ static bool resolve_program_file(const struct nb_session_core *core,
     return access(path, access_mode) == 0;
 }
 
+#if NIXBENCH_HAS_HTML_THEMES
+static const char *html_theme_directory_name(const char *id)
+{
+    if (id == NULL) {
+        return NULL;
+    }
+    if (strcmp(id, "fantasy") == 0) {
+        return "Fantasy";
+    }
+    if (strcmp(id, "cde") == 0) {
+        return "CDE";
+    }
+    if (strcmp(id, "beos") == 0) {
+        return "BeOS";
+    }
+    return NULL;
+}
+
+static const char *canonical_html_theme_id(const char *id)
+{
+    return id != NULL && strcmp(id, "motif") == 0 ? "cde" : id;
+}
+
+static bool fill_random_token(
+    char token[NB_SESSION_CORE_HTML_TOKEN_CAPACITY])
+{
+    static const char hexadecimal[] = "0123456789abcdef";
+    unsigned char bytes[NB_SESSION_CORE_HTML_TOKEN_BYTES];
+    size_t used = 0;
+    int descriptor = open("/dev/urandom", O_RDONLY);
+
+    if (descriptor < 0) {
+        return false;
+    }
+    while (used < sizeof(bytes)) {
+        const ssize_t count = read(descriptor,
+                                   bytes + used,
+                                   sizeof(bytes) - used);
+
+        if (count > 0) {
+            used += (size_t)count;
+        } else if (count < 0 && errno == EINTR) {
+            continue;
+        } else {
+            (void)close(descriptor);
+            return false;
+        }
+    }
+    if (close(descriptor) != 0) {
+        return false;
+    }
+    for (used = 0; used < sizeof(bytes); ++used) {
+        token[used * 2] = hexadecimal[bytes[used] >> 4U];
+        token[used * 2 + 1] = hexadecimal[bytes[used] & 0x0fU];
+    }
+    token[sizeof(bytes) * 2] = '\0';
+    return true;
+}
+
+static bool load_html_theme(const struct nb_session_core *core,
+                            const char *id,
+                            struct nb_theme_bundle *bundle,
+                            char *error,
+                            size_t error_capacity)
+{
+    const char *name = html_theme_directory_name(id);
+    char directory[PATH_MAX];
+    int length;
+
+    if (name == NULL) {
+        (void)snprintf(error,
+                       error_capacity,
+                       "unknown HTML theme id: %s",
+                       id != NULL ? id : "(null)");
+        return false;
+    }
+    length = snprintf(directory,
+                      sizeof(directory),
+                      "%s/../themes/%s",
+                      core->program_directory,
+                      name);
+    if (length >= 0 && (size_t)length < sizeof(directory) &&
+        nb_theme_bundle_load(directory, bundle, error, error_capacity) &&
+        strcmp(bundle->id, id) == 0) {
+        return true;
+    }
+    length = snprintf(directory,
+                      sizeof(directory),
+                      "%s/%s",
+                      NB_SESSION_INSTALLED_THEME_DIRECTORY,
+                      name);
+    if (NB_SESSION_INSTALLED_THEME_DIRECTORY[0] != '\0' && length >= 0 &&
+        (size_t)length < sizeof(directory) &&
+        nb_theme_bundle_load(directory, bundle, error, error_capacity) &&
+        strcmp(bundle->id, id) == 0) {
+        return true;
+    }
+    if (error != NULL && error_capacity > 0 && error[0] == '\0') {
+        (void)snprintf(error,
+                       error_capacity,
+                       "theme bundle %s is unavailable",
+                       id);
+    }
+    return false;
+}
+#endif
+
 static bool prepare_application_environment(struct nb_session_core *core)
 {
     char module_path[PATH_MAX] = {0};
@@ -352,8 +479,10 @@ static struct nb_session_application *free_application_slot(
 
 static bool launch_application(struct nb_session_core *core,
                                const char *path,
+                               const char *const *arguments,
                                bool initial,
                                bool software_webkit,
+                               bool service,
                                pid_t *launched_pid)
 {
     struct nb_session_application *slot;
@@ -415,8 +544,13 @@ static bool launch_application(struct nb_session_core *core,
         size_t remaining;
 
         (void)close(exec_pipe[0]);
-        if (software_webkit &&
-            setenv("WEBKIT_DISABLE_COMPOSITING_MODE", "1", 1) != 0) {
+        if (service && unsetenv("GTK3_MODULES") != 0) {
+            exec_error = errno;
+        } else if (software_webkit &&
+                   setenv("WEBKIT_DISABLE_COMPOSITING_MODE", "1", 1) != 0) {
+            exec_error = errno;
+        } else if (arguments != NULL) {
+            execv(path, (char *const *)arguments);
             exec_error = errno;
         } else {
             execl(path, path, (char *)NULL);
@@ -476,6 +610,7 @@ static bool launch_application(struct nb_session_core *core,
     }
     slot->pid = child;
     slot->initial = initial;
+    slot->service = service;
     (void)snprintf(slot->path, sizeof(slot->path), "%s", path);
     if (launched_pid != NULL) {
         *launched_pid = child;
@@ -483,12 +618,62 @@ static bool launch_application(struct nb_session_core *core,
     return true;
 }
 
+#if NIXBENCH_HAS_HTML_THEMES
+static bool launch_html_theme_renderer(
+    struct nb_session_core *core,
+    const struct nb_theme_bundle *bundle,
+    const char token[NB_SESSION_CORE_HTML_TOKEN_CAPACITY])
+{
+    char renderer_path[PATH_MAX];
+    const char *arguments[6];
+    pid_t pid;
+
+    if (bundle == NULL || token == NULL ||
+        !resolve_program_file(core,
+                              "nixbench-html-theme-renderer",
+                              NB_SESSION_INSTALLED_HTML_RENDERER_PATH,
+                              X_OK,
+                              renderer_path,
+                              sizeof(renderer_path))) {
+        fputs("The HTML theme renderer executable is unavailable; "
+              "using Classic decorations\n",
+              stderr);
+        return false;
+    }
+    arguments[0] = renderer_path;
+    arguments[1] = "--theme";
+    arguments[2] = bundle->directory;
+    arguments[3] = "--atlas-token";
+    arguments[4] = token;
+    arguments[5] = NULL;
+    if (!launch_application(core,
+                            renderer_path,
+                            arguments,
+                            false,
+                            true,
+                            true,
+                            &pid)) {
+        fputs("Could not start the HTML theme renderer; using Classic "
+              "decorations\n",
+              stderr);
+        return false;
+    }
+    fprintf(stderr,
+            "Started %s HTML decorations as renderer pid %ld\n",
+            bundle->name,
+            (long)pid);
+    return true;
+}
+#endif
+
 static void report_application_exit(
     const struct nb_session_application *application,
     int child_status)
 {
-    const char *kind =
-        application->initial ? "Initial application" : "Application";
+    const char *kind = application->service
+                           ? "HTML theme renderer"
+                           : (application->initial ? "Initial application"
+                                                   : "Application");
 
     if (WIFEXITED(child_status)) {
         fprintf(stderr,
@@ -895,8 +1080,10 @@ static bool apply_runtime_update(
 
         if (launch_application(core,
                                path,
+                               NULL,
                                false,
                                software_webkit,
+                               false,
                                &pid)) {
             fprintf(stderr,
                     "Launched %s as application pid %ld\n",
@@ -1274,6 +1461,11 @@ int nb_session_core_run(int protocol_descriptor,
     const char *display_name;
     pid_t initial_application_pid = -1;
     bool sigterm_action_installed = false;
+#if NIXBENCH_HAS_HTML_THEMES
+    struct nb_theme_bundle html_theme_bundle;
+    char html_theme_token[NB_SESSION_CORE_HTML_TOKEN_CAPACITY] = {0};
+    bool html_theme_enabled = false;
+#endif
     int status = 1;
 
     memset(&core, 0, sizeof(core));
@@ -1366,12 +1558,54 @@ int nb_session_core_run(int protocol_descriptor,
         goto cleanup;
     }
 
+#if NIXBENCH_HAS_HTML_THEMES
+    {
+        const char *requested_theme = getenv("NIXBENCH_HTML_THEME");
+
+        if (requested_theme == NULL || requested_theme[0] == '\0') {
+            requested_theme = preferences.window_theme;
+        }
+        requested_theme = canonical_html_theme_id(requested_theme);
+        if (requested_theme != NULL && requested_theme[0] != '\0' &&
+            strcmp(requested_theme, "classic") != 0) {
+            char theme_error[256] = {0};
+
+            if (!load_html_theme(&core,
+                                 requested_theme,
+                                 &html_theme_bundle,
+                                 theme_error,
+                                 sizeof(theme_error))) {
+                fprintf(stderr,
+                        "Could not enable requested HTML theme %s: %s; "
+                        "using Classic decorations\n",
+                        requested_theme,
+                        theme_error[0] != '\0' ? theme_error
+                                                : "bundle unavailable");
+            } else if (!fill_random_token(html_theme_token)) {
+                fprintf(stderr,
+                        "Could not create an HTML renderer authentication "
+                        "token: %s; using Classic decorations\n",
+                        strerror(errno != 0 ? errno : EIO));
+            } else {
+                html_theme_enabled = true;
+            }
+        }
+    }
+#endif
+
     nb_desktop_runtime_options_init(&desktop_options);
     desktop_options.enable_wayland = true;
     desktop_options.publish_wayland_socket = true;
     desktop_options.software_pointer = true;
     desktop_options.enable_application_launcher = true;
     desktop_options.preferences = &preferences;
+#if NIXBENCH_HAS_HTML_THEMES
+    if (html_theme_enabled) {
+        desktop_options.html_theme_token = html_theme_token;
+        desktop_options.html_theme_id = html_theme_bundle.id;
+        desktop_options.html_theme_directory = html_theme_bundle.directory;
+    }
+#endif
     core.desktop = nb_desktop_runtime_create(&desktop_options, &output);
     if (core.desktop == NULL) {
         fputs("Could not create the standalone desktop runtime\n", stderr);
@@ -1390,13 +1624,24 @@ int nb_session_core_run(int protocol_descriptor,
         goto cleanup;
     }
 #endif
-    if (!prepare_application_environment(&core) ||
-        (initial_application_path != NULL &&
-         !launch_application(&core,
-                             initial_application_path,
-                             true,
-                             false,
-                             &initial_application_pid))) {
+    if (!prepare_application_environment(&core)) {
+        goto cleanup;
+    }
+#if NIXBENCH_HAS_HTML_THEMES
+    if (html_theme_enabled) {
+        (void)launch_html_theme_renderer(&core,
+                                         &html_theme_bundle,
+                                         html_theme_token);
+    }
+#endif
+    if (initial_application_path != NULL &&
+        !launch_application(&core,
+                            initial_application_path,
+                            NULL,
+                            true,
+                            false,
+                            false,
+                            &initial_application_pid)) {
         goto cleanup;
     }
     if (!nb_desktop_runtime_set_pointer(

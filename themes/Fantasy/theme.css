@@ -1,0 +1,281 @@
+:root {
+  --fantasy-ink: #32145f;
+  --fantasy-violet: #8a50c9;
+  --fantasy-pink: #ef75bd;
+  --fantasy-gold: #f2b24e;
+  --fantasy-cream: #fff9f0;
+  --fantasy-window-frame-image: none;
+  --fantasy-dock-image: none;
+  --fantasy-wallpaper-image: none;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+.fantasy-window {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  background: transparent;
+  filter: drop-shadow(4px 5px 4px rgba(22, 8, 44, .44));
+}
+
+.fantasy-frame-art {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  background-image: var(--fantasy-window-frame-image);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  pointer-events: none;
+}
+
+.titlebar {
+  position: absolute;
+  z-index: 3;
+  left: 31%;
+  top: 8.5%;
+  width: 36%;
+  height: 7%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  color: #653294;
+  background: linear-gradient(180deg,
+      rgba(255,251,246,.90), rgba(240,220,250,.82));
+  border: 1px solid rgba(159,104,184,.80);
+  border-radius: 999px;
+  box-shadow:
+    inset 0 1px rgba(255,255,255,.92),
+    0 2px 4px rgba(76,35,95,.28);
+  font: 700 13px/1 Georgia, "Times New Roman", serif;
+  text-shadow: 0 1px 0 white, 0 0 5px rgba(255,255,255,.9);
+}
+
+.title {
+  min-width: 0;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.title-sparkle { color: var(--fantasy-gold); font-size: 10px; }
+
+.window-controls {
+  position: absolute;
+  z-index: 4;
+  top: 14.2%;
+  right: 8.8%;
+  width: 13.2%;
+  height: 6.2%;
+  display: flex;
+  gap: 4.4%;
+}
+.window-controls button {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  color: #78449c;
+  background: transparent;
+  border: 0;
+  border-radius: 22%;
+  box-shadow: none;
+  font: 900 13px/1 sans-serif;
+  text-shadow: 0 1px rgba(255,255,255,.85);
+}
+.window-controls .close-control {
+  color: #9a345f;
+  background: transparent;
+}
+
+/*
+ * The full unicorn composition is intentionally reserved for windows large
+ * enough to carry it.  Compact windows use a simpler gnome frame whose
+ * aperture follows the compositor's existing Fantasy content insets.
+ */
+.fantasy-compact-tile .fantasy-window {
+  filter: drop-shadow(3px 4px 3px rgba(22, 8, 44, .42));
+}
+.fantasy-compact-tile .titlebar {
+  left: 36%;
+  top: 6.5%;
+  width: 29%;
+  height: 10.5%;
+  gap: 2px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 10px;
+}
+.fantasy-compact-tile .title-sparkle {
+  display: none;
+}
+.fantasy-compact-tile .window-controls {
+  top: 8.7%;
+  right: 10.2%;
+  width: 15.2%;
+  height: 9.5%;
+  gap: 5%;
+}
+.fantasy-compact-tile .window-controls button {
+  font-size: 10px;
+}
+
+.fantasy-desktop {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: #17271d;
+  background-image:
+    linear-gradient(rgba(14,24,18,.08), rgba(8,18,12,.20)),
+    var(--fantasy-wallpaper-image);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+
+.fantasy-light {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #fff8a5;
+  box-shadow: 0 0 8px 3px rgba(255,238,115,.72);
+}
+.fantasy-light-one { left: 22%; top: 34%; }
+.fantasy-light-two { right: 19%; top: 25%; background: #9be9ff; }
+
+.fantasy-dock {
+  position: absolute;
+  left: var(--nixbench-dock-x);
+  top: var(--nixbench-dock-y);
+  width: var(--nixbench-dock-width);
+  height: var(--nixbench-dock-height);
+  color: var(--fantasy-cream);
+  filter:
+    drop-shadow(0 9px 8px rgba(8, 12, 7, .72))
+    drop-shadow(0 2px 2px rgba(31, 18, 12, .54));
+}
+.fantasy-dock-art {
+  position: absolute;
+  inset: 0;
+  background-image: var(--fantasy-dock-image);
+  background-position: center bottom;
+  background-repeat: no-repeat;
+  background-size: contain;
+  pointer-events: none;
+}
+
+.fantasy-clock {
+  position: absolute;
+  left: 16%;
+  bottom: 27px;
+  width: 76px;
+  padding: 6px 7px;
+  text-align: center;
+  color: #fff4b8;
+  background: rgba(43,24,23,.75);
+  border: 1px solid rgba(242,190,90,.72);
+  border-radius: 14px;
+  box-shadow: 0 2px 5px rgba(0,0,0,.48), inset 0 1px rgba(255,255,255,.25);
+  font: 700 11px/1 sans-serif;
+}
+.clock-star { color: #ffd35f; }
+
+.fantasy-launchers {
+  position: absolute;
+  left: 25%;
+  bottom: 27px;
+  width: 225px;
+  height: 66px;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+}
+.fantasy-launcher {
+  width: 62px;
+  height: 62px;
+  padding: 3px;
+  color: white;
+  background: rgba(31,20,17,.73);
+  border: 1px solid rgba(240,203,126,.74);
+  border-radius: 14px;
+  box-shadow: 0 3px 5px rgba(0,0,0,.55), inset 0 1px rgba(255,255,255,.22);
+}
+.launcher-image {
+  display: flex;
+  width: 36px;
+  height: 36px;
+  margin: 0 auto;
+  align-items: center;
+  justify-content: center;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+}
+.launcher-fallback { font: 700 10px monospace; }
+.fantasy-launcher small {
+  display: block;
+  overflow: hidden;
+  font: 700 8px/10px sans-serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.minimized-windows {
+  position: absolute;
+  left: 47%;
+  right: 17%;
+  bottom: 26px;
+  height: 67px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 4px;
+}
+.minimized-window {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 8px;
+  color: #fff8d5;
+  background: rgba(47,27,19,.76);
+  border: 1px solid rgba(239,199,105,.72);
+  border-radius: 10px;
+  box-shadow: inset 0 1px rgba(255,255,255,.18);
+  font: 700 10px/1 sans-serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.minimized-empty {
+  grid-column: 1 / -1;
+  align-self: center;
+  color: rgba(255,246,210,.75);
+  text-align: center;
+  text-shadow: 0 1px 2px black;
+  font: italic 10px Georgia, serif;
+}
+
+.fantasy-menubar {
+  height: 25px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  color: #fff9df;
+  background: linear-gradient(90deg,
+      rgba(63,31,89,.92), rgba(143,62,126,.90));
+  border-bottom: 1px solid #e7b5ef;
+  font: 700 12px Georgia, serif;
+}

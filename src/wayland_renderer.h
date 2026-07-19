@@ -18,6 +18,20 @@ void nb_wayland_renderer_set_damage(
     struct nb_wayland_renderer *renderer,
     const struct nb_damage_region *damage);
 
+/* Paint the optional full-output HTML desktop tile beneath native windows. */
+bool nb_wayland_render_desktop(SDL_Renderer *renderer,
+                               struct nb_rect viewport,
+                               void *context);
+
+/*
+ * Overlay one validated HTML atlas tile. CDE uses matching native transition
+ * chrome while an asynchronously resized tile is not yet publishable.
+ */
+bool nb_wayland_render_decoration(SDL_Renderer *renderer,
+                                  nb_window_id id,
+                                  const struct nb_window *window,
+                                  void *context);
+
 /* Matches nb_window_content_render_callback. */
 bool nb_wayland_render_content(SDL_Renderer *renderer,
                                nb_window_id id,

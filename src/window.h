@@ -8,6 +8,9 @@
 enum {
     NB_WINDOW_BORDER_WIDTH = 3,
     NB_WINDOW_TITLE_HEIGHT = 24,
+    NB_WINDOW_MENU_HEIGHT = 22,
+    NB_WINDOW_DECORATION_INSET_MAX = 96,
+    NB_WINDOW_DECORATION_INSET_SCALE = 1000,
     NB_WINDOW_FOOTER_HEIGHT = 20,
     NB_WINDOW_GADGET_MARGIN = 4,
     NB_WINDOW_CLOSE_SIZE = 16,
@@ -24,6 +27,23 @@ struct nb_rect {
     int y;
     int width;
     int height;
+};
+
+/* Fractions of the outer frame, expressed in thousandths. */
+struct nb_window_decoration_insets {
+    int left;
+    int top;
+    int right;
+    int bottom;
+};
+
+/* Fractional geometry for a right-aligned minimize/maximize/close cluster. */
+struct nb_window_decoration_controls {
+    int top;
+    int right;
+    int width;
+    int height;
+    int gap;
 };
 
 enum nb_window_hit {
@@ -77,6 +97,10 @@ struct nb_window {
     bool minimize_gadget_visible;
     bool maximize_gadget_visible;
     enum nb_window_control_layout control_layout;
+    int decoration_menu_height;
+    struct nb_window_decoration_insets decoration_content_insets;
+    struct nb_window_decoration_controls decoration_controls;
+    bool decoration_frame_draggable;
 };
 
 void nb_window_init(struct nb_window *window,
@@ -87,9 +111,24 @@ void nb_window_set_controls(struct nb_window *window,
                             bool minimize_gadget_visible,
                             bool maximize_gadget_visible,
                             enum nb_window_control_layout layout);
+void nb_window_set_decoration_menu_height(struct nb_window *window,
+                                          int height);
+bool nb_window_decoration_insets_are_valid(
+    struct nb_window_decoration_insets insets);
+void nb_window_set_decoration_content_insets(
+    struct nb_window *window,
+    struct nb_window_decoration_insets insets);
+bool nb_window_decoration_controls_are_valid(
+    struct nb_window_decoration_controls controls);
+void nb_window_set_decoration_controls(
+    struct nb_window *window,
+    struct nb_window_decoration_controls controls);
+void nb_window_set_decoration_frame_draggable(struct nb_window *window,
+                                               bool draggable);
 
 struct nb_rect nb_window_title_rect(const struct nb_window *window);
 struct nb_rect nb_window_content_rect(const struct nb_window *window);
+struct nb_rect nb_window_menu_rect(const struct nb_window *window);
 struct nb_rect nb_window_footer_rect(const struct nb_window *window);
 struct nb_rect nb_window_close_rect(const struct nb_window *window);
 struct nb_rect nb_window_minimize_rect(const struct nb_window *window);

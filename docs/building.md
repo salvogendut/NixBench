@@ -24,6 +24,15 @@ components; no `pkg-config` executable is required by this build.
 NixClock. Application targets are built only when the Wayland client and
 compositor dependencies are available.
 
+The experimental HTML decoration renderer is controlled by
+`-DNIXBENCH_HTML_THEMES=AUTO|ON|OFF`. `AUTO`, the default, enables its targets
+only when Wayland client support, `pkg-config`, `gdk-wayland-3.0`, and either
+`webkit2gtk-4.1` or `webkit2gtk-4.0` are present. `ON` makes missing renderer
+dependencies a configuration error; `OFF` excludes the browser renderer
+explicitly. The core theme catalog and native Classic fallback do not depend
+on WebKitGTK. See [HTML desktop themes](html-themes.md) for the process and
+safety boundaries.
+
 The optional rootless Xwayland XWM is enabled when the Wayland compositor and
 the XCB, XCB Composite, and XCB XFixes development libraries are available.
 NetBSD normally supplies these under `/usr/X11R7`; CMake searches that base-X11

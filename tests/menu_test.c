@@ -253,12 +253,37 @@ static void test_tiny_viewport(void)
     }
 }
 
+static void test_floating_menu(void)
+{
+    const struct nb_rect viewport = {10, 20, 400, 220};
+    struct nb_menu menu = make_menu();
+    struct nb_rect bar;
+
+    nb_menu_set_floating(&menu, true);
+    CHECK(!nb_menu_is_visible(&menu));
+    CHECK(nb_menu_visible_bar_rect(&menu, viewport).width == 0);
+    CHECK(nb_menu_hit_test(&menu, 20, 30, viewport).kind ==
+          NB_MENU_HIT_NONE);
+    CHECK(nb_menu_show_floating(&menu, 360, 210, viewport));
+    CHECK(nb_menu_is_visible(&menu));
+    bar = nb_menu_visible_bar_rect(&menu, viewport);
+    CHECK(bar.width == 144);
+    CHECK(bar.x == 266 && bar.y == 210);
+    CHECK(nb_menu_label_rect(&menu, viewport, 0).width == 72);
+    CHECK(nb_menu_label_rect(&menu, viewport, 1).width == 64);
+    CHECK(nb_menu_pointer_down(&menu, bar.x + 8, bar.y + 8, viewport));
+    CHECK(nb_menu_is_open(&menu));
+    nb_menu_cancel(&menu);
+    CHECK(!nb_menu_is_visible(&menu));
+}
+
 int main(void)
 {
     test_geometry_and_hit_testing();
     test_pointer_interaction();
     test_keyboard_and_model_switching();
     test_tiny_viewport();
+    test_floating_menu();
 
     if (failures != 0) {
         fprintf(stderr, "%d menu model check(s) failed\n", failures);

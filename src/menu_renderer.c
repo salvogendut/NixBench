@@ -136,7 +136,7 @@ static bool render_bar(SDL_Renderer *renderer,
                        struct nb_rect viewport,
                        const char *clock_text)
 {
-    const struct nb_rect bar = nb_menu_bar_rect(viewport);
+    const struct nb_rect bar = nb_menu_visible_bar_rect(menu, viewport);
     const struct nb_rect clock = nb_menu_clock_rect(viewport);
     size_t index;
 
@@ -164,6 +164,9 @@ static bool render_bar(SDL_Renderer *renderer,
         }
     }
 
+    if (menu->floating) {
+        return true;
+    }
     return fill_rect(renderer, clock, panel_color) &&
            render_bevel(renderer, clock, true) &&
            render_text(renderer,
@@ -306,6 +309,9 @@ bool nb_menu_render(SDL_Renderer *renderer,
                     struct nb_rect viewport,
                     const char *clock_text)
 {
+    if (!nb_menu_is_visible(menu)) {
+        return true;
+    }
     return render_bar(renderer, menu, viewport, clock_text) &&
            render_panel(renderer, menu, viewport);
 }

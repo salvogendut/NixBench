@@ -41,6 +41,10 @@ struct nb_desktop_runtime_options {
     bool software_pointer;
     bool enable_application_launcher;
     const struct nb_user_preferences *preferences;
+    /* Optional authenticated ordinary-user HTML chrome renderer endpoint. */
+    const char *html_theme_token;
+    const char *html_theme_id;
+    const char *html_theme_directory;
 };
 
 struct nb_desktop_runtime_update {

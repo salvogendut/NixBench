@@ -1,0 +1,11 @@
+:root { --be-yellow: #f3c928; --be-light: #fff7ad; --be-shadow: #5b531e; --be-frame: #d8d8cf; --be-blue: #315879; }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: transparent; overflow: hidden; font-family: sans-serif; }
+.beos-window { position: relative; width: 100%; height: 100%; margin: 0; padding: 1px; background: var(--be-frame); border: 2px solid #555; box-shadow: inset -1px -1px 0 rgba(0,0,0,.35); }
+.titlebar { position: absolute; left: 16px; right: 1px; top: 1px; height: var(--nixbench-title-height); display: flex; align-items: center; padding-left: 9px; color: #111; background: var(--be-yellow); border-top: 2px solid var(--be-light); border-left: 2px solid var(--be-light); border-right: 2px solid var(--be-shadow); border-bottom: 2px solid var(--be-shadow); font: 700 13px sans-serif; }
+.title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.window-controls { display: flex; height: 100%; gap: var(--nixbench-gadget-margin); padding: var(--nixbench-gadget-margin); }
+.window-controls button { flex: 0 0 var(--nixbench-control-size); width: var(--nixbench-control-size); height: var(--nixbench-control-size); padding: 0; color: #111; background: var(--be-yellow); border: 0; border-left: 1px solid var(--be-shadow); border-radius: 0; font-size: 10px; line-height: 10px; font-weight: 800; }
+.window-controls button:hover { background: #ffe35e; }
+.beos-desktop { width: 100%; height: 100%; background: linear-gradient(160deg, #477796, var(--be-blue)); }
+.beos-menubar { height: 25px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px; color: #111; background: var(--be-yellow); border-bottom: 2px solid var(--be-shadow); font: 700 12px sans-serif; }

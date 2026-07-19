@@ -90,6 +90,12 @@ void nb_window_init(struct nb_window *window,
     window->minimize_gadget_visible = true;
     window->maximize_gadget_visible = true;
     window->control_layout = NB_WINDOW_CONTROLS_RIGHT;
+    window->decoration_menu_height = 0;
+    window->decoration_content_insets =
+        (struct nb_window_decoration_insets){0, 0, 0, 0};
+    window->decoration_controls =
+        (struct nb_window_decoration_controls){0, 0, 0, 0, 0};
+    window->decoration_frame_draggable = false;
 }
 
 void nb_window_set_title(struct nb_window *window, const char *title)
@@ -129,6 +135,110 @@ void nb_window_set_controls(struct nb_window *window,
     window->control_layout = layout;
 }
 
+void nb_window_set_decoration_menu_height(struct nb_window *window,
+                                          int height)
+{
+    if (window != NULL) {
+        window->decoration_menu_height =
+            height > 0
+                ? minimum(height, NB_WINDOW_DECORATION_INSET_MAX)
+                : 0;
+    }
+}
+
+bool nb_window_decoration_insets_are_valid(
+    struct nb_window_decoration_insets insets)
+{
+    return insets.left >= 0 && insets.top >= 0 && insets.right >= 0 &&
+           insets.bottom >= 0 &&
+           insets.left + insets.right < NB_WINDOW_DECORATION_INSET_SCALE &&
+           insets.top + insets.bottom < NB_WINDOW_DECORATION_INSET_SCALE;
+}
+
+void nb_window_set_decoration_content_insets(
+    struct nb_window *window,
+    struct nb_window_decoration_insets insets)
+{
+    if (window != NULL && nb_window_decoration_insets_are_valid(insets)) {
+        window->decoration_content_insets = insets;
+    }
+}
+
+static int scaled_inset(int size, int fraction)
+{
+    return (int)(((int64_t)maximum(0, size) * fraction) /
+                 NB_WINDOW_DECORATION_INSET_SCALE);
+}
+
+static bool has_decoration_content_insets(const struct nb_window *window)
+{
+    const struct nb_window_decoration_insets insets =
+        window->decoration_content_insets;
+
+    return insets.left != 0 || insets.top != 0 || insets.right != 0 ||
+           insets.bottom != 0;
+}
+
+bool nb_window_decoration_controls_are_valid(
+    struct nb_window_decoration_controls controls)
+{
+    const int cluster_width = (3 * controls.width) + (2 * controls.gap);
+
+    return controls.top >= 0 && controls.right >= 0 && controls.width >= 0 &&
+           controls.height >= 0 && controls.gap >= 0 &&
+           controls.top + controls.height <=
+               NB_WINDOW_DECORATION_INSET_SCALE &&
+           controls.right + cluster_width <=
+               NB_WINDOW_DECORATION_INSET_SCALE;
+}
+
+void nb_window_set_decoration_controls(
+    struct nb_window *window,
+    struct nb_window_decoration_controls controls)
+{
+    if (window != NULL &&
+        nb_window_decoration_controls_are_valid(controls)) {
+        window->decoration_controls = controls;
+    }
+}
+
+void nb_window_set_decoration_frame_draggable(struct nb_window *window,
+                                               bool draggable)
+{
+    if (window != NULL) {
+        window->decoration_frame_draggable = draggable;
+    }
+}
+
+static bool has_custom_decoration_controls(const struct nb_window *window)
+{
+    return window->decoration_controls.width > 0 &&
+           window->decoration_controls.height > 0;
+}
+
+static struct nb_rect custom_control_rect(const struct nb_window *window,
+                                          int slot_from_right)
+{
+    const int width = scaled_inset(window->frame.width,
+                                   window->decoration_controls.width);
+    const int height = scaled_inset(window->frame.height,
+                                    window->decoration_controls.height);
+    const int right = scaled_inset(window->frame.width,
+                                   window->decoration_controls.right);
+    const int top = scaled_inset(window->frame.height,
+                                 window->decoration_controls.top);
+    const int gap = scaled_inset(window->frame.width,
+                                 window->decoration_controls.gap);
+
+    return (struct nb_rect){
+        window->frame.x + window->frame.width - right - width -
+            (slot_from_right * (width + gap)),
+        window->frame.y + top,
+        width,
+        height
+    };
+}
+
 struct nb_rect nb_window_title_rect(const struct nb_window *window)
 {
     if (window->fullscreen) {
@@ -156,17 +266,60 @@ struct nb_rect nb_window_content_rect(const struct nb_window *window)
     if (window->fullscreen) {
         return window->frame;
     }
+    if (has_decoration_content_insets(window)) {
+        const int left = scaled_inset(
+            window->frame.width,
+            window->decoration_content_insets.left);
+        const int top = scaled_inset(
+            window->frame.height,
+            window->decoration_content_insets.top);
+        const int right = scaled_inset(
+            window->frame.width,
+            window->decoration_content_insets.right);
+        const int bottom = scaled_inset(
+            window->frame.height,
+            window->decoration_content_insets.bottom);
+
+        return (struct nb_rect){
+            window->frame.x + left,
+            window->frame.y + top,
+            maximum(0, window->frame.width - left - right),
+            maximum(0, window->frame.height - top - bottom)
+        };
+    }
     const struct nb_rect title = nb_window_title_rect(window);
     const int bottom = window->frame.y + window->frame.height -
                        NB_WINDOW_BORDER_WIDTH - NB_WINDOW_FOOTER_HEIGHT;
     struct nb_rect content = {
         title.x,
-        title.y + title.height,
+        title.y + title.height + window->decoration_menu_height,
         title.width,
-        maximum(0, bottom - (title.y + title.height))
+        maximum(0, bottom - (title.y + title.height +
+                             window->decoration_menu_height))
     };
 
     return content;
+}
+
+struct nb_rect nb_window_menu_rect(const struct nb_window *window)
+{
+    if (has_decoration_content_insets(window)) {
+        return (struct nb_rect){0, 0, 0, 0};
+    }
+    const struct nb_rect title = nb_window_title_rect(window);
+    const int available = maximum(0,
+        window->frame.y + window->frame.height -
+        NB_WINDOW_BORDER_WIDTH - NB_WINDOW_FOOTER_HEIGHT -
+        (title.y + title.height));
+    const int height = window->fullscreen
+                           ? 0
+                           : minimum(window->decoration_menu_height,
+                                     available);
+
+    return (struct nb_rect){title.x,
+                            title.y + title.height,
+                            title.width,
+                            height};
 }
 
 struct nb_rect nb_window_footer_rect(const struct nb_window *window)
@@ -207,6 +360,9 @@ static int control_gadget_size(const struct nb_window *window)
 
 struct nb_rect nb_window_close_rect(const struct nb_window *window)
 {
+    if (!window->fullscreen && has_custom_decoration_controls(window)) {
+        return custom_control_rect(window, 0);
+    }
     const struct nb_rect title = nb_window_title_rect(window);
     const int size = control_gadget_size(window);
     int x = title.x + NB_WINDOW_GADGET_MARGIN;
@@ -227,6 +383,14 @@ struct nb_rect nb_window_close_rect(const struct nb_window *window)
 
 struct nb_rect nb_window_minimize_rect(const struct nb_window *window)
 {
+    if (!window->fullscreen && has_custom_decoration_controls(window)) {
+        if (!window->minimize_gadget_visible) {
+            return (struct nb_rect){0, 0, 0, 0};
+        }
+        return custom_control_rect(
+            window,
+            window->maximize_gadget_visible ? 2 : 1);
+    }
     const struct nb_rect title = nb_window_title_rect(window);
     const struct nb_rect close = nb_window_close_rect(window);
     const int size = control_gadget_size(window);
@@ -236,7 +400,9 @@ struct nb_rect nb_window_minimize_rect(const struct nb_window *window)
     if (!window->minimize_gadget_visible) {
         return (struct nb_rect){0, 0, 0, 0};
     }
-    if (window->control_layout == NB_WINDOW_CONTROLS_LEFT) {
+    if (window->control_layout == NB_WINDOW_CONTROLS_SPLIT) {
+        x = title.x + NB_WINDOW_GADGET_MARGIN;
+    } else if (window->control_layout == NB_WINDOW_CONTROLS_LEFT) {
         x = close.x + close.width + NB_WINDOW_GADGET_MARGIN;
     } else {
         x = close.x - NB_WINDOW_GADGET_MARGIN - size;
@@ -256,6 +422,12 @@ struct nb_rect nb_window_minimize_rect(const struct nb_window *window)
 
 struct nb_rect nb_window_maximize_rect(const struct nb_window *window)
 {
+    if (!window->fullscreen && has_custom_decoration_controls(window)) {
+        if (!window->maximize_gadget_visible) {
+            return (struct nb_rect){0, 0, 0, 0};
+        }
+        return custom_control_rect(window, 1);
+    }
     const struct nb_rect title = nb_window_title_rect(window);
     const struct nb_rect close = nb_window_close_rect(window);
     const struct nb_rect minimize = nb_window_minimize_rect(window);
@@ -337,7 +509,8 @@ enum nb_window_hit nb_window_hit_test(const struct nb_window *window,
         return NB_WINDOW_HIT_CONTENT;
     }
 
-    return NB_WINDOW_HIT_FRAME;
+    return window->decoration_frame_draggable ? NB_WINDOW_HIT_TITLE
+                                              : NB_WINDOW_HIT_FRAME;
 }
 
 enum nb_window_hit nb_window_pointer_down(struct nb_window *window,

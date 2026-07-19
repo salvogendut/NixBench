@@ -1,0 +1,228 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="nixbench_html_theme_v1">
+  <copyright>
+    Copyright 2026 the NixBench contributors
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the conditions of the NixBench
+    BSD 2-Clause license are met.
+  </copyright>
+
+  <interface name="nixbench_html_theme_manager_v1" version="1">
+    <description summary="private NixBench HTML chrome renderer registration">
+      This private protocol connects the ordinary-user NixBench desktop core
+      to the single ordinary-user HTML theme renderer launched for its
+      session. It is not an application integration protocol.
+
+      Registration requires the unguessable token inherited by the renderer.
+      A registered wl_surface is a browser-produced atlas carrier. This
+      interface records private metadata but does not assign a wl_surface role;
+      toolkit-created xdg-shell state may coexist with it. The compositor does
+      not map the registered surface as an application window.
+    </description>
+
+    <enum name="error">
+      <entry name="invalid_token" value="1"
+             summary="renderer registration token did not match"/>
+      <entry name="already_registered" value="2"
+             summary="the session already has an atlas renderer"/>
+      <entry name="invalid_surface" value="3"
+             summary="surface is already buffered or privately assigned"/>
+    </enum>
+
+    <request name="register_atlas">
+      <description summary="register the browser atlas surface">
+        Register surface as the session's HTML chrome atlas. The token must
+        match the token retained by the desktop core. Registration must occur
+        before the surface's first non-null buffer attachment. Toolkit setup
+        commits which do not attach pixels are allowed.
+      </description>
+      <arg name="id" type="new_id" interface="nixbench_html_theme_atlas_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+      <arg name="token" type="string"/>
+    </request>
+  </interface>
+
+  <interface name="nixbench_html_theme_atlas_v1" version="1">
+    <description summary="HTML chrome atlas state and layout">
+      The desktop core publishes immutable shell state in serial-numbered
+      transactions. The renderer lays out named tiles in one transparent atlas
+      and returns tile and action rectangles for a generation. Atlas pixels are
+      supplied by committing a buffer to the registered wl_surface.
+
+      The core composes every tile independently. Renderer coordinates never
+      become authoritative window geometry or input policy.
+    </description>
+
+    <enum name="error">
+      <entry name="invalid_layout" value="1"
+             summary="atlas layout transaction was malformed"/>
+      <entry name="stale_state" value="2"
+             summary="state acknowledgement was zero or not yet issued"/>
+    </enum>
+
+    <enum name="window_state" bitfield="true">
+      <entry name="active" value="1" summary="window has keyboard focus"/>
+      <entry name="maximized" value="2" summary="window is maximized"/>
+      <entry name="minimized" value="4" summary="window is minimized"/>
+      <entry name="urgent" value="8" summary="window requests attention"/>
+      <entry name="fullscreen" value="16" summary="client content is fullscreen"/>
+      <entry name="show_minimize" value="32" summary="show minimize control"/>
+      <entry name="show_maximize" value="64" summary="show maximize control"/>
+      <entry name="controls_left" value="128" summary="place controls on left"/>
+    </enum>
+
+    <enum name="tile_kind">
+      <entry name="desktop" value="1"/>
+      <entry name="menubar" value="2"/>
+      <entry name="window" value="3"/>
+    </enum>
+
+    <enum name="action">
+      <entry name="none" value="0"/>
+      <entry name="move" value="1"/>
+      <entry name="close" value="2"/>
+      <entry name="minimize" value="3"/>
+      <entry name="maximize" value="4"/>
+      <entry name="resize_north" value="5"/>
+      <entry name="resize_north_east" value="6"/>
+      <entry name="resize_east" value="7"/>
+      <entry name="resize_south_east" value="8"/>
+      <entry name="resize_south" value="9"/>
+      <entry name="resize_south_west" value="10"/>
+      <entry name="resize_west" value="11"/>
+      <entry name="resize_north_west" value="12"/>
+    </enum>
+
+    <request name="destroy" type="destructor"/>
+
+    <request name="ack_state">
+      <description summary="acknowledge a complete state transaction">
+        The renderer has applied state serial to its DOM. This does not imply
+        that the corresponding pixels have been painted. The core may publish
+        a newer transaction before this request is dispatched; in that case
+        acknowledgement of the superseded, previously issued serial is
+        accepted and ignored. Only acknowledgement of the current serial
+        makes a subsequent atlas layout eligible.
+      </description>
+      <arg name="serial" type="uint"/>
+    </request>
+
+    <request name="begin_layout">
+      <description summary="begin atlas metadata for a pixel generation">
+        Begin replacing all tile and action metadata. Width and height describe
+        the browser buffer which will be committed for generation. If newer
+        shell state supersedes the acknowledged transaction while a layout is
+        being rendered, the core silently discards that layout through its
+        matching commit_layout request. This normal race is not a protocol
+        error; the renderer should render the newest state transaction next.
+      </description>
+      <arg name="generation_hi" type="uint"/>
+      <arg name="generation_lo" type="uint"/>
+      <arg name="width" type="uint"/>
+      <arg name="height" type="uint"/>
+    </request>
+
+    <request name="tile">
+      <description summary="publish one independently composited atlas tile">
+        For window tiles object_hi/object_lo contain the NixBench window id.
+        They are zero for singleton desktop and menubar tiles.
+      </description>
+      <arg name="kind" type="uint" enum="tile_kind"/>
+      <arg name="object_hi" type="uint"/>
+      <arg name="object_lo" type="uint"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </request>
+
+    <request name="action_region">
+      <description summary="publish a compositor-validated action rectangle">
+        Coordinates are relative to the corresponding tile. The compositor
+        treats these as presentation hints and applies its own geometry and
+        window-state validation before executing an action.
+      </description>
+      <arg name="kind" type="uint" enum="tile_kind"/>
+      <arg name="object_hi" type="uint"/>
+      <arg name="object_lo" type="uint"/>
+      <arg name="action" type="uint" enum="action"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </request>
+
+    <request name="commit_layout">
+      <description summary="complete atlas metadata for a generation">
+        The layout becomes eligible only after a matching wl_surface buffer
+        commit has also been accepted. A generation replaces the previous
+        layout atomically.
+      </description>
+      <arg name="generation_hi" type="uint"/>
+      <arg name="generation_lo" type="uint"/>
+    </request>
+
+    <event name="configure">
+      <description summary="configure atlas limits and output scale">
+        Atlas dimensions are upper bounds. The renderer may use a smaller
+        buffer. Serial is acknowledged after the renderer applies the complete
+        state transaction ending in state_done.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="maximum_width" type="uint"/>
+      <arg name="maximum_height" type="uint"/>
+      <arg name="scale" type="uint"/>
+    </event>
+
+    <event name="theme">
+      <description summary="select one validated local theme bundle">
+        Directory is the canonical root validated by the desktop core. Theme
+        id is supplied separately for DOM state and diagnostics.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="theme_id" type="string"/>
+      <arg name="directory" type="string"/>
+    </event>
+
+    <event name="shell_state">
+      <description summary="publish output and themed shell geometry">
+        Output dimensions and dock geometry remain compositor-owned.  The
+        renderer may paint them, but it cannot move the dock or change input
+        policy.  Clock text is a presentation value sampled by the core.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="output_width" type="uint"/>
+      <arg name="output_height" type="uint"/>
+      <arg name="dock_x" type="int"/>
+      <arg name="dock_y" type="int"/>
+      <arg name="dock_width" type="uint"/>
+      <arg name="dock_height" type="uint"/>
+      <arg name="clock_text" type="string"/>
+    </event>
+
+    <event name="clear_windows">
+      <description summary="start replacement window state"/>
+      <arg name="serial" type="uint"/>
+    </event>
+
+    <event name="window">
+      <description summary="publish one window decoration state">
+        Width and height describe the complete decorated frame requested by
+        the compositor. State is a bitfield of window_state values.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="window_hi" type="uint"/>
+      <arg name="window_lo" type="uint"/>
+      <arg name="width" type="uint"/>
+      <arg name="height" type="uint"/>
+      <arg name="state" type="uint" enum="window_state"/>
+      <arg name="title" type="string"/>
+    </event>
+
+    <event name="state_done">
+      <description summary="complete one immutable state transaction"/>
+      <arg name="serial" type="uint"/>
+    </event>
+  </interface>
+</protocol>
