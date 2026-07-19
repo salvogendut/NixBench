@@ -28,6 +28,10 @@ enum component_kind {
     COMPONENT_MENUBAR
 };
 
+enum {
+    LIVE_RENDER_CONFIGURE_BARRIER_MS = 100
+};
+
 struct renderer_options {
     const char *theme_directory;
     const char *snapshot_path;
@@ -616,7 +620,10 @@ static void atlas_state_done(
          * Coalescing onto the main loop also avoids rendering intermediate
          * title/app-id state emitted while the private GTK surface maps.
          */
-        state->render_source = g_idle_add(begin_live_render_idle, state);
+        state->render_source = g_timeout_add(
+            LIVE_RENDER_CONFIGURE_BARRIER_MS,
+            begin_live_render_idle,
+            state);
     }
 }
 
