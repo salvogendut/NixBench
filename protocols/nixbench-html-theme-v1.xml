@@ -8,17 +8,19 @@
     BSD 2-Clause license are met.
   </copyright>
 
-  <interface name="nixbench_html_theme_manager_v1" version="1">
+  <interface name="nixbench_html_theme_manager_v1" version="2">
     <description summary="private NixBench HTML chrome renderer registration">
       This private protocol connects the ordinary-user NixBench desktop core
       to the single ordinary-user HTML theme renderer launched for its
       session. It is not an application integration protocol.
 
       Registration requires the unguessable token inherited by the renderer.
-      A registered wl_surface is a browser-produced atlas carrier. This
-      interface records private metadata but does not assign a wl_surface role;
-      toolkit-created xdg-shell state may coexist with it. The compositor does
-      not map the registered surface as an application window.
+      A registered wl_surface authenticates and hides the browser renderer.
+      Protocol version 2 transports the rendered atlas as a complete Cairo
+      pixel snapshot, independently of that toolkit surface's backing-store
+      damage. This interface records private metadata but does not assign a
+      wl_surface role; toolkit-created xdg-shell state may coexist with it. The
+      compositor does not map the registered surface as an application window.
     </description>
 
     <enum name="error">
@@ -43,12 +45,13 @@
     </request>
   </interface>
 
-  <interface name="nixbench_html_theme_atlas_v1" version="1">
+  <interface name="nixbench_html_theme_atlas_v1" version="2">
     <description summary="HTML chrome atlas state and layout">
       The desktop core publishes immutable shell state in serial-numbered
       transactions. The renderer lays out named tiles in one transparent atlas
-      and returns tile and action rectangles for a generation. Atlas pixels are
-      supplied by committing a buffer to the registered wl_surface.
+      and returns tile and action rectangles for a generation. Version 1 atlas
+      pixels came from the registered wl_surface; version 2 submits a complete
+      browser snapshot explicitly so transparent resize damage is deterministic.
 
       The core composes every tile independently. Renderer coordinates never
       become authoritative window geometry or input policy.
@@ -155,9 +158,10 @@
 
     <request name="commit_layout">
       <description summary="complete atlas metadata for a generation">
-        The layout becomes eligible only after a matching wl_surface buffer
-        commit has also been accepted. A generation replaces the previous
-        layout atomically.
+        The layout becomes eligible only after matching pixels have also been
+        accepted, either from the legacy wl_surface carrier or a version 2
+        submit_pixels request. A generation replaces the previous layout
+        atomically.
       </description>
       <arg name="generation_hi" type="uint"/>
       <arg name="generation_lo" type="uint"/>
@@ -224,5 +228,23 @@
       <description summary="complete one immutable state transaction"/>
       <arg name="serial" type="uint"/>
     </event>
+
+    <request name="submit_pixels" since="2">
+      <description summary="submit one complete premultiplied ARGB snapshot">
+        Submit the exact browser snapshot for generation through an unlinked,
+        private file descriptor. Pixels use Cairo's native-endian ARGB32
+        premultiplied representation. The compositor copies the complete
+        width by height image during this request; it never retains the file
+        descriptor or mapping. This path avoids toolkit backing-store damage
+        heuristics and makes transparent pixels vacated by a resized frame
+        part of the same atomic generation as its layout metadata.
+      </description>
+      <arg name="generation_hi" type="uint"/>
+      <arg name="generation_lo" type="uint"/>
+      <arg name="fd" type="fd"/>
+      <arg name="width" type="uint"/>
+      <arg name="height" type="uint"/>
+      <arg name="stride" type="uint"/>
+    </request>
   </interface>
 </protocol>

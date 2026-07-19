@@ -163,18 +163,41 @@ static void test_dragging(void)
     CHECK(window.frame.y == 200);
 
     CHECK(nb_window_pointer_move(&window, -50, -20, bounds));
-    CHECK(window.frame.x == 0);
+    CHECK(window.frame.x == -100);
     CHECK(window.frame.y == 0);
 
+    CHECK(nb_window_pointer_move(&window, -1000, 200, bounds));
+    CHECK(window.frame.x ==
+          bounds.x - window.frame.width + NB_WINDOW_DRAG_VISIBLE_WIDTH);
+    CHECK(window.frame.y == 190);
+
     CHECK(nb_window_pointer_move(&window, 900, 700, bounds));
-    CHECK(window.frame.x == 480);
-    CHECK(window.frame.y == 380);
+    CHECK(window.frame.x ==
+          bounds.x + bounds.width - NB_WINDOW_DRAG_VISIBLE_WIDTH);
+    CHECK(window.frame.y ==
+          bounds.y + bounds.height - NB_WINDOW_DRAG_VISIBLE_HEIGHT);
 
     CHECK(nb_window_pointer_up(&window, 900, 700) == NB_WINDOW_ACTION_NONE);
     CHECK(window.pointer_mode == NB_WINDOW_POINTER_IDLE);
     CHECK(!nb_window_pointer_move(&window, 200, 200, bounds));
-    CHECK(window.frame.x == 480);
-    CHECK(window.frame.y == 380);
+    CHECK(window.frame.x ==
+          bounds.x + bounds.width - NB_WINDOW_DRAG_VISIBLE_WIDTH);
+    CHECK(window.frame.y ==
+          bounds.y + bounds.height - NB_WINDOW_DRAG_VISIBLE_HEIGHT);
+
+    CHECK(nb_window_pointer_down(&window,
+                                 window.frame.x + 20,
+                                 window.frame.y + 10) ==
+          NB_WINDOW_HIT_TITLE);
+    CHECK(!nb_window_pointer_move(&window,
+                                  1000,
+                                  1000,
+                                  (struct nb_rect){0, 0, 0, 0}));
+    CHECK(window.frame.x ==
+          bounds.x + bounds.width - NB_WINDOW_DRAG_VISIBLE_WIDTH);
+    CHECK(window.frame.y ==
+          bounds.y + bounds.height - NB_WINDOW_DRAG_VISIBLE_HEIGHT);
+    nb_window_pointer_cancel(&window);
 }
 
 static void test_clamping(void)

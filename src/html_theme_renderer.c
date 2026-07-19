@@ -1,12 +1,15 @@
 #define _XOPEN_SOURCE 700
 
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <cairo.h>
 #include <gdk/gdkwayland.h>
@@ -81,6 +84,7 @@ struct renderer_state {
     uint32_t maximum_width;
     uint32_t maximum_height;
     uint32_t state_serial;
+    uint32_t render_state_serial;
     uint64_t render_generation;
     int render_width;
     int render_height;
@@ -111,6 +115,7 @@ struct renderer_state {
     guint publish_source;
     unsigned int publish_attempts;
     bool live_atlas;
+    bool snapshot_in_flight;
     bool state_theme_valid;
     bool state_shell_available;
     bool state_window_available;
@@ -790,15 +795,6 @@ static gchar *build_live_atlas_document(
                                    ".thunar-icon",
                                    state->thunar_icon_uri);
         append_background_image_style(document,
-                                      ".fantasy-window",
-                                      "--fantasy-window-frame-image",
-                                      state->fantasy_window_frame_uri);
-        append_background_image_style(
-            document,
-            ".fantasy-compact-tile .fantasy-window",
-            "--fantasy-window-frame-image",
-            state->fantasy_compact_window_frame_uri);
-        append_background_image_style(document,
                                       ".fantasy-dock",
                                       "--fantasy-dock-image",
                                       state->fantasy_dock_uri);
@@ -860,6 +856,9 @@ static gchar *build_live_atlas_document(
         const bool active =
             (window->state &
              NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_ACTIVE) != 0;
+        const bool maximized =
+            (window->state &
+             NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_MAXIMIZED) != 0;
         const bool compact = window->width <= 400 || window->height <= 300;
         gchar *updated_fragment = set_fragment_title(
             fragment, fragment_length, window->title);
@@ -872,12 +871,13 @@ static gchar *build_live_atlas_document(
         }
         g_string_append_printf(
             document,
-            "<section class=\"nixbench-atlas-tile%s%s%s\" "
+            "<section class=\"nixbench-atlas-tile%s%s%s%s\" "
             "data-nixbench-window-id=\"%" G_GUINT64_FORMAT "\" "
             "data-nixbench-active=\"%s\" "
             "style=\"left:%dpx;top:%dpx;width:%dpx;height:%dpx\">",
             show_minimize ? "" : " nixbench-hide-minimize",
             show_maximize ? "" : " nixbench-hide-maximize",
+            maximized ? " nixbench-maximized" : "",
             compact ? " fantasy-compact-tile" : "",
             (guint64)window->id,
             active ? "true" : "false",
@@ -978,7 +978,7 @@ static void renderer_registry_global(void *data,
             registry,
             name,
             &nixbench_html_theme_manager_v1_interface,
-            version < 1 ? version : 1);
+            version < 2 ? version : 2);
     }
 }
 
@@ -1015,6 +1015,12 @@ static bool ensure_theme_manager(struct renderer_state *state)
         wl_display_roundtrip(state->display) < 0 ||
         state->theme_manager == NULL) {
         fputs("NixBench HTML theme protocol is unavailable\n", stderr);
+        return false;
+    }
+    if (wl_proxy_get_version((struct wl_proxy *)state->theme_manager) < 2) {
+        fputs("NixBench HTML theme protocol does not support pixel "
+              "snapshots\n",
+              stderr);
         return false;
     }
     return true;
@@ -1115,6 +1121,7 @@ static bool begin_live_render(struct renderer_state *state)
     }
     generation_hi = (uint32_t)(state->render_generation >> 32U);
     generation_lo = (uint32_t)state->render_generation;
+    state->render_state_serial = state->state_serial;
     nixbench_html_theme_atlas_v1_begin_layout(
         state->theme_atlas,
         generation_hi,
@@ -1157,7 +1164,8 @@ static gboolean begin_live_render_idle(gpointer user_data)
 static void schedule_live_render(struct renderer_state *state)
 {
     if (!state->gtk_window_configured || !has_render_state(state) ||
-        state->layout_in_flight || state->render_source != 0) {
+        state->layout_in_flight || state->snapshot_in_flight ||
+        state->render_source != 0) {
         return;
     }
     state->render_source = g_idle_add(begin_live_render_idle, state);
@@ -1422,9 +1430,168 @@ static bool register_live_atlas(struct renderer_state *state,
                state) == 0;
 }
 
-static void snapshot_finished(GObject *source,
-                              GAsyncResult *result,
-                              gpointer user_data)
+static int create_snapshot_file(const unsigned char *pixels,
+                                size_t byte_count)
+{
+    char path[] = "/tmp/nixbench-theme-atlas-XXXXXX";
+    size_t written = 0;
+    int fd = mkstemp(path);
+
+    if (fd < 0) {
+        return -1;
+    }
+    if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0 || unlink(path) != 0 ||
+        ftruncate(fd, (off_t)byte_count) != 0) {
+        goto error;
+    }
+    while (written < byte_count) {
+        const ssize_t result = write(fd,
+                                     pixels + written,
+                                     byte_count - written);
+
+        if (result < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            goto error;
+        }
+        if (result == 0) {
+            errno = EIO;
+            goto error;
+        }
+        written += (size_t)result;
+    }
+    if (lseek(fd, 0, SEEK_SET) < 0) {
+        goto error;
+    }
+    return fd;
+
+error:
+    {
+        const int saved_errno = errno;
+
+        (void)unlink(path);
+        (void)close(fd);
+        errno = saved_errno;
+    }
+    return -1;
+}
+
+static bool submit_live_snapshot(struct renderer_state *state,
+                                 cairo_surface_t *snapshot)
+{
+    cairo_surface_t *image = snapshot;
+    cairo_t *context = NULL;
+    unsigned char *pixels;
+    int width;
+    int height;
+    int stride;
+    size_t byte_count;
+    int fd;
+
+    if (cairo_surface_get_type(snapshot) != CAIRO_SURFACE_TYPE_IMAGE ||
+        cairo_image_surface_get_format(snapshot) != CAIRO_FORMAT_ARGB32 ||
+        cairo_image_surface_get_width(snapshot) != state->render_width ||
+        cairo_image_surface_get_height(snapshot) != state->render_height) {
+        image = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+                                           state->render_width,
+                                           state->render_height);
+        context = cairo_create(image);
+        cairo_set_operator(context, CAIRO_OPERATOR_CLEAR);
+        cairo_paint(context);
+        cairo_set_operator(context, CAIRO_OPERATOR_OVER);
+        cairo_set_source_surface(context, snapshot, 0.0, 0.0);
+        cairo_paint(context);
+        cairo_destroy(context);
+        context = NULL;
+    }
+    if (cairo_surface_status(image) != CAIRO_STATUS_SUCCESS) {
+        if (image != snapshot) {
+            cairo_surface_destroy(image);
+        }
+        return false;
+    }
+    cairo_surface_flush(image);
+    width = cairo_image_surface_get_width(image);
+    height = cairo_image_surface_get_height(image);
+    stride = cairo_image_surface_get_stride(image);
+    pixels = cairo_image_surface_get_data(image);
+    if (width <= 0 || height <= 0 || stride < width * 4 || pixels == NULL ||
+        (size_t)height > SIZE_MAX / (size_t)stride) {
+        if (image != snapshot) {
+            cairo_surface_destroy(image);
+        }
+        return false;
+    }
+    byte_count = (size_t)height * (size_t)stride;
+    fd = create_snapshot_file(pixels, byte_count);
+    if (fd < 0) {
+        if (image != snapshot) {
+            cairo_surface_destroy(image);
+        }
+        return false;
+    }
+    nixbench_html_theme_atlas_v1_submit_pixels(
+        state->theme_atlas,
+        (uint32_t)(state->render_generation >> 32U),
+        (uint32_t)state->render_generation,
+        fd,
+        (uint32_t)width,
+        (uint32_t)height,
+        (uint32_t)stride);
+    (void)close(fd);
+    if (image != snapshot) {
+        cairo_surface_destroy(image);
+    }
+    return true;
+}
+
+static void live_snapshot_finished(GObject *source,
+                                   GAsyncResult *result,
+                                   gpointer user_data)
+{
+    struct renderer_state *state = user_data;
+    GError *error = NULL;
+    cairo_surface_t *surface = webkit_web_view_get_snapshot_finish(
+        WEBKIT_WEB_VIEW(source), result, &error);
+
+    state->snapshot_in_flight = false;
+    if (surface == NULL) {
+        fprintf(stderr,
+                "Live HTML theme snapshot failed: %s\n",
+                error != NULL ? error->message : "unknown error");
+        g_clear_error(&error);
+        state->exit_status = 1;
+        gtk_main_quit();
+        return;
+    }
+    if (state->render_state_serial != state->state_serial) {
+        cairo_surface_destroy(surface);
+        state->layout_in_flight = false;
+        schedule_live_render(state);
+        return;
+    }
+    if (!submit_live_snapshot(state, surface)) {
+        fprintf(stderr,
+                "Could not submit the live HTML theme pixel snapshot: %s\n",
+                strerror(errno));
+        cairo_surface_destroy(surface);
+        state->exit_status = 1;
+        gtk_main_quit();
+        return;
+    }
+    cairo_surface_destroy(surface);
+    state->publish_attempts = 0;
+    if (publish_live_layout(state) == G_SOURCE_CONTINUE) {
+        state->publish_source = g_timeout_add(20,
+                                              publish_live_layout,
+                                              state);
+    }
+}
+
+static void file_snapshot_finished(GObject *source,
+                                   GAsyncResult *result,
+                                   gpointer user_data)
 {
     struct renderer_state *state = user_data;
     GError *error = NULL;
@@ -1461,7 +1628,7 @@ static gboolean begin_snapshot(gpointer user_data)
         WEBKIT_SNAPSHOT_REGION_VISIBLE,
         WEBKIT_SNAPSHOT_OPTIONS_TRANSPARENT_BACKGROUND,
         NULL,
-        snapshot_finished,
+        file_snapshot_finished,
         state);
     return G_SOURCE_REMOVE;
 }
@@ -1476,14 +1643,16 @@ static void load_changed(WebKitWebView *web_view,
     if (event != WEBKIT_LOAD_FINISHED) {
         return;
     }
-    if (state->live_atlas && state->layout_in_flight) {
-        if (state->publish_source != 0) {
-            g_source_remove(state->publish_source);
-        }
-        state->publish_attempts = 0;
-        state->publish_source = g_timeout_add(80,
-                                              publish_live_layout,
-                                              state);
+    if (state->live_atlas && state->layout_in_flight &&
+        !state->snapshot_in_flight) {
+        state->snapshot_in_flight = true;
+        webkit_web_view_get_snapshot(
+            state->web_view,
+            WEBKIT_SNAPSHOT_REGION_VISIBLE,
+            WEBKIT_SNAPSHOT_OPTIONS_TRANSPARENT_BACKGROUND,
+            NULL,
+            live_snapshot_finished,
+            state);
     } else if (state->snapshot_path != NULL && !state->snapshot_started) {
         state->snapshot_started = true;
         (void)g_timeout_add(50, begin_snapshot, state);
@@ -1599,6 +1768,15 @@ int main(int argc, char **argv)
         setenv("WAYLAND_DEBUG", "client", 0) != 0) {
         fprintf(stderr,
                 "Could not enable HTML renderer Wayland tracing: %s\n",
+                strerror(errno));
+        g_free(document);
+        return 1;
+    }
+    if (options.atlas_token != NULL &&
+        setenv("WEBKIT_DISABLE_COMPOSITING_MODE", "1", 0) != 0) {
+        fprintf(stderr,
+                "Could not select software composition for the HTML theme "
+                "renderer: %s\n",
                 strerror(errno));
         g_free(document);
         return 1;

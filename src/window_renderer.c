@@ -278,7 +278,14 @@ bool nb_window_render_default_content(SDL_Renderer *renderer,
     const int line_y[] = {content.y + 24, content.y + 44};
     size_t line_index;
 
-    if (!set_color(renderer, text_color)) {
+    /*
+     * Normally nb_window_render_base() paints this panel. Irregular HTML
+     * themes intentionally omit that rectangular base so wallpaper remains
+     * visible outside their frame; native dialogs still need an opaque client
+     * area before their text is drawn.
+     */
+    if (!render_content_background(renderer, window) ||
+        !set_color(renderer, text_color)) {
         return false;
     }
 

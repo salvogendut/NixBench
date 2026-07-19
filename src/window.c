@@ -14,6 +14,70 @@ static int minimum(int left, int right)
     return left < right ? left : right;
 }
 
+static int clamp_int64_to_int(int64_t value)
+{
+    if (value < INT_MIN) {
+        return INT_MIN;
+    }
+    if (value > INT_MAX) {
+        return INT_MAX;
+    }
+    return (int)value;
+}
+
+static int clamp_drag_coordinate(int64_t desired,
+                                 int64_t minimum_origin,
+                                 int64_t maximum_origin)
+{
+    if (desired < minimum_origin) {
+        desired = minimum_origin;
+    }
+    if (desired > maximum_origin) {
+        desired = maximum_origin;
+    }
+    return clamp_int64_to_int(desired);
+}
+
+static bool move_window_for_drag(struct nb_window *window,
+                                 int x,
+                                 int y,
+                                 struct nb_rect bounds)
+{
+    const int old_x = window->frame.x;
+    const int old_y = window->frame.y;
+    int visible_width;
+    int visible_height;
+    int64_t minimum_x;
+    int64_t maximum_x;
+    int64_t maximum_y;
+
+    if (bounds.width <= 0 || bounds.height <= 0) {
+        return false;
+    }
+
+    visible_width = minimum(window->frame.width,
+                            minimum(bounds.width,
+                                    NB_WINDOW_DRAG_VISIBLE_WIDTH));
+    visible_height = minimum(window->frame.height,
+                             minimum(bounds.height,
+                                     NB_WINDOW_DRAG_VISIBLE_HEIGHT));
+
+    minimum_x = (int64_t)bounds.x - window->frame.width + visible_width;
+    maximum_x = (int64_t)bounds.x + bounds.width - visible_width;
+    maximum_y = (int64_t)bounds.y + bounds.height - visible_height;
+
+    window->frame.x = clamp_drag_coordinate(
+        (int64_t)x - window->pointer_offset_x,
+        minimum_x,
+        maximum_x);
+    window->frame.y = clamp_drag_coordinate(
+        (int64_t)y - window->pointer_offset_y,
+        bounds.y,
+        maximum_y);
+
+    return old_x != window->frame.x || old_y != window->frame.y;
+}
+
 static bool rect_contains(struct nb_rect rect, int x, int y)
 {
     return rect.width > 0 && rect.height > 0 &&
@@ -560,13 +624,7 @@ bool nb_window_pointer_move(struct nb_window *window,
                             struct nb_rect bounds)
 {
     if (window->pointer_mode == NB_WINDOW_POINTER_DRAG) {
-        const int old_x = window->frame.x;
-        const int old_y = window->frame.y;
-
-        window->frame.x = x - window->pointer_offset_x;
-        window->frame.y = y - window->pointer_offset_y;
-        nb_window_clamp_to(window, bounds);
-        return old_x != window->frame.x || old_y != window->frame.y;
+        return move_window_for_drag(window, x, y, bounds);
     }
 
     if (window->pointer_mode == NB_WINDOW_POINTER_CLOSE) {

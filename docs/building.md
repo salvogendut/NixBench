@@ -116,6 +116,20 @@ Open the desktop in a development window:
 ./build/nixbench
 ```
 
+When the build has Wayland and the HTML renderer enabled, select the same
+desktop chrome used by a standalone session with an environment variable:
+
+```sh
+NIXBENCH_HTML_THEME=fantasy ./build/nixbench
+NIXBENCH_HTML_THEME=cde ./build/nixbench
+```
+
+The hosted frontend validates the bundle, enables an authenticated atlas
+endpoint on its nested Wayland compositor, and supervises the renderer as a
+child process. Closing the outer SDL window also terminates and reaps that
+renderer. An unavailable bundle, renderer startup failure, or renderer
+disconnect leaves the native Classic decorations active.
+
 Windowed operation is the development default. NixInfo opens at startup. Use
 Project > New Window to create another application window, Refresh to update
 the focused window's snapshot, View to show or hide its full kernel version,

@@ -98,6 +98,13 @@ ctest --test-dir build --output-on-failure
 ./build/nixbench
 ```
 
+With Wayland and WebKitGTK development support enabled, the HTML themes also
+run inside the hosted SDL window:
+
+```sh
+NIXBENCH_HTML_THEME=fantasy ./build/nixbench
+```
+
 An installed NetBSD standalone session is started from a physical console with:
 
 ```sh

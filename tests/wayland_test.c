@@ -1335,7 +1335,7 @@ static void registry_global(void *data,
             registry,
             name,
             &nixbench_html_theme_manager_v1_interface,
-            1);
+            version < 2 ? version : 2);
     }
 }
 
@@ -2146,13 +2146,21 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(!nb_wayland_server_take_redraw(server));
     {
         const uint32_t original_atlas_pixel = pixels[0];
+        const uint32_t original_undamaged_atlas_pixel = pixels[1];
         const uint32_t updated_atlas_pixel =
             original_atlas_pixel ^ UINT32_C(0x00020202);
+        const uint32_t cleared_undamaged_atlas_pixel = UINT32_C(0x00000000);
         const uint64_t published_revision =
             html_theme_snapshot.surface.revision;
 
-        /* Late image decode/repaint commits belong to the live generation. */
+        /*
+         * Late image decode/repaint commits belong to the live generation.
+         * The private atlas is a complete image even when WebKit reports a
+         * tiny damage rectangle: transparent pixels outside that rectangle
+         * may be the vacated edge of a resized decoration.
+         */
         pixels[0] = updated_atlas_pixel;
+        pixels[1] = cleared_undamaged_atlas_pixel;
         wl_surface_attach(html_theme_surface,
                           html_theme_resized_buffer,
                           0,
@@ -2161,10 +2169,64 @@ static void test_wayland_surface_lifecycle(void)
         wl_surface_commit(html_theme_surface);
         REQUIRE(pump_barrier(server, display));
         pixels[0] = original_atlas_pixel;
+        pixels[1] = original_undamaged_atlas_pixel;
         REQUIRE(nb_wayland_server_html_theme_snapshot(
             server, &html_theme_snapshot));
         CHECK(html_theme_snapshot.surface.revision != published_revision);
         CHECK(html_theme_snapshot.surface.pixels[0] == updated_atlas_pixel);
+        CHECK(html_theme_snapshot.surface.pixels[1] ==
+              cleared_undamaged_atlas_pixel);
+        CHECK(nb_wayland_server_take_redraw(server));
+        CHECK(!nb_wayland_server_take_redraw(server));
+    }
+    {
+        const uint32_t original_first = pixels[0];
+        const uint32_t original_last =
+            pixels[(size_t)(32 - 1) * INITIAL_WIDTH + 63];
+        const uint32_t submitted_first = UINT32_C(0x7f123456);
+        const uint32_t submitted_last = UINT32_C(0x00000000);
+
+        /*
+         * Protocol v2 snapshots are copied as one complete generation and
+         * take precedence over the browser wl_surface backing store. This is
+         * the live renderer path used to clear pixels vacated by a resized
+         * transparent decoration.
+         */
+        pixels[0] = submitted_first;
+        pixels[(size_t)(32 - 1) * INITIAL_WIDTH + 63] = submitted_last;
+        nixbench_html_theme_atlas_v1_begin_layout(
+            client.html_theme_atlas, 0, 4, 64, 32);
+        nixbench_html_theme_atlas_v1_submit_pixels(
+            client.html_theme_atlas,
+            0,
+            4,
+            shm_fd,
+            64,
+            32,
+            INITIAL_WIDTH * BYTES_PER_PIXEL);
+        nixbench_html_theme_atlas_v1_tile(
+            client.html_theme_atlas,
+            NIXBENCH_HTML_THEME_ATLAS_V1_TILE_KIND_WINDOW,
+            (uint32_t)((uint64_t)window >> 32U),
+            (uint32_t)window,
+            0,
+            0,
+            64,
+            32);
+        nixbench_html_theme_atlas_v1_commit_layout(
+            client.html_theme_atlas, 0, 4);
+        REQUIRE(pump_barrier(server, display));
+        pixels[0] = original_first;
+        pixels[(size_t)(32 - 1) * INITIAL_WIDTH + 63] = original_last;
+        REQUIRE(nb_wayland_server_html_theme_snapshot(
+            server, &html_theme_snapshot));
+        CHECK(html_theme_snapshot.surface.width == 64);
+        CHECK(html_theme_snapshot.surface.height == 32);
+        CHECK(html_theme_snapshot.surface.pixels[0] == submitted_first);
+        CHECK(html_theme_snapshot.surface.pixels[64 * 32 - 1] ==
+              submitted_last);
+        REQUIRE(html_theme_snapshot.layout != NULL);
+        CHECK(html_theme_snapshot.layout->generation == 4);
         CHECK(nb_wayland_server_take_redraw(server));
         CHECK(!nb_wayland_server_take_redraw(server));
     }
