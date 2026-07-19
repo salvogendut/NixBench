@@ -55,6 +55,7 @@ struct renderer_state {
     int render_width;
     int render_height;
     char window_title[NB_WINDOW_TITLE_CAPACITY];
+    guint render_source;
     guint publish_source;
     unsigned int publish_attempts;
     bool live_atlas;
@@ -486,6 +487,22 @@ static bool begin_live_render(struct renderer_state *state)
     return wl_display_flush(state->display) >= 0 || errno == EAGAIN;
 }
 
+static gboolean begin_live_render_idle(gpointer user_data)
+{
+    struct renderer_state *state = user_data;
+
+    state->render_source = 0;
+    if (!state->state_window_available) {
+        return G_SOURCE_REMOVE;
+    }
+    if (!begin_live_render(state)) {
+        fputs("Could not begin the live HTML theme render\n", stderr);
+        state->exit_status = 1;
+        gtk_main_quit();
+    }
+    return G_SOURCE_REMOVE;
+}
+
 static void atlas_configure(
     void *data,
     struct nixbench_html_theme_atlas_v1 *atlas,
@@ -508,6 +525,11 @@ static void atlas_configure(
     state->maximum_height = maximum_height;
     state->state_theme_valid = false;
     state->state_window_available = false;
+    state->layout_in_flight = false;
+    if (state->publish_source != 0) {
+        g_source_remove(state->publish_source);
+        state->publish_source = 0;
+    }
 }
 
 static void atlas_theme(void *data,
@@ -583,10 +605,18 @@ static void atlas_state_done(
         return;
     }
     nixbench_html_theme_atlas_v1_ack_state(atlas, serial);
-    if (state->state_window_available && !begin_live_render(state)) {
-        fputs("Could not begin the live HTML theme render\n", stderr);
-        state->exit_status = 1;
-        gtk_main_quit();
+    if (!state->state_window_available && state->render_source != 0) {
+        g_source_remove(state->render_source);
+        state->render_source = 0;
+    } else if (state->state_window_available && state->render_source == 0) {
+        /*
+         * Do not enter WebKit from a Wayland listener. GTK and WebKit share
+         * this display and may perform their own synchronization while a
+         * direct roundtrip is dispatching the initial atlas transaction.
+         * Coalescing onto the main loop also avoids rendering intermediate
+         * title/app-id state emitted while the private GTK surface maps.
+         */
+        state->render_source = g_idle_add(begin_live_render_idle, state);
     }
 }
 
@@ -878,6 +908,9 @@ int main(int argc, char **argv)
     }
     if (state.publish_source != 0) {
         g_source_remove(state.publish_source);
+    }
+    if (state.render_source != 0) {
+        g_source_remove(state.render_source);
     }
     if (state.theme_atlas != NULL) {
         nixbench_html_theme_atlas_v1_destroy(state.theme_atlas);
