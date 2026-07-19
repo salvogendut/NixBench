@@ -108,7 +108,9 @@ Fantasy/
 |-- menubar.html
 |-- theme.css
 `-- assets/
-    `-- original-theme-assets.svg
+    |-- unicorn-window-frame.png
+    |-- enchanted-dock.png
+    `-- woods.png
 ```
 
 `theme.conf` is a small, non-executable manifest. Format 1 declares the stable
@@ -118,8 +120,9 @@ trusted atlas document rather than independent browsing contexts.
 
 The repository begins with three personalities:
 
-- **Fantasy**, an original expressive theme intended to exercise SVG,
-  gradients, irregular decoration silhouettes, and animation;
+- **Fantasy**, an original storybook theme with a unicorn-and-rainbow window
+  frame, an enchanted woodland dock, GTK application launchers, minimized
+  window cells, and the project-provided `woods.png` wallpaper;
 - **CDE**, an original recreation of the visual conventions of 1990s Unix
   workstations, with warm-gray bevels, orange focused title bars, slate
   inactive title bars, a textured blue-gray workspace, a right-click desktop
@@ -180,6 +183,17 @@ frame. A late renderer frame is skipped rather than stalling the desktop.
    controls, then add the Settings theme selector.
 7. Enable bounded CSS transitions and SVG animation after idle and animated
    CPU measurements on amd64 and arm64 NetBSD hardware.
+
+The Fantasy milestone exercises an additional compositor path: its irregular
+frame artwork is composited after the native client surface so the unicorn
+head, mane, and tail can surround the client opening without hiding its
+contents. Per-side fractional decoration insets define that safe opening; the
+shell expands the outer frame to preserve the client's requested logical size,
+and reconfigures a client if the output edge forces the outer silhouette to be
+clamped. The Classic rectangular base is omitted so transparent corners reveal
+the wallpaper. Native geometry, clipping, control hit testing, and application
+input remain authoritative. Its shadowed dock is also treated as a topmost
+input region, matching the HTML pixels drawn above application windows.
 
 The first hardware gate requires unchanged behavior for native NixClock,
 GTK/Wayland applications, SDL/Wayland applications, and Xwayland windows. A

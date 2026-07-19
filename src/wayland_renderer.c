@@ -36,6 +36,7 @@ static const struct nb_cde_color cde_inactive = {96, 119, 137};
 static const struct nb_cde_color cde_cyan = {79, 174, 177};
 static const struct nb_cde_color cde_title_text = {246, 243, 237};
 static const struct nb_cde_color cde_desktop = {97, 120, 138};
+static const struct nb_cde_color fantasy_desktop = {23, 39, 29};
 
 static bool cde_set_color(SDL_Renderer *renderer,
                           struct nb_cde_color color)
@@ -193,6 +194,22 @@ static bool use_cde_transition(
 {
     return renderer != NULL &&
            nb_wayland_server_html_theme_is(renderer->server, "cde");
+}
+
+static bool render_html_desktop_transition(
+    SDL_Renderer *renderer,
+    struct nb_rect viewport,
+    const struct nb_wayland_renderer *wayland_renderer)
+{
+    if (use_cde_transition(wayland_renderer)) {
+        return cde_fill(renderer, viewport, cde_desktop);
+    }
+    if (wayland_renderer != NULL &&
+        nb_wayland_server_html_theme_is(wayland_renderer->server,
+                                        "fantasy")) {
+        return cde_fill(renderer, viewport, fantasy_desktop);
+    }
+    return true;
 }
 
 static void clear_entry(struct nb_wayland_texture_cache_entry *entry)
@@ -447,16 +464,18 @@ bool nb_wayland_render_desktop(SDL_Renderer *renderer,
     }
     if (!nb_wayland_server_html_theme_snapshot(wayland_renderer->server,
                                                 &snapshot)) {
-        return !use_cde_transition(wayland_renderer) ||
-               cde_fill(renderer, viewport, cde_desktop);
+        return render_html_desktop_transition(renderer,
+                                              viewport,
+                                              wayland_renderer);
     }
     tile = nb_theme_atlas_find_tile(snapshot.layout,
                                     NB_THEME_TILE_DESKTOP,
                                     0);
     if (tile == NULL || tile->atlas_rect.width != viewport.width ||
         tile->atlas_rect.height != viewport.height) {
-        return !use_cde_transition(wayland_renderer) ||
-               cde_fill(renderer, viewport, cde_desktop);
+        return render_html_desktop_transition(renderer,
+                                              viewport,
+                                              wayland_renderer);
     }
     if (!update_atlas_texture(&wayland_renderer->atlas_entry,
                               renderer,

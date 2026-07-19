@@ -582,6 +582,43 @@ static void test_fullscreen_routes_through_menu_bar(void)
     CHECK(nb_desktop_active_window_id(&fixture.shell.desktop) == fixture.b);
 }
 
+static void test_irregular_decoration_preserves_client_size(void)
+{
+    struct nb_shell shell;
+    nb_window_id id;
+    const struct nb_window *window;
+    struct nb_rect content;
+
+    nb_shell_init(&shell, DESKTOP_SOURCE, &desktop_model);
+    nb_shell_set_window_decoration_insets(
+        &shell,
+        (struct nb_window_decoration_insets){100, 200, 100, 100});
+    nb_shell_set_window_decoration_controls(
+        &shell,
+        (struct nb_window_decoration_controls){142, 88, 40, 62, 6});
+    nb_shell_set_window_decoration_frame_draggable(&shell, true);
+    id = nb_shell_open_window(&shell,
+                              "Decorated",
+                              (struct nb_rect){40, 50, 300, 220},
+                              SOURCE_A,
+                              &model_a);
+    CHECK(id != NB_WINDOW_ID_NONE);
+    window = nb_desktop_find_window(&shell.desktop, id);
+    CHECK(window != NULL);
+    if (window == NULL) {
+        return;
+    }
+    content = nb_window_content_rect(window);
+    CHECK(window->frame.width == 368);
+    CHECK(window->frame.height == 243);
+    CHECK(content.width >= 294);
+    CHECK(content.height >= 170);
+    CHECK(content.x > window->frame.x);
+    CHECK(content.y > window->frame.y);
+    CHECK(window->decoration_controls.width == 40);
+    CHECK(window->decoration_frame_draggable);
+}
+
 int main(void)
 {
     test_active_application_menu();
@@ -595,6 +632,7 @@ int main(void)
     test_close_and_keyboard_actions();
     test_cancel_and_clamp();
     test_fullscreen_routes_through_menu_bar();
+    test_irregular_decoration_preserves_client_size();
 
     if (failures != 0) {
         fprintf(stderr, "%d shell model check(s) failed\n", failures);

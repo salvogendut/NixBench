@@ -72,6 +72,9 @@ struct nb_shell {
     bool maximize_gadget_visible;
     enum nb_window_control_layout window_control_layout;
     int window_menu_height;
+    struct nb_window_decoration_insets window_decoration_insets;
+    struct nb_window_decoration_controls window_decoration_controls;
+    bool window_decoration_frame_draggable;
 };
 
 void nb_shell_init(struct nb_shell *shell,
@@ -92,6 +95,14 @@ void nb_shell_set_window_controls(struct nb_shell *shell,
                                   enum nb_window_control_layout layout);
 void nb_shell_set_window_menu_height(struct nb_shell *shell, int height);
 int nb_shell_window_menu_height(const struct nb_shell *shell);
+void nb_shell_set_window_decoration_insets(
+    struct nb_shell *shell,
+    struct nb_window_decoration_insets insets);
+void nb_shell_set_window_decoration_controls(
+    struct nb_shell *shell,
+    struct nb_window_decoration_controls controls);
+void nb_shell_set_window_decoration_frame_draggable(struct nb_shell *shell,
+                                                     bool draggable);
 
 nb_window_id nb_shell_open_window(struct nb_shell *shell,
                                   const char *title,

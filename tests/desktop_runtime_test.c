@@ -464,6 +464,66 @@ static void test_cde_dock_launchers_and_minimized_windows(void)
     nb_desktop_runtime_destroy(runtime);
 }
 
+static void test_fantasy_dock_launchers_and_minimized_windows(void)
+{
+    static const char token[] =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    struct nb_desktop_runtime_options options;
+    struct nb_desktop_runtime *runtime;
+    struct nb_desktop_runtime_update update;
+    struct nb_rect frame;
+    nb_window_id window = NB_WINDOW_ID_NONE;
+
+    nb_desktop_runtime_options_init(&options);
+    options.enable_wayland = true;
+    options.html_theme_token = token;
+    options.html_theme_id = "fantasy";
+    options.html_theme_directory = "/tmp";
+    runtime = nb_desktop_runtime_create(&options, &initial_output);
+    CHECK(runtime != NULL);
+    if (runtime == NULL) {
+        return;
+    }
+
+    /* The Fantasy dock spans x=6..1018 and y=424..634 on this output. */
+    update = click_runtime(runtime, 285, 570, 220);
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_SAKURA);
+    update = click_runtime(runtime, 350, 570, 222);
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_MIDORI);
+    update = click_runtime(runtime, 415, 570, 224);
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_THUNAR);
+
+    CHECK(nb_desktop_runtime_active_window_frame(runtime, &window, &frame));
+    CHECK(window != NB_WINDOW_ID_NONE);
+    {
+        /* Fantasy places minimize in the leftmost illustrated socket. */
+        const int control_width = (frame.width * 40) / 1000;
+        const int control_height = (frame.height * 62) / 1000;
+        const int control_right = (frame.width * 88) / 1000;
+        const int control_top = (frame.height * 142) / 1000;
+        const int control_gap = (frame.width * 6) / 1000;
+        const int minimize_x = frame.x + frame.width - control_right -
+                               control_width -
+                               (2 * (control_width + control_gap));
+        const int minimize_y = frame.y + control_top;
+
+        update = click_runtime(runtime,
+                               minimize_x + (control_width / 2),
+                               minimize_y + (control_height / 2),
+                               226);
+    }
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_NONE);
+    CHECK(!nb_desktop_runtime_active_window_frame(runtime, &window, &frame));
+
+    /* The first minimized-title cell occupies the grid's upper-left slot. */
+    update = click_runtime(runtime, 520, 555, 228);
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_NONE);
+    CHECK(nb_desktop_runtime_active_window_frame(runtime, &window, &frame));
+    CHECK(window != NB_WINDOW_ID_NONE);
+
+    nb_desktop_runtime_destroy(runtime);
+}
+
 static void test_settings_and_application_pins(void)
 {
     struct nb_user_preferences initial_preferences;
@@ -754,6 +814,7 @@ int main(void)
     test_keyboard_menu_path();
     test_application_launcher_menu();
     test_cde_dock_launchers_and_minimized_windows();
+    test_fantasy_dock_launchers_and_minimized_windows();
     test_settings_and_application_pins();
     test_screenshot_countdown();
     test_defensive_api();

@@ -40,5 +40,13 @@ bool nb_desktop_render_with_callbacks(
     nb_window_decoration_render_callback render_decoration,
     nb_window_content_render_callback render_content,
     void *context);
+bool nb_desktop_render_with_layer_callbacks(
+    SDL_Renderer *renderer,
+    const struct nb_desktop *desktop,
+    nb_window_decoration_render_callback render_base,
+    nb_window_decoration_render_callback render_decoration,
+    nb_window_content_render_callback render_content,
+    nb_window_decoration_render_callback render_overlay,
+    void *context);
 
 #endif

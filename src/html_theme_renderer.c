@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700
 
 #include <errno.h>
 #include <limits.h>
@@ -31,8 +31,19 @@ enum component_kind {
 
 enum {
     LIVE_ATLAS_PREFERRED_ROW_WIDTH = 2048,
-    CDE_MINIMIZED_WINDOW_CAPACITY = 4
+    DESKTOP_MINIMIZED_WINDOW_CAPACITY = 4,
+    THEME_ASSET_MAXIMUM_BYTES = 4 * 1024 * 1024
 };
+
+static const char theme_asset_scheme[] = "nixbench-theme";
+static const char fantasy_window_frame_uri[] =
+    "nixbench-theme:///unicorn-window-frame.png";
+static const char fantasy_compact_window_frame_uri[] =
+    "nixbench-theme:///gnome-compact-window-frame.png";
+static const char fantasy_dock_uri[] =
+    "nixbench-theme:///enchanted-dock.png";
+static const char fantasy_wallpaper_uri[] =
+    "nixbench-theme:///woods.png";
 
 struct renderer_window {
     uint64_t id;
@@ -83,11 +94,19 @@ struct renderer_state {
     struct renderer_window windows[NB_THEME_ATLAS_MAX_TILES];
     size_t window_count;
     struct renderer_minimized_window
-        minimized_windows[CDE_MINIMIZED_WINDOW_CAPACITY];
+        minimized_windows[DESKTOP_MINIMIZED_WINDOW_CAPACITY];
     size_t minimized_window_count;
     gchar *sakura_icon_uri;
     gchar *midori_icon_uri;
     gchar *thunar_icon_uri;
+    gchar *fantasy_window_frame_uri;
+    gchar *fantasy_compact_window_frame_uri;
+    gchar *fantasy_dock_uri;
+    gchar *fantasy_wallpaper_uri;
+    GBytes *fantasy_window_frame_bytes;
+    GBytes *fantasy_compact_window_frame_bytes;
+    GBytes *fantasy_dock_bytes;
+    GBytes *fantasy_wallpaper_bytes;
     guint render_source;
     guint publish_source;
     unsigned int publish_attempts;
@@ -100,6 +119,80 @@ struct renderer_state {
     bool snapshot_started;
     int exit_status;
 };
+
+static bool path_belongs_to_directory(const char *directory,
+                                      const char *path)
+{
+    const size_t length = directory != NULL ? strlen(directory) : 0;
+
+    return length != 0 && path != NULL &&
+           strncmp(directory, path, length) == 0 && path[length] == '/';
+}
+
+static GBytes *theme_asset_bytes(const struct nb_theme_bundle *bundle,
+                                 const char *relative_path)
+{
+    char combined[NB_THEME_PATH_CAPACITY];
+    char canonical[NB_THEME_PATH_CAPACITY];
+    gchar *contents = NULL;
+    gsize length = 0;
+    const int result =
+        bundle != NULL && relative_path != NULL
+            ? snprintf(combined,
+                       sizeof(combined),
+                       "%s/%s",
+                       bundle->directory,
+                       relative_path)
+            : -1;
+
+    if (result < 0 || (size_t)result >= sizeof(combined) ||
+        realpath(combined, canonical) == NULL ||
+        !path_belongs_to_directory(bundle->directory, canonical) ||
+        !g_file_get_contents(canonical, &contents, &length, NULL) ||
+        length == 0 || length > THEME_ASSET_MAXIMUM_BYTES) {
+        g_free(contents);
+        return NULL;
+    }
+    return g_bytes_new_take(contents, length);
+}
+
+static void theme_asset_request(WebKitURISchemeRequest *request,
+                                gpointer user_data)
+{
+    struct renderer_state *state = user_data;
+    const char *path = webkit_uri_scheme_request_get_path(request);
+    GBytes *bytes = NULL;
+    GInputStream *stream;
+    GError *error;
+    gsize length;
+
+    if (path != NULL && strcmp(path, "/unicorn-window-frame.png") == 0) {
+        bytes = state->fantasy_window_frame_bytes;
+    } else if (path != NULL &&
+               strcmp(path, "/gnome-compact-window-frame.png") == 0) {
+        bytes = state->fantasy_compact_window_frame_bytes;
+    } else if (path != NULL && strcmp(path, "/enchanted-dock.png") == 0) {
+        bytes = state->fantasy_dock_bytes;
+    } else if (path != NULL && strcmp(path, "/woods.png") == 0) {
+        bytes = state->fantasy_wallpaper_bytes;
+    }
+    if (bytes == NULL) {
+        error = g_error_new(G_IO_ERROR,
+                            G_IO_ERROR_NOT_FOUND,
+                            "Unknown NixBench theme asset: %s",
+                            path != NULL ? path : "(missing path)");
+        webkit_uri_scheme_request_finish_error(request, error);
+        g_error_free(error);
+        return;
+    }
+    length = g_bytes_get_size(bytes);
+    stream = g_memory_input_stream_new_from_bytes(bytes);
+    webkit_uri_scheme_request_finish(request,
+                                     stream,
+                                     (gint64)length,
+                                     "image/png");
+    g_object_unref(stream);
+}
 
 static gchar *gtk_icon_data_uri(const char *icon_name)
 {
@@ -157,10 +250,27 @@ static void append_launcher_icon_style(GString *document,
         selector);
 }
 
+static void append_background_image_style(GString *document,
+                                          const char *selector,
+                                          const char *property,
+                                          const char *uri)
+{
+    if (document == NULL || selector == NULL || property == NULL ||
+        uri == NULL) {
+        return;
+    }
+    g_string_append_printf(document,
+                           "%s{%s:url(\"%s\");}",
+                           selector,
+                           property,
+                           uri);
+}
+
 static bool renders_desktop(const struct renderer_state *state)
 {
     return state != NULL && state->bundle != NULL &&
-           strcmp(state->bundle->id, "cde") == 0;
+           (strcmp(state->bundle->id, "cde") == 0 ||
+            strcmp(state->bundle->id, "fantasy") == 0);
 }
 
 static bool has_render_state(const struct renderer_state *state)
@@ -574,7 +684,8 @@ static gchar *build_live_atlas_document(
         "<!doctype html><html><head><meta charset=\"utf-8\">"
         "<meta http-equiv=\"Content-Security-Policy\" content=\""
         "default-src 'none'; script-src 'none'; connect-src 'none'; "
-        "style-src 'unsafe-inline'; img-src data:; font-src data:; "
+        "style-src 'unsafe-inline'; img-src data: nixbench-theme:; "
+        "font-src data:; "
         "media-src 'none'; object-src 'none'; frame-src 'none'; "
         "form-action 'none'; base-uri 'none'\">"
         "<style>html,body{width:100%;height:100%;margin:0;overflow:hidden;"
@@ -678,6 +789,23 @@ static gchar *build_live_atlas_document(
         append_launcher_icon_style(document,
                                    ".thunar-icon",
                                    state->thunar_icon_uri);
+        append_background_image_style(document,
+                                      ".fantasy-window",
+                                      "--fantasy-window-frame-image",
+                                      state->fantasy_window_frame_uri);
+        append_background_image_style(
+            document,
+            ".fantasy-compact-tile .fantasy-window",
+            "--fantasy-window-frame-image",
+            state->fantasy_compact_window_frame_uri);
+        append_background_image_style(document,
+                                      ".fantasy-dock",
+                                      "--fantasy-dock-image",
+                                      state->fantasy_dock_uri);
+        append_background_image_style(document,
+                                      ".fantasy-desktop",
+                                      "--fantasy-wallpaper-image",
+                                      state->fantasy_wallpaper_uri);
     }
     g_string_append_len(document, stylesheet, (gssize)stylesheet_length);
     g_string_append(document, middle);
@@ -732,6 +860,7 @@ static gchar *build_live_atlas_document(
         const bool active =
             (window->state &
              NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_ACTIVE) != 0;
+        const bool compact = window->width <= 400 || window->height <= 300;
         gchar *updated_fragment = set_fragment_title(
             fragment, fragment_length, window->title);
 
@@ -743,12 +872,13 @@ static gchar *build_live_atlas_document(
         }
         g_string_append_printf(
             document,
-            "<section class=\"nixbench-atlas-tile%s%s\" "
+            "<section class=\"nixbench-atlas-tile%s%s%s\" "
             "data-nixbench-window-id=\"%" G_GUINT64_FORMAT "\" "
             "data-nixbench-active=\"%s\" "
             "style=\"left:%dpx;top:%dpx;width:%dpx;height:%dpx\">",
             show_minimize ? "" : " nixbench-hide-minimize",
             show_maximize ? "" : " nixbench-hide-maximize",
+            compact ? " fantasy-compact-tile" : "",
             (guint64)window->id,
             active ? "true" : "false",
             window->atlas_x,
@@ -1191,7 +1321,7 @@ static void atlas_window(
 
         if (!renders_desktop(state) ||
             state->minimized_window_count ==
-                CDE_MINIMIZED_WINDOW_CAPACITY) {
+                DESKTOP_MINIMIZED_WINDOW_CAPACITY) {
             return;
         }
         minimized =
@@ -1480,7 +1610,46 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    state.bundle = &bundle;
+    state.snapshot_path = options.snapshot_path;
+    state.live_atlas = options.atlas_token != NULL;
+
     context = webkit_web_context_new_ephemeral();
+    if (state.live_atlas && strcmp(bundle.id, "fantasy") == 0) {
+        state.fantasy_window_frame_bytes = theme_asset_bytes(
+            &bundle, "assets/unicorn-window-frame.png");
+        state.fantasy_compact_window_frame_bytes = theme_asset_bytes(
+            &bundle, "assets/gnome-compact-window-frame.png");
+        state.fantasy_dock_bytes = theme_asset_bytes(
+            &bundle, "assets/enchanted-dock.png");
+        state.fantasy_wallpaper_bytes = theme_asset_bytes(
+            &bundle, "assets/woods.png");
+        if (state.fantasy_window_frame_bytes == NULL ||
+            state.fantasy_compact_window_frame_bytes == NULL ||
+            state.fantasy_dock_bytes == NULL ||
+            state.fantasy_wallpaper_bytes == NULL) {
+            fputs("Could not load Fantasy theme assets\n", stderr);
+            g_clear_pointer(&state.fantasy_window_frame_bytes, g_bytes_unref);
+            g_clear_pointer(&state.fantasy_compact_window_frame_bytes,
+                            g_bytes_unref);
+            g_clear_pointer(&state.fantasy_dock_bytes, g_bytes_unref);
+            g_clear_pointer(&state.fantasy_wallpaper_bytes, g_bytes_unref);
+            g_free(document);
+            g_object_unref(context);
+            return 1;
+        }
+        state.fantasy_window_frame_uri = g_strdup(
+            fantasy_window_frame_uri);
+        state.fantasy_compact_window_frame_uri = g_strdup(
+            fantasy_compact_window_frame_uri);
+        state.fantasy_dock_uri = g_strdup(fantasy_dock_uri);
+        state.fantasy_wallpaper_uri = g_strdup(fantasy_wallpaper_uri);
+        webkit_web_context_register_uri_scheme(context,
+                                               theme_asset_scheme,
+                                               theme_asset_request,
+                                               &state,
+                                               NULL);
+    }
     web_view_widget = webkit_web_view_new_with_context(context);
     web_view = WEBKIT_WEB_VIEW(web_view_widget);
     configure_settings(web_view);
@@ -1507,12 +1676,11 @@ int main(int argc, char **argv)
     gtk_container_add(GTK_CONTAINER(window), web_view_widget);
     g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 
-    state.bundle = &bundle;
     state.window = GTK_WINDOW(window);
     state.web_view = web_view;
-    state.snapshot_path = options.snapshot_path;
-    state.live_atlas = options.atlas_token != NULL;
-    if (state.live_atlas && strcmp(bundle.id, "cde") == 0) {
+    if (state.live_atlas &&
+        (strcmp(bundle.id, "cde") == 0 ||
+         strcmp(bundle.id, "fantasy") == 0)) {
         /* These are the Icon= names from the installed GTK applications. */
         state.sakura_icon_uri = gtk_icon_data_uri("terminal-tango");
         state.midori_icon_uri =
@@ -1570,6 +1738,15 @@ int main(int argc, char **argv)
     g_free(state.sakura_icon_uri);
     g_free(state.midori_icon_uri);
     g_free(state.thunar_icon_uri);
+    g_free(state.fantasy_window_frame_uri);
+    g_free(state.fantasy_compact_window_frame_uri);
+    g_free(state.fantasy_dock_uri);
+    g_free(state.fantasy_wallpaper_uri);
+    g_clear_pointer(&state.fantasy_window_frame_bytes, g_bytes_unref);
+    g_clear_pointer(&state.fantasy_compact_window_frame_bytes,
+                    g_bytes_unref);
+    g_clear_pointer(&state.fantasy_dock_bytes, g_bytes_unref);
+    g_clear_pointer(&state.fantasy_wallpaper_bytes, g_bytes_unref);
     g_object_unref(context);
     return state.exit_status;
 }

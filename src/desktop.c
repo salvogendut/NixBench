@@ -338,6 +338,59 @@ void nb_desktop_set_window_menu_height(struct nb_desktop *desktop,
     }
 }
 
+void nb_desktop_set_window_decoration_insets(
+    struct nb_desktop *desktop,
+    struct nb_window_decoration_insets insets)
+{
+    size_t index;
+
+    if (desktop == NULL ||
+        !nb_window_decoration_insets_are_valid(insets)) {
+        return;
+    }
+    for (index = 0; index < desktop->window_count; ++index) {
+        struct nb_desktop_slot *slot =
+            &desktop->slots[desktop->stack[index]];
+
+        nb_window_set_decoration_content_insets(&slot->window, insets);
+    }
+}
+
+void nb_desktop_set_window_decoration_controls(
+    struct nb_desktop *desktop,
+    struct nb_window_decoration_controls controls)
+{
+    size_t index;
+
+    if (desktop == NULL ||
+        !nb_window_decoration_controls_are_valid(controls)) {
+        return;
+    }
+    for (index = 0; index < desktop->window_count; ++index) {
+        struct nb_desktop_slot *slot =
+            &desktop->slots[desktop->stack[index]];
+
+        nb_window_set_decoration_controls(&slot->window, controls);
+    }
+}
+
+void nb_desktop_set_window_decoration_frame_draggable(
+    struct nb_desktop *desktop,
+    bool draggable)
+{
+    size_t index;
+
+    if (desktop == NULL) {
+        return;
+    }
+    for (index = 0; index < desktop->window_count; ++index) {
+        struct nb_desktop_slot *slot =
+            &desktop->slots[desktop->stack[index]];
+
+        nb_window_set_decoration_frame_draggable(&slot->window, draggable);
+    }
+}
+
 size_t nb_desktop_window_count(const struct nb_desktop *desktop)
 {
     return desktop->window_count;

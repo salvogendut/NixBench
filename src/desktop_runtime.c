@@ -47,7 +47,19 @@ enum {
     NIXBENCH_CDE_DOCK_LAUNCH_WIDTH = 152,
     NIXBENCH_CDE_DOCK_MINIMIZED_X = 340,
     NIXBENCH_CDE_DOCK_MINIMIZED_WIDTH = 206,
-    NIXBENCH_CDE_DOCK_MINIMIZED_CAPACITY = 4
+    NIXBENCH_CDE_DOCK_MINIMIZED_CAPACITY = 4,
+    NIXBENCH_FANTASY_DOCK_PREFERRED_WIDTH = 1200,
+    NIXBENCH_FANTASY_DOCK_HEIGHT = 210,
+    NIXBENCH_FANTASY_DOCK_MARGIN = 6,
+    NIXBENCH_FANTASY_INSET_LEFT = 100,
+    NIXBENCH_FANTASY_INSET_TOP = 205,
+    NIXBENCH_FANTASY_INSET_RIGHT = 105,
+    NIXBENCH_FANTASY_INSET_BOTTOM = 85,
+    NIXBENCH_FANTASY_CONTROL_TOP = 142,
+    NIXBENCH_FANTASY_CONTROL_RIGHT = 88,
+    NIXBENCH_FANTASY_CONTROL_WIDTH = 40,
+    NIXBENCH_FANTASY_CONTROL_HEIGHT = 62,
+    NIXBENCH_FANTASY_CONTROL_GAP = 6
 };
 
 #define NIXBENCH_MENU_SOURCE_DESKTOP UINT64_C(1)
@@ -195,6 +207,7 @@ struct nb_desktop_runtime {
     struct nb_wallpaper_chooser_action wallpaper_pressed_action;
     bool pending_preferences_changed;
     bool cde_theme;
+    bool fantasy_theme;
     struct nb_rect cde_dock;
     bool cde_dock_dragging;
     bool cde_dock_moved;
@@ -226,6 +239,12 @@ struct nb_desktop_runtime {
     struct nb_damage_region render_damage;
 };
 
+static bool has_theme_dock(const struct nb_desktop_runtime *runtime)
+{
+    return runtime != NULL &&
+           (runtime->cde_theme || runtime->fantasy_theme);
+}
+
 static bool rect_contains(struct nb_rect rect, int x, int y)
 {
     return rect.width > 0 && rect.height > 0 && x >= rect.x && y >= rect.y &&
@@ -239,20 +258,30 @@ static void layout_cde_dock(struct nb_desktop_runtime *runtime,
     int height;
     int x;
 
-    if (runtime == NULL || !runtime->cde_theme || runtime->viewport.width <= 0 ||
+    const int margin = runtime != NULL && runtime->fantasy_theme
+                           ? NIXBENCH_FANTASY_DOCK_MARGIN
+                           : NIXBENCH_CDE_DOCK_MARGIN;
+    const int preferred_width = runtime != NULL && runtime->fantasy_theme
+                                    ? NIXBENCH_FANTASY_DOCK_PREFERRED_WIDTH
+                                    : NIXBENCH_CDE_DOCK_PREFERRED_WIDTH;
+    const int preferred_height = runtime != NULL && runtime->fantasy_theme
+                                     ? NIXBENCH_FANTASY_DOCK_HEIGHT
+                                     : NIXBENCH_CDE_DOCK_HEIGHT;
+
+    if (!has_theme_dock(runtime) || runtime->viewport.width <= 0 ||
         runtime->viewport.height <= 0) {
         return;
     }
-    width = runtime->viewport.width - (2 * NIXBENCH_CDE_DOCK_MARGIN);
-    if (width > NIXBENCH_CDE_DOCK_PREFERRED_WIDTH) {
-        width = NIXBENCH_CDE_DOCK_PREFERRED_WIDTH;
+    width = runtime->viewport.width - (2 * margin);
+    if (width > preferred_width) {
+        width = preferred_width;
     }
     if (width < 1) {
         width = runtime->viewport.width;
     }
-    height = NIXBENCH_CDE_DOCK_HEIGHT;
-    if (height > runtime->viewport.height - NIXBENCH_CDE_DOCK_MARGIN) {
-        height = runtime->viewport.height - NIXBENCH_CDE_DOCK_MARGIN;
+    height = preferred_height;
+    if (height > runtime->viewport.height - margin) {
+        height = runtime->viewport.height - margin;
     }
     if (height < 1) {
         height = runtime->viewport.height;
@@ -267,7 +296,7 @@ static void layout_cde_dock(struct nb_desktop_runtime *runtime,
     }
     runtime->cde_dock = (struct nb_rect){
         x,
-        runtime->viewport.height - height - NIXBENCH_CDE_DOCK_MARGIN,
+        runtime->viewport.height - height - margin,
         width,
         height
     };
@@ -282,19 +311,25 @@ static enum nb_desktop_launch_request cde_dock_launcher_at(
     int y)
 {
     int relative_x;
+    int launch_x;
+    int launch_width;
     int slot;
 
     if (runtime == NULL || !rect_contains(runtime->cde_dock, x, y)) {
         return NB_DESKTOP_LAUNCH_NONE;
     }
     relative_x = x - runtime->cde_dock.x;
-    if (relative_x < NIXBENCH_CDE_DOCK_LAUNCH_X ||
-        relative_x >= NIXBENCH_CDE_DOCK_LAUNCH_X +
-                          NIXBENCH_CDE_DOCK_LAUNCH_WIDTH) {
+    launch_x = runtime->fantasy_theme
+                   ? (runtime->cde_dock.width * 25) / 100
+                   : NIXBENCH_CDE_DOCK_LAUNCH_X;
+    launch_width = runtime->fantasy_theme
+                       ? (runtime->cde_dock.width * 225) / 1200
+                       : NIXBENCH_CDE_DOCK_LAUNCH_WIDTH;
+    if (launch_width <= 0 || relative_x < launch_x ||
+        relative_x >= launch_x + launch_width) {
         return NB_DESKTOP_LAUNCH_NONE;
     }
-    slot = ((relative_x - NIXBENCH_CDE_DOCK_LAUNCH_X) * 3) /
-           NIXBENCH_CDE_DOCK_LAUNCH_WIDTH;
+    slot = ((relative_x - launch_x) * 3) / launch_width;
     if (slot == 0) {
         return NB_DESKTOP_LAUNCH_SAKURA;
     }
@@ -314,6 +349,10 @@ static nb_window_id cde_dock_minimized_window_at(
     size_t requested_index;
     int relative_x;
     int relative_y;
+    int minimized_x;
+    int minimized_width;
+    int minimized_y;
+    int minimized_height;
     int column;
     int row;
 
@@ -322,14 +361,31 @@ static nb_window_id cde_dock_minimized_window_at(
     }
     relative_x = x - runtime->cde_dock.x;
     relative_y = y - runtime->cde_dock.y;
-    if (relative_x < NIXBENCH_CDE_DOCK_MINIMIZED_X ||
-        relative_x >= NIXBENCH_CDE_DOCK_MINIMIZED_X +
-                          NIXBENCH_CDE_DOCK_MINIMIZED_WIDTH) {
+    minimized_x = runtime->fantasy_theme
+                      ? (runtime->cde_dock.width * 47) / 100
+                      : NIXBENCH_CDE_DOCK_MINIMIZED_X;
+    minimized_width = runtime->fantasy_theme
+                          ? (runtime->cde_dock.width * 36) / 100
+                          : NIXBENCH_CDE_DOCK_MINIMIZED_WIDTH;
+    minimized_y = runtime->fantasy_theme
+                      ? runtime->cde_dock.height - 93
+                      : 0;
+    minimized_height = runtime->fantasy_theme
+                           ? 67
+                           : runtime->cde_dock.height;
+    if (minimized_y < 0) {
+        minimized_y = 0;
+        minimized_height = runtime->cde_dock.height;
+    }
+    if (minimized_width <= 0 || minimized_height <= 0 ||
+        relative_x < minimized_x ||
+        relative_x >= minimized_x + minimized_width ||
+        relative_y < minimized_y ||
+        relative_y >= minimized_y + minimized_height) {
         return NB_WINDOW_ID_NONE;
     }
-    column = ((relative_x - NIXBENCH_CDE_DOCK_MINIMIZED_X) * 2) /
-             NIXBENCH_CDE_DOCK_MINIMIZED_WIDTH;
-    row = (relative_y * 2) / runtime->cde_dock.height;
+    column = ((relative_x - minimized_x) * 2) / minimized_width;
+    row = ((relative_y - minimized_y) * 2) / minimized_height;
     if (column < 0 || column > 1 || row < 0 || row > 1) {
         return NB_WINDOW_ID_NONE;
     }
@@ -528,6 +584,9 @@ static bool render_window_decoration(SDL_Renderer *renderer,
 
 #if NIXBENCH_HAS_WAYLAND
     if (runtime->wayland != NULL && runtime->wayland_renderer != NULL) {
+        if (runtime->fantasy_theme) {
+            return true;
+        }
         return nb_wayland_render_decoration(renderer,
                                             id,
                                             window,
@@ -537,6 +596,46 @@ static bool render_window_decoration(SDL_Renderer *renderer,
     (void)renderer;
     (void)id;
     (void)window;
+    (void)runtime;
+#endif
+    return true;
+}
+
+static bool render_window_base(SDL_Renderer *renderer,
+                               nb_window_id id,
+                               const struct nb_window *window,
+                               void *context)
+{
+    const struct nb_desktop_runtime *runtime = context;
+
+    (void)id;
+    if (runtime != NULL && runtime->fantasy_theme && !window->fullscreen) {
+        /* Preserve wallpaper through the irregular transparent silhouette. */
+        return true;
+    }
+    return nb_window_render_base(renderer, window);
+}
+
+static bool render_window_overlay(SDL_Renderer *renderer,
+                                  nb_window_id id,
+                                  const struct nb_window *window,
+                                  void *context)
+{
+    struct nb_desktop_runtime *runtime = context;
+
+#if NIXBENCH_HAS_WAYLAND
+    if (runtime->fantasy_theme && runtime->wayland != NULL &&
+        runtime->wayland_renderer != NULL) {
+        return nb_wayland_render_decoration(renderer,
+                                            id,
+                                            window,
+                                            runtime->wayland_renderer);
+    }
+#else
+    (void)renderer;
+    (void)id;
+    (void)window;
+    (void)runtime;
 #endif
     return true;
 }
@@ -618,12 +717,12 @@ static void start_wayland(struct nb_desktop_runtime *runtime)
                     "Could not enable the private HTML theme endpoint; "
                     "continuing with Classic decorations");
     }
-    if (runtime->cde_theme &&
+    if (has_theme_dock(runtime) &&
         !nb_wayland_server_set_html_theme_shell_state(runtime->wayland,
                                                        runtime->cde_dock,
                                                        "00:00")) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                    "Could not initialize the CDE front-panel state");
+                    "Could not initialize the HTML desktop dock state");
     }
     runtime->wayland_renderer =
         nb_wayland_renderer_create(runtime->wayland);
@@ -1372,7 +1471,9 @@ static bool process_pointer_event(const struct nb_host_event *event,
                     true);
             }
 #endif
-            if (runtime->cde_theme && target.window == NB_WINDOW_ID_NONE &&
+            /* HTML docks are composited above application windows, so their
+             * input region must take the same precedence as their pixels. */
+            if (has_theme_dock(runtime) &&
                 rect_contains(runtime->cde_dock, x, y)) {
                 runtime->cde_dock_dragging = true;
                 runtime->cde_dock_moved = false;
@@ -1476,11 +1577,17 @@ static bool process_pointer_event(const struct nb_host_event *event,
             }
 #endif
             if (runtime->cde_dock_dragging) {
+                const int clock_x = runtime->fantasy_theme
+                                        ? runtime->cde_dock.x +
+                                              (runtime->cde_dock.width * 16) /
+                                                  100
+                                        : runtime->cde_dock.x;
+                const int clock_width = runtime->fantasy_theme
+                                            ? 76
+                                            : NIXBENCH_CDE_DOCK_CLOCK_WIDTH;
                 const bool clock_clicked =
                     !runtime->cde_dock_moved &&
-                    x >= runtime->cde_dock.x &&
-                    x < runtime->cde_dock.x +
-                            NIXBENCH_CDE_DOCK_CLOCK_WIDTH &&
+                    x >= clock_x && x < clock_x + clock_width &&
                     y >= runtime->cde_dock.y &&
                     y < runtime->cde_dock.y + runtime->cde_dock.height;
                 const enum nb_desktop_launch_request launch_request =
@@ -1582,7 +1689,7 @@ static bool process_pointer_event(const struct nb_host_event *event,
         return true;
     }
 
-    if (runtime->cde_theme &&
+    if (has_theme_dock(runtime) &&
         event->data.pointer_button.button == NB_HOST_POINTER_BUTTON_RIGHT &&
         (runtime->cde_context_button_down ||
          target.window == NB_WINDOW_ID_NONE)) {
@@ -2027,6 +2134,8 @@ struct nb_desktop_runtime *nb_desktop_runtime_create(
     runtime->options = *options;
     runtime->cde_theme = options->html_theme_id != NULL &&
                          strcmp(options->html_theme_id, "cde") == 0;
+    runtime->fantasy_theme = options->html_theme_id != NULL &&
+                             strcmp(options->html_theme_id, "fantasy") == 0;
     (void)snprintf(runtime->cde_clock,
                    sizeof(runtime->cde_clock),
                    "%s",
@@ -2050,10 +2159,32 @@ struct nb_desktop_runtime *nb_desktop_runtime_create(
                   NIXBENCH_MENU_SOURCE_DESKTOP,
                   &desktop_menu_model);
     apply_window_control_preferences(runtime);
-    if (runtime->cde_theme) {
+    if (has_theme_dock(runtime)) {
         nb_shell_set_floating_menu(&runtime->shell, true);
+    }
+    if (runtime->cde_theme) {
         nb_shell_set_window_menu_height(&runtime->shell,
                                         NB_WINDOW_MENU_HEIGHT);
+    } else if (runtime->fantasy_theme) {
+        nb_shell_set_window_decoration_insets(
+            &runtime->shell,
+            (struct nb_window_decoration_insets){
+                NIXBENCH_FANTASY_INSET_LEFT,
+                NIXBENCH_FANTASY_INSET_TOP,
+                NIXBENCH_FANTASY_INSET_RIGHT,
+                NIXBENCH_FANTASY_INSET_BOTTOM
+            });
+        nb_shell_set_window_decoration_controls(
+            &runtime->shell,
+            (struct nb_window_decoration_controls){
+                NIXBENCH_FANTASY_CONTROL_TOP,
+                NIXBENCH_FANTASY_CONTROL_RIGHT,
+                NIXBENCH_FANTASY_CONTROL_WIDTH,
+                NIXBENCH_FANTASY_CONTROL_HEIGHT,
+                NIXBENCH_FANTASY_CONTROL_GAP
+            });
+        nb_shell_set_window_decoration_frame_draggable(&runtime->shell,
+                                                        true);
     }
     rebuild_launcher_menu(runtime);
     if (!nb_application_host_init(&runtime->applications,
@@ -2552,7 +2683,7 @@ bool nb_desktop_runtime_render_region(
         bar_text = countdown_text;
     }
 #if NIXBENCH_HAS_WAYLAND
-    if (runtime->cde_theme && runtime->wayland != NULL) {
+    if (has_theme_dock(runtime) && runtime->wayland != NULL) {
         (void)snprintf(runtime->cde_clock,
                        sizeof(runtime->cde_clock),
                        "%s",
@@ -2588,13 +2719,16 @@ bool nb_desktop_runtime_render_region(
     }
 #endif
     rendered = rendered &&
-               nb_shell_render_with_callbacks(renderer,
-                                               &runtime->shell,
-                                               runtime->viewport,
-                                               bar_text,
-                                               render_window_decoration,
-                                               render_window_content,
-                                               runtime) &&
+               nb_shell_render_with_layer_callbacks(
+                   renderer,
+                   &runtime->shell,
+                   runtime->viewport,
+                   bar_text,
+                   render_window_base,
+                   render_window_decoration,
+                   render_window_content,
+                   render_window_overlay,
+                   runtime) &&
                render_screenshot_status(renderer, runtime) &&
                (!runtime->pointer_visible ||
                 render_software_pointer(renderer,

@@ -83,6 +83,52 @@ static void test_geometry_and_hit_testing(void)
     CHECK(nb_window_hit_test(&window, 150, 90) == NB_WINDOW_HIT_NONE);
 }
 
+static void test_irregular_decoration_content_insets(void)
+{
+    struct nb_window window = make_window();
+    const struct nb_window_decoration_insets insets = {100, 200, 150, 100};
+    const struct nb_window_decoration_controls controls = {142, 88, 40, 62, 6};
+    struct nb_rect content;
+    struct nb_rect close;
+    struct nb_rect maximize;
+    struct nb_rect minimize;
+
+    CHECK(nb_window_decoration_insets_are_valid(insets));
+    CHECK(!nb_window_decoration_insets_are_valid(
+        (struct nb_window_decoration_insets){600, 0, 400, 0}));
+    nb_window_set_decoration_content_insets(&window, insets);
+    content = nb_window_content_rect(&window);
+    CHECK(content.x == 132);
+    CHECK(content.y == 124);
+    CHECK(content.width == 240);
+    CHECK(content.height == 154);
+    CHECK(nb_window_menu_rect(&window).width == 0);
+    CHECK(nb_window_hit_test(&window, content.x, content.y) ==
+          NB_WINDOW_HIT_CONTENT);
+    CHECK(nb_window_hit_test(&window, content.x - 1, content.y) ==
+          NB_WINDOW_HIT_FRAME);
+
+    CHECK(nb_window_decoration_controls_are_valid(controls));
+    CHECK(!nb_window_decoration_controls_are_valid(
+        (struct nb_window_decoration_controls){0, 900, 50, 50, 10}));
+    nb_window_set_decoration_controls(&window, controls);
+    close = nb_window_close_rect(&window);
+    maximize = nb_window_maximize_rect(&window);
+    minimize = nb_window_minimize_rect(&window);
+    CHECK(close.x == 380);
+    CHECK(close.y == 111);
+    CHECK(close.width == 12);
+    CHECK(close.height == 13);
+    CHECK(maximize.x == 367);
+    CHECK(minimize.x == 354);
+    CHECK(nb_window_hit_test(&window, close.x + 1, close.y + 1) ==
+          NB_WINDOW_HIT_CLOSE);
+
+    CHECK(nb_window_hit_test(&window, 110, 200) == NB_WINDOW_HIT_FRAME);
+    nb_window_set_decoration_frame_draggable(&window, true);
+    CHECK(nb_window_hit_test(&window, 110, 200) == NB_WINDOW_HIT_TITLE);
+}
+
 static void test_title_ownership(void)
 {
     struct nb_window window;
@@ -336,6 +382,15 @@ static void test_window_control_preferences(void)
     close = nb_window_close_rect(&window);
     CHECK(nb_window_hit_test(&window, close.x + 1, close.y + 1) ==
           NB_WINDOW_HIT_CLOSE);
+
+    nb_window_set_decoration_menu_height(&window, 64);
+    CHECK(window.decoration_menu_height == 64);
+    CHECK(nb_window_menu_rect(&window).height == 64);
+    CHECK(nb_window_content_rect(&window).y ==
+          nb_window_title_rect(&window).y +
+              nb_window_title_rect(&window).height + 64);
+    nb_window_set_decoration_menu_height(&window, 1000);
+    CHECK(window.decoration_menu_height == NB_WINDOW_DECORATION_INSET_MAX);
 }
 
 static void test_resizing(void)
@@ -493,6 +548,7 @@ static void test_cancel_and_repeated_down(void)
 int main(void)
 {
     test_geometry_and_hit_testing();
+    test_irregular_decoration_content_insets();
     test_title_ownership();
     test_dragging();
     test_clamping();

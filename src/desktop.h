@@ -63,6 +63,15 @@ void nb_desktop_set_window_controls(struct nb_desktop *desktop,
                                     enum nb_window_control_layout layout);
 void nb_desktop_set_window_menu_height(struct nb_desktop *desktop,
                                        int height);
+void nb_desktop_set_window_decoration_insets(
+    struct nb_desktop *desktop,
+    struct nb_window_decoration_insets insets);
+void nb_desktop_set_window_decoration_controls(
+    struct nb_desktop *desktop,
+    struct nb_window_decoration_controls controls);
+void nb_desktop_set_window_decoration_frame_draggable(
+    struct nb_desktop *desktop,
+    bool draggable);
 
 size_t nb_desktop_window_count(const struct nb_desktop *desktop);
 nb_window_id nb_desktop_window_id_at(const struct nb_desktop *desktop,

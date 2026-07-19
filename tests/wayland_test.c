@@ -1600,6 +1600,7 @@ static void test_wayland_surface_lifecycle(void)
     struct wl_shm_pool *pool = NULL;
     struct wl_buffer *buffer = NULL;
     struct wl_buffer *html_theme_buffer = NULL;
+    struct wl_buffer *html_theme_resized_buffer = NULL;
     struct wl_buffer *popup_buffer = NULL;
     struct wl_data_source *drag_source = NULL;
     struct xdg_surface *popup_xdg_surface = NULL;
@@ -1906,6 +1907,17 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(client.html_theme_window_count == 1);
     CHECK(client.html_theme_state_done_count == 1);
     first_html_theme_state_serial = client.html_theme_state_serial;
+    /* Redundant input notifications must not rebuild a multi-megabyte atlas. */
+    nb_wayland_server_html_theme_state_changed(server);
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.html_theme_configure_count == 1);
+    CHECK(client.html_theme_shell_state_count == 1);
+    CHECK(client.html_theme_state_serial == first_html_theme_state_serial);
+    CHECK(client.html_theme_window_count == 1);
+    CHECK(client.html_theme_state_done_count == 1);
+    CHECK(nb_desktop_set_window_title(&shell.desktop,
+                                      window,
+                                      "HTML state changed"));
     nb_wayland_server_html_theme_state_changed(server);
     REQUIRE(pump_barrier(server, display));
     CHECK(client.html_theme_configure_count == 2);
@@ -1926,6 +1938,7 @@ static void test_wayland_surface_lifecycle(void)
      * begin request. Both obsolete layouts must be drained without turning a
      * normal renderer/compositor race into a fatal protocol error.
      */
+    CHECK(nb_desktop_set_window_title(&shell.desktop, window, "Race one"));
     nb_wayland_server_html_theme_state_changed(server);
     nixbench_html_theme_atlas_v1_begin_layout(
         client.html_theme_atlas, 0, 42, 64, 32);
@@ -1950,6 +1963,7 @@ static void test_wayland_surface_lifecycle(void)
     nixbench_html_theme_atlas_v1_begin_layout(
         client.html_theme_atlas, 0, 43, 64, 32);
     REQUIRE(pump_barrier(server, display));
+    CHECK(nb_desktop_set_window_title(&shell.desktop, window, "Race two"));
     nb_wayland_server_html_theme_state_changed(server);
     nixbench_html_theme_atlas_v1_tile(
         client.html_theme_atlas,
@@ -2075,6 +2089,88 @@ static void test_wayland_surface_lifecycle(void)
     CHECK(html_theme_snapshot.layout->generation == 2);
     CHECK(nb_wayland_server_take_redraw(server));
     CHECK(!nb_wayland_server_take_redraw(server));
+
+    /*
+     * A resized atlas buffer can arrive before its matching layout metadata.
+     * Continue presenting the retained generation instead of flashing the
+     * undecorated transition desktop for that interval.
+     */
+    CHECK(nb_desktop_set_window_title(&shell.desktop,
+                                      window,
+                                      "Resized HTML atlas"));
+    nb_wayland_server_html_theme_state_changed(server);
+    REQUIRE(pump_barrier(server, display));
+    nixbench_html_theme_atlas_v1_ack_state(
+        client.html_theme_atlas,
+        client.html_theme_state_serial);
+    REQUIRE(pump_barrier(server, display));
+    html_theme_resized_buffer = wl_shm_pool_create_buffer(
+        pool,
+        0,
+        96,
+        32,
+        96 * BYTES_PER_PIXEL,
+        WL_SHM_FORMAT_ARGB8888);
+    REQUIRE(html_theme_resized_buffer != NULL);
+    nixbench_html_theme_atlas_v1_begin_layout(
+        client.html_theme_atlas, 0, 3, 96, 32);
+    wl_surface_attach(html_theme_surface, html_theme_resized_buffer, 0, 0);
+    wl_surface_damage(html_theme_surface, 0, 0, 96, 32);
+    wl_surface_commit(html_theme_surface);
+    REQUIRE(pump_barrier(server, display));
+    REQUIRE(nb_wayland_server_html_theme_snapshot(
+        server, &html_theme_snapshot));
+    CHECK(html_theme_snapshot.surface.width == 128);
+    CHECK(html_theme_snapshot.surface.height == 32);
+    REQUIRE(html_theme_snapshot.layout != NULL);
+    CHECK(html_theme_snapshot.layout->generation == 2);
+    nixbench_html_theme_atlas_v1_tile(
+        client.html_theme_atlas,
+        NIXBENCH_HTML_THEME_ATLAS_V1_TILE_KIND_WINDOW,
+        (uint32_t)((uint64_t)window >> 32U),
+        (uint32_t)window,
+        0,
+        0,
+        96,
+        32);
+    nixbench_html_theme_atlas_v1_commit_layout(
+        client.html_theme_atlas, 0, 3);
+    REQUIRE(pump_barrier(server, display));
+    REQUIRE(nb_wayland_server_html_theme_snapshot(
+        server, &html_theme_snapshot));
+    CHECK(html_theme_snapshot.surface.width == 96);
+    CHECK(html_theme_snapshot.surface.height == 32);
+    REQUIRE(html_theme_snapshot.layout != NULL);
+    CHECK(html_theme_snapshot.layout->generation == 3);
+    CHECK(nb_wayland_server_take_redraw(server));
+    CHECK(!nb_wayland_server_take_redraw(server));
+    {
+        const uint32_t original_atlas_pixel = pixels[0];
+        const uint32_t updated_atlas_pixel =
+            original_atlas_pixel ^ UINT32_C(0x00020202);
+        const uint64_t published_revision =
+            html_theme_snapshot.surface.revision;
+
+        /* Late image decode/repaint commits belong to the live generation. */
+        pixels[0] = updated_atlas_pixel;
+        wl_surface_attach(html_theme_surface,
+                          html_theme_resized_buffer,
+                          0,
+                          0);
+        wl_surface_damage(html_theme_surface, 0, 0, 1, 1);
+        wl_surface_commit(html_theme_surface);
+        REQUIRE(pump_barrier(server, display));
+        pixels[0] = original_atlas_pixel;
+        REQUIRE(nb_wayland_server_html_theme_snapshot(
+            server, &html_theme_snapshot));
+        CHECK(html_theme_snapshot.surface.revision != published_revision);
+        CHECK(html_theme_snapshot.surface.pixels[0] == updated_atlas_pixel);
+        CHECK(nb_wayland_server_take_redraw(server));
+        CHECK(!nb_wayland_server_take_redraw(server));
+    }
+    CHECK(nb_desktop_set_window_title(&shell.desktop,
+                                      window,
+                                      "Wayland Test Window"));
 
     CHECK(nb_shell_toggle_window_minimized(&shell, window));
     CHECK(nb_desktop_find_window(&shell.desktop, window)->minimized);
@@ -3153,6 +3249,8 @@ static void test_wayland_surface_lifecycle(void)
 
     nixbench_html_theme_atlas_v1_destroy(client.html_theme_atlas);
     client.html_theme_atlas = NULL;
+    wl_buffer_destroy(html_theme_resized_buffer);
+    html_theme_resized_buffer = NULL;
     wl_buffer_destroy(html_theme_buffer);
     html_theme_buffer = NULL;
     wl_surface_destroy(html_theme_surface);

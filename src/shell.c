@@ -1,5 +1,6 @@
 #include "shell.h"
 
+#include <limits.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -193,6 +194,11 @@ void nb_shell_init(struct nb_shell *shell,
     shell->maximize_gadget_visible = true;
     shell->window_control_layout = NB_WINDOW_CONTROLS_RIGHT;
     shell->window_menu_height = 0;
+    shell->window_decoration_insets =
+        (struct nb_window_decoration_insets){0, 0, 0, 0};
+    shell->window_decoration_controls =
+        (struct nb_window_decoration_controls){0, 0, 0, 0, 0};
+    shell->window_decoration_frame_draggable = false;
     sync_active_menu(shell);
 }
 
@@ -256,7 +262,12 @@ void nb_shell_set_window_menu_height(struct nb_shell *shell, int height)
     if (shell == NULL) {
         return;
     }
-    shell->window_menu_height = height > 0 ? NB_WINDOW_MENU_HEIGHT : 0;
+    shell->window_menu_height =
+        height > 0
+            ? (height < NB_WINDOW_DECORATION_INSET_MAX
+                   ? height
+                   : NB_WINDOW_DECORATION_INSET_MAX)
+            : 0;
     nb_desktop_set_window_menu_height(&shell->desktop,
                                       shell->window_menu_height);
 }
@@ -264,6 +275,57 @@ void nb_shell_set_window_menu_height(struct nb_shell *shell, int height)
 int nb_shell_window_menu_height(const struct nb_shell *shell)
 {
     return shell != NULL ? shell->window_menu_height : 0;
+}
+
+void nb_shell_set_window_decoration_insets(
+    struct nb_shell *shell,
+    struct nb_window_decoration_insets insets)
+{
+    if (shell == NULL || !nb_window_decoration_insets_are_valid(insets)) {
+        return;
+    }
+    shell->window_decoration_insets = insets;
+    nb_desktop_set_window_decoration_insets(&shell->desktop, insets);
+}
+
+void nb_shell_set_window_decoration_controls(
+    struct nb_shell *shell,
+    struct nb_window_decoration_controls controls)
+{
+    if (shell == NULL ||
+        !nb_window_decoration_controls_are_valid(controls)) {
+        return;
+    }
+    shell->window_decoration_controls = controls;
+    nb_desktop_set_window_decoration_controls(&shell->desktop, controls);
+}
+
+void nb_shell_set_window_decoration_frame_draggable(struct nb_shell *shell,
+                                                     bool draggable)
+{
+    if (shell == NULL) {
+        return;
+    }
+    shell->window_decoration_frame_draggable = draggable;
+    nb_desktop_set_window_decoration_frame_draggable(&shell->desktop,
+                                                      draggable);
+}
+
+static int expanded_frame_dimension(int content_size,
+                                    int leading_inset,
+                                    int trailing_inset)
+{
+    const int available = NB_WINDOW_DECORATION_INSET_SCALE -
+                          leading_inset - trailing_inset;
+    int64_t expanded;
+
+    if (content_size <= 0 || available <= 0) {
+        return content_size;
+    }
+    expanded = ((int64_t)content_size * NB_WINDOW_DECORATION_INSET_SCALE +
+                available - 1) /
+               available;
+    return expanded > INT_MAX ? INT_MAX : (int)expanded;
 }
 
 nb_window_id nb_shell_open_window(struct nb_shell *shell,
@@ -274,6 +336,7 @@ nb_window_id nb_shell_open_window(struct nb_shell *shell,
 {
     const size_t binding_index = find_free_binding(shell);
     nb_window_id window;
+    struct nb_window legacy_window;
 
     if (binding_index == NB_DESKTOP_MAX_WINDOWS ||
         menu_source == NB_MENU_SOURCE_NONE || menu_model == NULL ||
@@ -287,6 +350,25 @@ nb_window_id nb_shell_open_window(struct nb_shell *shell,
     if (nb_shell_has_pointer_interaction(shell)) {
         nb_shell_pointer_cancel(shell);
     }
+    if (shell->window_decoration_insets.left != 0 ||
+        shell->window_decoration_insets.top != 0 ||
+        shell->window_decoration_insets.right != 0 ||
+        shell->window_decoration_insets.bottom != 0) {
+        struct nb_rect legacy_content;
+
+        nb_window_init(&legacy_window, title, frame);
+        nb_window_set_decoration_menu_height(&legacy_window,
+                                              shell->window_menu_height);
+        legacy_content = nb_window_content_rect(&legacy_window);
+        frame.width = expanded_frame_dimension(
+            legacy_content.width,
+            shell->window_decoration_insets.left,
+            shell->window_decoration_insets.right);
+        frame.height = expanded_frame_dimension(
+            legacy_content.height,
+            shell->window_decoration_insets.top,
+            shell->window_decoration_insets.bottom);
+    }
     window = nb_desktop_open_window(&shell->desktop, title, frame);
     if (window == NB_WINDOW_ID_NONE) {
         return NB_WINDOW_ID_NONE;
@@ -297,6 +379,15 @@ nb_window_id nb_shell_open_window(struct nb_shell *shell,
                                    shell->window_control_layout);
     nb_desktop_set_window_menu_height(&shell->desktop,
                                       shell->window_menu_height);
+    nb_desktop_set_window_decoration_insets(
+        &shell->desktop,
+        shell->window_decoration_insets);
+    nb_desktop_set_window_decoration_controls(
+        &shell->desktop,
+        shell->window_decoration_controls);
+    nb_desktop_set_window_decoration_frame_draggable(
+        &shell->desktop,
+        shell->window_decoration_frame_draggable);
 
     shell->menu_bindings[binding_index].window = window;
     shell->menu_bindings[binding_index].menu_source = menu_source;

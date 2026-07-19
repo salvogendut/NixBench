@@ -324,10 +324,17 @@ struct nb_wayland_server {
     uint32_t html_theme_layout_state_serial;
     uint32_t html_theme_state_serial;
     uint32_t html_theme_acked_serial;
+    uint64_t html_theme_sent_fingerprint;
+    uint64_t html_theme_retained_revision;
+    uint32_t *html_theme_retained_pixels;
+    int html_theme_retained_width;
+    int html_theme_retained_height;
     struct nb_rect html_theme_dock;
     char html_theme_clock[16];
     bool html_theme_commit_requested;
     bool html_theme_discard_layout;
+    bool html_theme_sent_fingerprint_valid;
+    bool html_theme_transition_pending;
 };
 
 static const struct wl_surface_interface surface_implementation;
@@ -1043,6 +1050,65 @@ static void advance_surface_revision(struct nb_wayland_surface *surface)
     if (surface->revision == 0) {
         surface->revision = 1;
     }
+}
+
+static void clear_retained_html_theme_pixels(
+    struct nb_wayland_server *server)
+{
+    if (server == NULL) {
+        return;
+    }
+    free(server->html_theme_retained_pixels);
+    server->html_theme_retained_pixels = NULL;
+    server->html_theme_retained_width = 0;
+    server->html_theme_retained_height = 0;
+    server->html_theme_retained_revision = 0;
+}
+
+static void retain_published_html_theme_pixels(
+    struct nb_wayland_surface *surface)
+{
+    struct nb_wayland_server *server;
+    const uint32_t *source;
+    uint32_t *copy;
+    size_t pixel_count;
+
+    if (surface == NULL || !surface->html_theme_atlas) {
+        return;
+    }
+    server = surface->server;
+    if (!server->html_theme_transition_pending ||
+        server->html_theme_retained_pixels != NULL ||
+        server->html_theme_atlas.published.generation == 0 ||
+        surface->width != server->html_theme_atlas.published.width ||
+        surface->height != server->html_theme_atlas.published.height) {
+        return;
+    }
+    source = surface->composite_pixels != NULL ? surface->composite_pixels
+                                               : surface->pixels;
+    if (source == NULL || surface->width <= 0 || surface->height <= 0 ||
+        (size_t)surface->width > SIZE_MAX / (size_t)surface->height) {
+        return;
+    }
+    pixel_count = (size_t)surface->width * (size_t)surface->height;
+    if (pixel_count > SIZE_MAX / sizeof(*copy)) {
+        return;
+    }
+    copy = malloc(pixel_count * sizeof(*copy));
+    if (copy == NULL) {
+        return;
+    }
+
+    /*
+     * The atlas can be a composed WebKit surface tree.  Keep an independent
+     * transition snapshot instead of taking ownership of either live pixel
+     * buffer: descendants and later commits still rely on those buffers.
+     */
+    memcpy(copy, source, pixel_count * sizeof(*copy));
+    server->html_theme_retained_pixels = copy;
+    server->html_theme_retained_width = surface->width;
+    server->html_theme_retained_height = surface->height;
+    server->html_theme_retained_revision = surface->revision;
 }
 
 static void mark_redraw_full(struct nb_wayland_server *server)
@@ -2383,9 +2449,17 @@ static void map_surface(struct nb_wayland_surface *surface)
             surface->server->output_width,
             surface->server->output_height
         };
+        const bool frame_clamped =
+            nb_shell_clamp_windows(surface->server->shell, viewport);
 
         ++surface->server->next_window_position;
-        (void)nb_shell_clamp_windows(surface->server->shell, viewport);
+        if (frame_clamped) {
+            /* Keep the client buffer at one logical pixel per compositor
+             * content pixel after an irregular outer frame meets an output
+             * edge. */
+            (void)nb_wayland_server_window_resized(surface->server,
+                                                   surface->window);
+        }
         surface_send_output_membership(surface, true);
         mark_redraw_full(surface->server);
         send_html_theme_state(surface->server);
@@ -2663,6 +2737,9 @@ static void surface_commit(struct wl_client *client,
             dismiss_overlay_descendants(surface, true);
         }
 
+        if (buffer != NULL && surface->html_theme_atlas) {
+            retain_published_html_theme_pixels(surface);
+        }
         detach_pending_buffer_listener(surface);
         if (surface->pixels != new_pixels) {
             free(surface->pixels);
@@ -2681,11 +2758,13 @@ static void surface_commit(struct wl_client *client,
         if (surface->pixels == NULL) {
             if (surface->html_theme_atlas) {
                 nb_theme_atlas_init(&surface->server->html_theme_atlas);
+                clear_retained_html_theme_pixels(surface->server);
                 surface->server->html_theme_begin_revision = 0;
                 surface->server->html_theme_commit_generation = 0;
                 surface->server->html_theme_layout_state_serial = 0;
                 surface->server->html_theme_commit_requested = false;
                 surface->server->html_theme_discard_layout = false;
+                surface->server->html_theme_transition_pending = false;
                 mark_redraw_full(surface->server);
             }
             if (surface->role == NB_WAYLAND_SURFACE_ROLE_XDG_TOPLEVEL ||
@@ -5871,14 +5950,131 @@ static bool html_theme_serial_precedes(uint32_t serial, uint32_t current)
     return (int32_t)(serial - current) < 0;
 }
 
+static uint32_t html_theme_window_flags(
+    const struct nb_wayland_server *server,
+    const struct nb_window *window)
+{
+    uint32_t flags = 0;
+
+    /* Fantasy does not visually distinguish active and inactive frames. */
+    if (window->active && strcmp(server->html_theme_id, "fantasy") != 0) {
+        flags |= NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_ACTIVE;
+    }
+    if (window->maximized) {
+        flags |= NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_MAXIMIZED;
+    }
+    if (window->minimized) {
+        flags |= NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_MINIMIZED;
+    }
+    if (window->fullscreen) {
+        flags |= NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_FULLSCREEN;
+    }
+    if (window->minimize_gadget_visible) {
+        flags |= NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_SHOW_MINIMIZE;
+    }
+    if (window->maximize_gadget_visible) {
+        flags |= NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_SHOW_MAXIMIZE;
+    }
+    if (window->control_layout == NB_WINDOW_CONTROLS_LEFT) {
+        flags |= NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_CONTROLS_LEFT;
+    }
+    return flags;
+}
+
+static uint64_t html_theme_hash_bytes(uint64_t hash,
+                                      const void *bytes,
+                                      size_t size)
+{
+    const unsigned char *input = bytes;
+    size_t index;
+
+    for (index = 0; index < size; ++index) {
+        hash ^= input[index];
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static uint64_t html_theme_hash_value(uint64_t hash, uint64_t value)
+{
+    return html_theme_hash_bytes(hash, &value, sizeof(value));
+}
+
+static uint64_t html_theme_state_fingerprint(
+    const struct nb_wayland_server *server)
+{
+    uint64_t hash = UINT64_C(1469598103934665603);
+    uint64_t window_hash_sum = 0;
+    uint64_t window_hash_xor = 0;
+    uint64_t window_count = 0;
+    size_t index;
+
+    hash = html_theme_hash_bytes(hash,
+                                 server->html_theme_id,
+                                 strlen(server->html_theme_id) + 1);
+    hash = html_theme_hash_bytes(hash,
+                                 server->html_theme_directory,
+                                 strlen(server->html_theme_directory) + 1);
+    hash = html_theme_hash_value(hash, (uint64_t)server->output_width);
+    hash = html_theme_hash_value(hash, (uint64_t)server->output_height);
+    hash = html_theme_hash_value(hash, (uint64_t)server->html_theme_dock.x);
+    hash = html_theme_hash_value(hash, (uint64_t)server->html_theme_dock.y);
+    hash = html_theme_hash_value(hash,
+                                 (uint64_t)server->html_theme_dock.width);
+    hash = html_theme_hash_value(hash,
+                                 (uint64_t)server->html_theme_dock.height);
+    hash = html_theme_hash_bytes(hash,
+                                 server->html_theme_clock,
+                                 strlen(server->html_theme_clock) + 1);
+    for (index = 0;
+         index < nb_desktop_window_count(&server->shell->desktop);
+         ++index) {
+        const nb_window_id id = nb_desktop_window_id_at(
+            &server->shell->desktop,
+            index);
+        const struct nb_window *window = nb_desktop_window_at(
+            &server->shell->desktop,
+            index);
+        uint64_t window_hash = UINT64_C(1469598103934665603);
+        uint32_t flags;
+
+        if (window == NULL || id == NB_WINDOW_ID_NONE || !window->visible) {
+            continue;
+        }
+        flags = html_theme_window_flags(server, window);
+        window_hash = html_theme_hash_value(window_hash, (uint64_t)id);
+        window_hash = html_theme_hash_value(window_hash,
+                                            (uint64_t)window->frame.width);
+        window_hash = html_theme_hash_value(window_hash,
+                                            (uint64_t)window->frame.height);
+        window_hash = html_theme_hash_value(window_hash, (uint64_t)flags);
+        window_hash = html_theme_hash_bytes(window_hash,
+                                            window->title,
+                                            strlen(window->title) + 1);
+        window_hash_sum += window_hash;
+        window_hash_xor ^= window_hash;
+        ++window_count;
+    }
+    hash = html_theme_hash_value(hash, window_count);
+    hash = html_theme_hash_value(hash, window_hash_sum);
+    hash = html_theme_hash_value(hash, window_hash_xor);
+    return hash;
+}
+
 static void send_html_theme_state(struct nb_wayland_server *server)
 {
+    uint64_t fingerprint;
     uint32_t serial;
     size_t index;
 
     if (server == NULL || server->destroying ||
         server->html_theme_atlas_resource == NULL ||
         server->html_theme_token[0] == '\0') {
+        return;
+    }
+    fingerprint = html_theme_state_fingerprint(server);
+    if (server->html_theme_sent_fingerprint_valid &&
+        server->html_theme_sent_fingerprint == fingerprint) {
         return;
     }
     if (server->html_theme_atlas.pending_active) {
@@ -5893,6 +6089,10 @@ static void send_html_theme_state(struct nb_wayland_server *server)
     if (serial == 0) {
         serial = 1;
     }
+    server->html_theme_sent_fingerprint = fingerprint;
+    server->html_theme_sent_fingerprint_valid = true;
+    server->html_theme_transition_pending =
+        server->html_theme_atlas.published.generation != 0;
     server->html_theme_state_serial = serial;
     nixbench_html_theme_atlas_v1_send_configure(
         server->html_theme_atlas_resource,
@@ -5927,34 +6127,14 @@ static void send_html_theme_state(struct nb_wayland_server *server)
         const struct nb_window *window = nb_desktop_window_at(
             &server->shell->desktop,
             index);
-        uint32_t flags = 0;
+        uint32_t flags;
         uint64_t window_id;
 
         if (window == NULL || desktop_id == NB_WINDOW_ID_NONE ||
             !window->visible) {
             continue;
         }
-        if (window->active) {
-            flags |= NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_ACTIVE;
-        }
-        if (window->maximized) {
-            flags |= NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_MAXIMIZED;
-        }
-        if (window->minimized) {
-            flags |= NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_MINIMIZED;
-        }
-        if (window->fullscreen) {
-            flags |= NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_FULLSCREEN;
-        }
-        if (window->minimize_gadget_visible) {
-            flags |= NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_SHOW_MINIMIZE;
-        }
-        if (window->maximize_gadget_visible) {
-            flags |= NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_SHOW_MAXIMIZE;
-        }
-        if (window->control_layout == NB_WINDOW_CONTROLS_LEFT) {
-            flags |= NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_CONTROLS_LEFT;
-        }
+        flags = html_theme_window_flags(server, window);
         window_id = (uint64_t)desktop_id;
         nixbench_html_theme_atlas_v1_send_window(
             server->html_theme_atlas_resource,
@@ -5985,8 +6165,12 @@ static void html_theme_atlas_resource_destroyed(
     server->html_theme_commit_generation = 0;
     server->html_theme_layout_state_serial = 0;
     server->html_theme_acked_serial = 0;
+    server->html_theme_sent_fingerprint = 0;
     server->html_theme_commit_requested = false;
     server->html_theme_discard_layout = false;
+    server->html_theme_sent_fingerprint_valid = false;
+    server->html_theme_transition_pending = false;
+    clear_retained_html_theme_pixels(server);
     nb_theme_atlas_init(&server->html_theme_atlas);
     mark_redraw_full(server);
 }
@@ -6203,6 +6387,8 @@ static void try_publish_html_theme_atlas(struct nb_wayland_server *server)
     server->html_theme_commit_generation = 0;
     server->html_theme_layout_state_serial = 0;
     server->html_theme_commit_requested = false;
+    server->html_theme_transition_pending = false;
+    clear_retained_html_theme_pixels(server);
     mark_redraw_full(server);
 }
 
@@ -6319,8 +6505,12 @@ static void html_theme_manager_register_atlas(
     server->html_theme_commit_generation = 0;
     server->html_theme_layout_state_serial = 0;
     server->html_theme_acked_serial = 0;
+    server->html_theme_sent_fingerprint = 0;
     server->html_theme_commit_requested = false;
     server->html_theme_discard_layout = false;
+    server->html_theme_sent_fingerprint_valid = false;
+    server->html_theme_transition_pending = false;
+    clear_retained_html_theme_pixels(server);
     nb_theme_atlas_init(&server->html_theme_atlas);
     wl_resource_set_implementation(atlas_resource,
                                    &html_theme_atlas_implementation,
@@ -6778,31 +6968,47 @@ bool nb_wayland_server_html_theme_snapshot(
     struct nb_wayland_html_theme_snapshot *snapshot)
 {
     const struct nb_wayland_surface *surface;
+    const uint32_t *pixels;
+    int width;
+    int height;
 
     if (server == NULL || snapshot == NULL ||
         server->html_theme_atlas.published.generation == 0) {
         return false;
     }
     surface = server->html_theme_surface;
-    if (surface == NULL || surface->pixels == NULL || surface->width <= 0 ||
-        surface->height <= 0 ||
-        surface->width != server->html_theme_atlas.published.width ||
-        surface->height != server->html_theme_atlas.published.height) {
+    if (surface == NULL) {
+        return false;
+    }
+    if (server->html_theme_retained_pixels != NULL) {
+        pixels = server->html_theme_retained_pixels;
+        width = server->html_theme_retained_width;
+        height = server->html_theme_retained_height;
+    } else {
+        pixels = surface->composite_pixels != NULL
+                     ? surface->composite_pixels
+                     : surface->pixels;
+        width = surface->width;
+        height = surface->height;
+    }
+    if (pixels == NULL || width <= 0 || height <= 0 ||
+        width != server->html_theme_atlas.published.width ||
+        height != server->html_theme_atlas.published.height) {
         return false;
     }
     snapshot->surface = (struct nb_wayland_surface_snapshot){
-        surface->composite_pixels != NULL
-            ? surface->composite_pixels
-            : surface->pixels,
-        surface->width,
-        surface->height,
-        surface->width * (int)sizeof(uint32_t),
+        pixels,
+        width,
+        height,
+        width * (int)sizeof(uint32_t),
         0,
         0,
-        surface->width,
-        surface->height,
+        width,
+        height,
         false,
-        surface->revision
+        server->html_theme_retained_pixels != NULL
+            ? server->html_theme_retained_revision
+            : surface->revision
     };
     snapshot->layout = &server->html_theme_atlas.published;
     return true;
@@ -6877,6 +7083,7 @@ void nb_wayland_server_destroy(struct nb_wayland_server *server)
     }
     wl_display_destroy(server->display);
     destroy_keyboard_state(server);
+    clear_retained_html_theme_pixels(server);
     free(server);
 }
 
