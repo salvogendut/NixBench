@@ -300,7 +300,13 @@ bool nb_settings_render(SDL_Renderer *renderer,
     if (renderer == NULL || !nb_user_preferences_is_valid(preferences)) {
         return false;
     }
-    if (!render_heading(renderer, content, 14, "Backdrop") ||
+    /*
+     * Paint the complete native client area. Irregular HTML decorations leave
+     * their surrounding frame transparent, so relying on the generic window
+     * base would expose the wallpaper between Settings controls.
+     */
+    if (!fill_rect(renderer, content, panel_color) ||
+        !render_heading(renderer, content, 14, "Backdrop") ||
         !render_button(renderer,
                        full_row(content, 38),
                        "Color 1 (primary)",

@@ -12,6 +12,7 @@
 #include "desktop_renderer.h"
 #include "backdrop_renderer.h"
 #include "menu_renderer.h"
+#include "settings_ui.h"
 
 static int failures;
 
@@ -411,6 +412,51 @@ static void test_checked_menu_item_gutter(void)
     SDL_DestroySurface(surface);
 }
 
+static void test_settings_panel_is_opaque(void)
+{
+    const struct nb_rect content = {10, 10, 640, 574};
+    SDL_Surface *surface = SDL_CreateSurface(660,
+                                             594,
+                                             SDL_PIXELFORMAT_RGBA32);
+    SDL_Renderer *renderer = NULL;
+    struct nb_user_preferences preferences;
+
+    CHECK(surface != NULL);
+    if (surface == NULL) {
+        return;
+    }
+    renderer = SDL_CreateSoftwareRenderer(surface);
+    CHECK(renderer != NULL);
+    if (renderer == NULL) {
+        SDL_DestroySurface(surface);
+        return;
+    }
+
+    nb_user_preferences_init(&preferences);
+    CHECK(SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_TRANSPARENT));
+    CHECK(SDL_RenderClear(renderer));
+    CHECK(nb_settings_render(renderer,
+                             content,
+                             &preferences,
+                             NB_SETTINGS_COLOR_PRIMARY));
+    CHECK(SDL_RenderPresent(renderer));
+    CHECK(pixel_equals(surface,
+                       content.x + 1,
+                       content.y + 1,
+                       225,
+                       230,
+                       222));
+    CHECK(pixel_equals(surface,
+                       content.x + content.width - 2,
+                       content.y + content.height - 2,
+                       225,
+                       230,
+                       222));
+
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroySurface(surface);
+}
+
 static void test_backdrop_gradients(void)
 {
     SDL_Surface *surface =
@@ -613,6 +659,7 @@ int main(void)
 {
     test_content_callback_and_clip_restoration();
     test_checked_menu_item_gutter();
+    test_settings_panel_is_opaque();
     test_backdrop_gradients();
     test_console_sized_diagonal_gradient();
     test_wallpaper_modes();
