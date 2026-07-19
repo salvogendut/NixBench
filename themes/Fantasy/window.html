@@ -1,5 +1,10 @@
 <div class="window-frame fantasy-window" data-nixbench-window>
-  <div class="fantasy-frame-art" aria-hidden="true"></div>
+  <img class="fantasy-frame-art fantasy-frame-art-full"
+       src="nixbench-theme:///unicorn-window-frame.png"
+       alt="" aria-hidden="true" draggable="false">
+  <img class="fantasy-frame-art fantasy-frame-art-compact"
+       src="nixbench-theme:///gnome-compact-window-frame.png"
+       alt="" aria-hidden="true" draggable="false">
   <header class="titlebar" data-nixbench-action="move">
     <span class="title-sparkle" aria-hidden="true">&#x2726;</span>
     <span class="title" data-nixbench-title>Window</span>
@@ -11,4 +16,6 @@
     <button class="close-control" data-nixbench-action="close"
             aria-label="Close">&#xd7;</button>
   </nav>
+  <div class="resize-handle" data-nixbench-action="resize-south-east"
+       aria-label="Resize window"></div>
 </div>

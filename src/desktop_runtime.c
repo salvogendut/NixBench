@@ -51,6 +51,8 @@ enum {
     NIXBENCH_FANTASY_DOCK_PREFERRED_WIDTH = 1200,
     NIXBENCH_FANTASY_DOCK_HEIGHT = 210,
     NIXBENCH_FANTASY_DOCK_MARGIN = 6,
+    NIXBENCH_FANTASY_DOCK_ASSET_WIDTH = 1200,
+    NIXBENCH_FANTASY_DOCK_ASSET_HEIGHT = 377,
     NIXBENCH_FANTASY_INSET_LEFT = 100,
     NIXBENCH_FANTASY_INSET_TOP = 205,
     NIXBENCH_FANTASY_INSET_RIGHT = 105,
@@ -303,6 +305,31 @@ static void layout_cde_dock(struct nb_desktop_runtime *runtime,
     if (runtime->cde_dock.y < 0) {
         runtime->cde_dock.y = 0;
     }
+}
+
+static struct nb_rect theme_dock_input_rect(
+    const struct nb_desktop_runtime *runtime)
+{
+    struct nb_rect input;
+
+    if (runtime == NULL) {
+        return (struct nb_rect){0, 0, 0, 0};
+    }
+    input = runtime->cde_dock;
+    if (runtime->fantasy_theme && input.height > 0) {
+        int painted_width =
+            (input.height * NIXBENCH_FANTASY_DOCK_ASSET_WIDTH) /
+            NIXBENCH_FANTASY_DOCK_ASSET_HEIGHT;
+
+        if (painted_width > input.width) {
+            painted_width = input.width;
+        }
+        if (painted_width > 0) {
+            input.x += (input.width - painted_width) / 2;
+            input.width = painted_width;
+        }
+    }
+    return input;
 }
 
 static enum nb_desktop_launch_request cde_dock_launcher_at(
@@ -608,8 +635,20 @@ static bool render_window_base(SDL_Renderer *renderer,
 {
     const struct nb_desktop_runtime *runtime = context;
 
-    (void)id;
     if (runtime != NULL && runtime->fantasy_theme && !window->fullscreen) {
+        if (id == runtime->about_window) {
+            const struct nb_rect content = nb_window_content_rect(window);
+            const SDL_FRect panel = {(float)content.x,
+                                     (float)content.y,
+                                     (float)content.width,
+                                     (float)content.height};
+
+            if (!SDL_SetRenderDrawColor(renderer, 213, 219, 211,
+                                        SDL_ALPHA_OPAQUE) ||
+                !SDL_RenderFillRect(renderer, &panel)) {
+                return false;
+            }
+        }
         /* Preserve wallpaper through the irregular transparent silhouette. */
         return true;
     }
@@ -1472,9 +1511,12 @@ static bool process_pointer_event(const struct nb_host_event *event,
             }
 #endif
             /* HTML docks are composited above application windows, so their
-             * input region must take the same precedence as their pixels. */
+             * input region must take the same precedence as their pixels.
+             * Fantasy uses background-size:contain, so exclude the wide
+             * transparent shoulders of its atlas tile: otherwise they steal
+             * window resize clicks which are visibly outside the dock. */
             if (has_theme_dock(runtime) &&
-                rect_contains(runtime->cde_dock, x, y)) {
+                rect_contains(theme_dock_input_rect(runtime), x, y)) {
                 runtime->cde_dock_dragging = true;
                 runtime->cde_dock_moved = false;
                 runtime->cde_dock_drag_offset_x = x - runtime->cde_dock.x;

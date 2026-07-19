@@ -492,6 +492,8 @@ static void test_fantasy_dock_launchers_and_minimized_windows(void)
     CHECK(update.launch_request == NB_DESKTOP_LAUNCH_MIDORI);
     update = click_runtime(runtime, 415, 570, 224);
     CHECK(update.launch_request == NB_DESKTOP_LAUNCH_THUNAR);
+    update = click_runtime(runtime, 180, 570, 226);
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_NIXCLOCK);
 
     CHECK(nb_desktop_runtime_active_window_frame(runtime, &window, &frame));
     CHECK(window != NB_WINDOW_ID_NONE);
@@ -510,16 +512,40 @@ static void test_fantasy_dock_launchers_and_minimized_windows(void)
         update = click_runtime(runtime,
                                minimize_x + (control_width / 2),
                                minimize_y + (control_height / 2),
-                               226);
+                               228);
     }
     CHECK(update.launch_request == NB_DESKTOP_LAUNCH_NONE);
     CHECK(!nb_desktop_runtime_active_window_frame(runtime, &window, &frame));
 
     /* The first minimized-title cell occupies the grid's upper-left slot. */
-    update = click_runtime(runtime, 520, 555, 228);
+    update = click_runtime(runtime, 520, 555, 230);
     CHECK(update.launch_request == NB_DESKTOP_LAUNCH_NONE);
     CHECK(nb_desktop_runtime_active_window_frame(runtime, &window, &frame));
     CHECK(window != NB_WINDOW_ID_NONE);
+    {
+        const struct nb_rect original = frame;
+        struct nb_host_event event = left_button(
+            frame.x + frame.width - 5,
+            frame.y + frame.height - 5,
+            true,
+            232);
+
+        CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+        event = pointer_motion(frame.x + frame.width - 45,
+                               frame.y + frame.height - 35,
+                               233);
+        CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+        event = left_button(frame.x + frame.width - 45,
+                            frame.y + frame.height - 35,
+                            false,
+                            234);
+        CHECK(nb_desktop_runtime_handle_input(runtime, &event, &update));
+        CHECK(nb_desktop_runtime_active_window_frame(runtime,
+                                                      &window,
+                                                      &frame));
+        CHECK(frame.width == original.width - 40);
+        CHECK(frame.height == original.height - 30);
+    }
 
     nb_desktop_runtime_destroy(runtime);
 }

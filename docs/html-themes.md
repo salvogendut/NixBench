@@ -57,10 +57,13 @@ native client content. A single full-screen HTML overlay would not work: the
 decoration of a lower window could incorrectly cover the client content of a
 higher window.
 
-The renderer surface is marked as a private chrome-atlas surface and is never
+The renderer surface authenticates the private chrome-atlas client and is never
 managed as an application window. The core sends immutable window state and
-geometry to the renderer. The renderer returns a committed atlas generation
-and hit regions associated with stable action identifiers.
+geometry to the renderer. With protocol version 2, the renderer snapshots the
+complete transparent atlas into a private file descriptor; the compositor
+copies those Cairo ARGB32 pixels and atomically commits them with the matching
+tile layout and hit regions. Explicit full snapshots ensure that transparent
+pixels vacated during a resize cannot retain an older decoration.
 
 ### Window geometry contract
 
@@ -220,11 +223,12 @@ PNG through WebKitGTK's snapshot API:
   --snapshot /tmp/nixbench-cde-title.png
 ```
 
-The private compositor endpoint authenticates one atlas carrier, keeps it out
-of the managed application list, and atomically validates matching pixel,
-tile, and action-region generations. The same executable is also the live
-renderer. The session core creates a fresh 256-bit token, enables the endpoint,
-and starts the renderer with the token kept out of the environment.
+The private compositor endpoint authenticates one atlas renderer, keeps its
+WebKit surface out of the managed application list, and atomically validates
+matching pixel, tile, and action-region generations. The same executable is
+also the live renderer. The session core creates a fresh 256-bit token, enables
+the endpoint, and starts the renderer with the token kept out of the
+environment.
 
 The live renderer is intentionally opt-in and paints every eligible visible
 window frame from one packed atlas. Native NixBench geometry and hit testing remain in use,

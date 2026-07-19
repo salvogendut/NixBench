@@ -4,7 +4,6 @@
   --fantasy-pink: #ef75bd;
   --fantasy-gold: #f2b24e;
   --fantasy-cream: #fff9f0;
-  --fantasy-window-frame-image: none;
   --fantasy-dock-image: none;
   --fantasy-wallpaper-image: none;
 }
@@ -23,18 +22,26 @@ html, body {
   height: 100%;
   overflow: visible;
   background: transparent;
-  filter: drop-shadow(4px 5px 4px rgba(22, 8, 44, .44));
 }
 
 .fantasy-frame-art {
   position: absolute;
+  display: block;
   z-index: 2;
   inset: 0;
-  background-image: var(--fantasy-window-frame-image);
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: 100% 100%;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
   pointer-events: none;
+}
+.fantasy-frame-art-compact {
+  display: none;
+}
+.fantasy-compact-tile .fantasy-frame-art-full {
+  display: none;
+}
+.fantasy-compact-tile .fantasy-frame-art-compact {
+  display: block;
 }
 
 .titlebar {
@@ -98,14 +105,35 @@ html, body {
   background: transparent;
 }
 
+.resize-handle {
+  position: absolute;
+  z-index: 5;
+  right: 0;
+  bottom: 0;
+  width: 24px;
+  height: 24px;
+  color: #713796;
+  background:
+    linear-gradient(135deg, transparent 42%, rgba(113,55,150,.88) 43% 49%,
+                            transparent 50% 58%, rgba(239,117,189,.92) 59% 66%,
+                            transparent 67%),
+    radial-gradient(circle at 62% 62%, #fff9d8 0 18%, #f2b24e 20% 35%,
+                    #b45bd2 38% 52%, transparent 55%);
+  border-radius: 55% 0 0 0;
+  filter: drop-shadow(-1px -1px 1px rgba(255,255,255,.72));
+}
+.nixbench-maximized .resize-handle {
+  display: none;
+}
+
 /*
  * The full unicorn composition is intentionally reserved for windows large
- * enough to carry it.  Compact windows use a simpler gnome frame whose
+ * enough to carry it. Compact windows use a simpler gnome frame whose
  * aperture follows the compositor's existing Fantasy content insets.
+ * Window art deliberately has no CSS filter: older WebKitGTK releases retain
+ * filtered layers at their previous dimensions during a resize, producing a
+ * second stale copy of the transparent frame.
  */
-.fantasy-compact-tile .fantasy-window {
-  filter: drop-shadow(3px 4px 3px rgba(22, 8, 44, .42));
-}
 .fantasy-compact-tile .titlebar {
   left: 36%;
   top: 6.5%;
@@ -130,6 +158,10 @@ html, body {
 }
 .fantasy-compact-tile .window-controls button {
   font-size: 10px;
+}
+.fantasy-compact-tile .resize-handle {
+  width: 18px;
+  height: 18px;
 }
 
 .fantasy-desktop {

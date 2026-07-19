@@ -1119,6 +1119,23 @@ target_compile_definitions(
   PRIVATE NIXBENCH_VERSION="${PROJECT_VERSION}"
 )
 
+if(UNIX AND NIXBENCH_HTML_THEMES_AVAILABLE)
+  add_dependencies(nixbench nixbench-html-theme-renderer)
+  target_link_libraries(nixbench PRIVATE nixbench_themes)
+  target_compile_definitions(
+    nixbench
+    PRIVATE
+      NIXBENCH_HAS_HTML_THEMES=1
+      "NIXBENCH_INSTALLED_HTML_RENDERER_PATH=\"${CMAKE_INSTALL_FULL_LIBEXECDIR}/nixbench/nixbench-html-theme-renderer\""
+      "NIXBENCH_INSTALLED_THEME_DIRECTORY=\"${CMAKE_INSTALL_FULL_DATADIR}/nixbench/themes\""
+  )
+else()
+  target_compile_definitions(
+    nixbench
+    PRIVATE NIXBENCH_HAS_HTML_THEMES=0
+  )
+endif()
+
 target_link_libraries(
   nixbench
   PRIVATE
@@ -1403,6 +1420,12 @@ if(NIXBENCH_NIXCLOCK_AVAILABLE)
   )
   nixbench_configure_c_target(nixclock)
   install(TARGETS nixclock RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+  add_dependencies(nixbench nixclock)
+  target_compile_definitions(
+    nixbench
+    PRIVATE
+      "NIXBENCH_INSTALLED_NIXCLOCK_PATH=\"${CMAKE_INSTALL_FULL_BINDIR}/nixclock\""
+  )
 endif()
 
 if(NIXBENCH_X11_AVAILABLE)
@@ -2279,6 +2302,18 @@ if(BUILD_TESTING)
     nixbench.sdl.smoke
     PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_RENDER_DRIVER=software"
   )
+  if(UNIX AND NIXBENCH_HTML_THEMES_AVAILABLE)
+    add_test(
+      NAME nixbench.sdl.html-theme-smoke
+      COMMAND nixbench --exit-after-first-frame
+    )
+    set_tests_properties(
+      nixbench.sdl.html-theme-smoke
+      PROPERTIES
+        ENVIRONMENT
+          "SDL_VIDEO_DRIVER=dummy;SDL_RENDER_DRIVER=software;NIXBENCH_HTML_THEME=fantasy"
+    )
+  endif()
   if(NIXBENCH_WAYLAND_DEMO_AVAILABLE)
     add_test(NAME nixbench.wayland.demo-help COMMAND nixbench-wayland-demo --help)
   endif()
