@@ -111,7 +111,11 @@
     <request name="begin_layout">
       <description summary="begin atlas metadata for a pixel generation">
         Begin replacing all tile and action metadata. Width and height describe
-        the browser buffer which will be committed for generation.
+        the browser buffer which will be committed for generation. If newer
+        shell state supersedes the acknowledged transaction while a layout is
+        being rendered, the core silently discards that layout through its
+        matching commit_layout request. This normal race is not a protocol
+        error; the renderer should render the newest state transaction next.
       </description>
       <arg name="generation_hi" type="uint"/>
       <arg name="generation_lo" type="uint"/>

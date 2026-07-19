@@ -1888,6 +1888,54 @@ static void test_wayland_surface_lifecycle(void)
         client.html_theme_state_serial);
     REQUIRE(pump_barrier(server, display));
 
+    /*
+     * A shell update can overtake an atlas transaction at either side of its
+     * begin request. Both obsolete layouts must be drained without turning a
+     * normal renderer/compositor race into a fatal protocol error.
+     */
+    nb_wayland_server_html_theme_state_changed(server);
+    nixbench_html_theme_atlas_v1_begin_layout(
+        client.html_theme_atlas, 0, 42, 64, 32);
+    nixbench_html_theme_atlas_v1_tile(
+        client.html_theme_atlas,
+        NIXBENCH_HTML_THEME_ATLAS_V1_TILE_KIND_WINDOW,
+        (uint32_t)((uint64_t)window >> 32U),
+        (uint32_t)window,
+        0,
+        0,
+        64,
+        32);
+    nixbench_html_theme_atlas_v1_commit_layout(
+        client.html_theme_atlas, 0, 42);
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.html_theme_configure_count == 3);
+    nixbench_html_theme_atlas_v1_ack_state(
+        client.html_theme_atlas,
+        client.html_theme_state_serial);
+    REQUIRE(pump_barrier(server, display));
+
+    nixbench_html_theme_atlas_v1_begin_layout(
+        client.html_theme_atlas, 0, 43, 64, 32);
+    REQUIRE(pump_barrier(server, display));
+    nb_wayland_server_html_theme_state_changed(server);
+    nixbench_html_theme_atlas_v1_tile(
+        client.html_theme_atlas,
+        NIXBENCH_HTML_THEME_ATLAS_V1_TILE_KIND_WINDOW,
+        (uint32_t)((uint64_t)window >> 32U),
+        (uint32_t)window,
+        0,
+        0,
+        64,
+        32);
+    nixbench_html_theme_atlas_v1_commit_layout(
+        client.html_theme_atlas, 0, 43);
+    REQUIRE(pump_barrier(server, display));
+    CHECK(client.html_theme_configure_count == 4);
+    nixbench_html_theme_atlas_v1_ack_state(
+        client.html_theme_atlas,
+        client.html_theme_state_serial);
+    REQUIRE(pump_barrier(server, display));
+
     html_theme_buffer = wl_shm_pool_create_buffer(
         pool,
         0,
