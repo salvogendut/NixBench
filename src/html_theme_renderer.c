@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <errno.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -800,6 +802,16 @@ int main(int argc, char **argv)
         if (document == NULL) {
             return 1;
         }
+    }
+    if (options.atlas_token != NULL &&
+        getenv("NIXBENCH_TRACE_WAYLAND") != NULL &&
+        strcmp(getenv("NIXBENCH_TRACE_WAYLAND"), "1") == 0 &&
+        setenv("WAYLAND_DEBUG", "client", 0) != 0) {
+        fprintf(stderr,
+                "Could not enable HTML renderer Wayland tracing: %s\n",
+                strerror(errno));
+        g_free(document);
+        return 1;
     }
     if (!gtk_init_check(&gtk_argc, &gtk_argv)) {
         fputs("Could not initialize GTK display for HTML theme renderer\n",

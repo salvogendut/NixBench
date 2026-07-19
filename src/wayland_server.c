@@ -11,9 +11,11 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <signal.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -6077,6 +6079,25 @@ static void html_theme_atlas_commit_layout(struct wl_client *client,
         surface->revision <= server->html_theme_begin_revision ||
         surface->width != pending->width || surface->height != pending->height ||
         !nb_theme_atlas_commit(&server->html_theme_atlas, generation)) {
+        fprintf(stderr,
+                "HTML theme atlas commit rejected: surface=%s pixels=%s "
+                "layout-state=%u current-state=%u acked-state=%u "
+                "revision=%" PRIu64 " begin-revision=%" PRIu64 " "
+                "surface-size=%dx%d layout-size=%dx%d generation=%" PRIu64
+                "\n",
+                surface != NULL ? "present" : "missing",
+                surface != NULL && surface->pixels != NULL ? "present"
+                                                             : "missing",
+                server->html_theme_layout_state_serial,
+                server->html_theme_state_serial,
+                server->html_theme_acked_serial,
+                surface != NULL ? surface->revision : UINT64_C(0),
+                server->html_theme_begin_revision,
+                surface != NULL ? surface->width : 0,
+                surface != NULL ? surface->height : 0,
+                pending->width,
+                pending->height,
+                generation);
         wl_resource_post_error(
             resource,
             NIXBENCH_HTML_THEME_ATLAS_V1_ERROR_INVALID_LAYOUT,
