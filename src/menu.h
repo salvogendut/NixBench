@@ -86,14 +86,26 @@ struct nb_menu {
     enum nb_menu_phase phase;
     size_t open_menu;
     size_t hot_item;
+    int floating_x;
+    int floating_y;
+    bool floating;
+    bool floating_visible;
 };
 
 void nb_menu_init(struct nb_menu *menu);
 void nb_menu_set_model(struct nb_menu *menu,
                        const struct nb_menu_model *model);
 void nb_menu_cancel(struct nb_menu *menu);
+void nb_menu_set_floating(struct nb_menu *menu, bool floating);
+bool nb_menu_show_floating(struct nb_menu *menu,
+                           int x,
+                           int y,
+                           struct nb_rect viewport);
+bool nb_menu_is_visible(const struct nb_menu *menu);
 
 struct nb_rect nb_menu_bar_rect(struct nb_rect viewport);
+struct nb_rect nb_menu_visible_bar_rect(const struct nb_menu *menu,
+                                        struct nb_rect viewport);
 struct nb_rect nb_menu_work_area(struct nb_rect viewport);
 struct nb_rect nb_menu_clock_rect(struct nb_rect viewport);
 struct nb_rect nb_menu_label_rect(const struct nb_menu *menu,

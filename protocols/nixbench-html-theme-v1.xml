@@ -185,6 +185,22 @@
       <arg name="directory" type="string"/>
     </event>
 
+    <event name="shell_state">
+      <description summary="publish output and themed shell geometry">
+        Output dimensions and dock geometry remain compositor-owned.  The
+        renderer may paint them, but it cannot move the dock or change input
+        policy.  Clock text is a presentation value sampled by the core.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="output_width" type="uint"/>
+      <arg name="output_height" type="uint"/>
+      <arg name="dock_x" type="int"/>
+      <arg name="dock_y" type="int"/>
+      <arg name="dock_width" type="uint"/>
+      <arg name="dock_height" type="uint"/>
+      <arg name="clock_text" type="string"/>
+    </event>
+
     <event name="clear_windows">
       <description summary="start replacement window state"/>
       <arg name="serial" type="uint"/>

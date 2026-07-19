@@ -69,15 +69,16 @@ renderer injects these CSS custom properties from the native geometry model:
 
 - `--nixbench-frame-border` (currently 3px);
 - `--nixbench-title-height` (currently 24px);
+- `--nixbench-menu-height` (22px for the CDE client menu band);
 - `--nixbench-footer-height` (currently 20px);
 - `--nixbench-gadget-margin` (currently 4px); and
 - `--nixbench-control-size` (currently 16px).
 
-The native application content begins immediately after the frame border and
-title area. Window HTML must therefore finish its title bar at that boundary;
-content is composited later and intentionally covers the middle of the atlas
-tile. Bundled themes use the injected variables so their visible controls,
-separators, and client-content inset remain aligned with native hit testing.
+The native application content begins after the compositor-owned title and
+optional theme menu-band areas. Content is composited later and intentionally
+covers the middle of the atlas tile. Bundled themes use the injected variables
+so visible controls, separators, client-content insets, and native hit testing
+remain aligned.
 
 The first state vocabulary is:
 
@@ -119,16 +120,17 @@ The repository begins with three personalities:
 
 - **Fantasy**, an original expressive theme intended to exercise SVG,
   gradients, irregular decoration silhouettes, and animation;
-- **Motif**, a restrained original recreation of the visual conventions of
-  1990s Unix workstations, with CDE-style warm-gray bevels, orange focused
-  title bars, slate inactive title bars, and a blue-gray workspace; and
+- **CDE**, an original recreation of the visual conventions of 1990s Unix
+  workstations, with warm-gray bevels, orange focused title bars, slate
+  inactive title bars, a textured blue-gray workspace, a right-click desktop
+  menu, and a movable front panel; and
 - **BeOS-inspired**, an original theme with compact offset title tabs and warm
   yellow controls.
 
 Names describe the inspiration. Bundles must use original or compatibly
 licensed artwork and may not copy proprietary system assets.
 
-The Motif personality also takes visual-direction cues from the MIT-licensed
+The CDE personality also takes visual-direction cues from the MIT-licensed
 [CDE/Motif desktop HTML simulation](https://github.com/igtoth/cde-motif-desktop),
 while retaining NixBench's own markup, geometry contract, compositor policy,
 and implementation.
@@ -171,10 +173,12 @@ frame. A late renderer frame is skipped rather than stalling the desktop.
 2. Add the private renderer-atlas state and buffer protocol.
 3. Render one title-bar tile through WebKitGTK behind an explicit experimental
    option, with native hit testing and Classic fallback.
-4. Render complete per-window frames and controls, then the global bar and
-   menus.
-5. Add HTML desktop/backdrop rendering and Settings theme selection.
-6. Enable bounded CSS transitions and SVG animation after idle and animated
+4. Render complete per-window frames and controls, with native input policy.
+5. Add the CDE desktop tile, floating right-click menu, client menu inset, and
+   movable front panel with its HTML/CSS analog clock.
+6. Connect front-panel launchers, minimized-window affordances, and workspace
+   controls, then add the Settings theme selector.
+7. Enable bounded CSS transitions and SVG animation after idle and animated
    CPU measurements on amd64 and arm64 NetBSD hardware.
 
 The first hardware gate requires unchanged behavior for native NixClock,
@@ -196,10 +200,10 @@ PNG through WebKitGTK's snapshot API:
   --size 640x96
 
 ./build/nixbench-html-theme-renderer \
-  --theme ./themes/Motif \
+  --theme ./themes/CDE \
   --component window \
   --size 640x96 \
-  --snapshot /tmp/nixbench-motif-title.png
+  --snapshot /tmp/nixbench-cde-title.png
 ```
 
 The private compositor endpoint authenticates one atlas carrier, keeps it out
@@ -214,16 +218,17 @@ and the native Classic frame remains underneath as an immediate fallback. In
 a development checkout, select a bundle for one standalone session with:
 
 ```sh
-NIXBENCH_HTML_THEME=motif ./tools/run-wsdisplay-session.sh
+NIXBENCH_HTML_THEME=cde ./tools/run-wsdisplay-session.sh
 ```
 
 The development launcher forwards this selector explicitly across the
 privilege boundary and, like the installed `nixbench-session` command, enables
 rootless Xwayland by default when an Xwayland executable is available.
 
-The accepted identifiers are `fantasy`, `motif`, and `beos`. A non-Classic
+The accepted identifiers are `fantasy`, `cde`, and `beos`; legacy `motif`
+configuration is migrated to `cde`. A non-Classic
 `windows.theme` value in the user configuration selects the same renderer;
 the environment variable takes precedence for short experiments. Unknown or
 unavailable bundles, renderer startup failure, and renderer disconnect all
-leave Classic decorations operational. HTML menu and desktop tiles, renderer
-restart policy, and the Settings selector remain later milestones.
+leave Classic decorations operational. Front-panel application wiring,
+renderer restart policy, and the Settings selector remain later milestones.

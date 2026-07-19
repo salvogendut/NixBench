@@ -8,6 +8,7 @@
 enum {
     NB_WINDOW_BORDER_WIDTH = 3,
     NB_WINDOW_TITLE_HEIGHT = 24,
+    NB_WINDOW_MENU_HEIGHT = 22,
     NB_WINDOW_FOOTER_HEIGHT = 20,
     NB_WINDOW_GADGET_MARGIN = 4,
     NB_WINDOW_CLOSE_SIZE = 16,
@@ -77,6 +78,7 @@ struct nb_window {
     bool minimize_gadget_visible;
     bool maximize_gadget_visible;
     enum nb_window_control_layout control_layout;
+    int decoration_menu_height;
 };
 
 void nb_window_init(struct nb_window *window,
@@ -87,9 +89,12 @@ void nb_window_set_controls(struct nb_window *window,
                             bool minimize_gadget_visible,
                             bool maximize_gadget_visible,
                             enum nb_window_control_layout layout);
+void nb_window_set_decoration_menu_height(struct nb_window *window,
+                                          int height);
 
 struct nb_rect nb_window_title_rect(const struct nb_window *window);
 struct nb_rect nb_window_content_rect(const struct nb_window *window);
+struct nb_rect nb_window_menu_rect(const struct nb_window *window);
 struct nb_rect nb_window_footer_rect(const struct nb_window *window);
 struct nb_rect nb_window_close_rect(const struct nb_window *window);
 struct nb_rect nb_window_minimize_rect(const struct nb_window *window);

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <cairo.h>
 #include <gdk/gdkwayland.h>
@@ -29,7 +30,8 @@ enum component_kind {
 };
 
 enum {
-    LIVE_ATLAS_PREFERRED_ROW_WIDTH = 2048
+    LIVE_ATLAS_PREFERRED_ROW_WIDTH = 2048,
+    CDE_MINIMIZED_WINDOW_CAPACITY = 4
 };
 
 struct renderer_window {
@@ -39,6 +41,11 @@ struct renderer_window {
     int height;
     int atlas_x;
     int atlas_y;
+    char title[NB_WINDOW_TITLE_CAPACITY];
+};
+
+struct renderer_minimized_window {
+    uint64_t id;
     char title[NB_WINDOW_TITLE_CAPACITY];
 };
 
@@ -66,19 +73,102 @@ struct renderer_state {
     uint64_t render_generation;
     int render_width;
     int render_height;
+    int output_width;
+    int output_height;
+    int dock_x;
+    int dock_y;
+    int dock_width;
+    int dock_height;
+    char clock_text[16];
     struct renderer_window windows[NB_THEME_ATLAS_MAX_TILES];
     size_t window_count;
+    struct renderer_minimized_window
+        minimized_windows[CDE_MINIMIZED_WINDOW_CAPACITY];
+    size_t minimized_window_count;
+    gchar *sakura_icon_uri;
+    gchar *midori_icon_uri;
+    gchar *thunar_icon_uri;
     guint render_source;
     guint publish_source;
     unsigned int publish_attempts;
     bool live_atlas;
     bool state_theme_valid;
+    bool state_shell_available;
     bool state_window_available;
     bool gtk_window_configured;
     bool layout_in_flight;
     bool snapshot_started;
     int exit_status;
 };
+
+static gchar *gtk_icon_data_uri(const char *icon_name)
+{
+    GtkIconTheme *theme;
+    GtkIconInfo *info;
+    const char *filename;
+    const char *mime_type = "image/png";
+    gchar *contents = NULL;
+    gchar *encoded;
+    gchar *uri;
+    gsize length = 0;
+
+    if (icon_name == NULL || icon_name[0] == '\0') {
+        return NULL;
+    }
+    theme = gtk_icon_theme_get_default();
+    info = theme != NULL
+               ? gtk_icon_theme_lookup_icon(theme, icon_name, 32, 0)
+               : NULL;
+    filename = info != NULL ? gtk_icon_info_get_filename(info) : NULL;
+    if (filename == NULL ||
+        !g_file_get_contents(filename, &contents, &length, NULL)) {
+        if (info != NULL) {
+            g_object_unref(info);
+        }
+        return NULL;
+    }
+    if (g_str_has_suffix(filename, ".svg") ||
+        g_str_has_suffix(filename, ".svgz")) {
+        mime_type = "image/svg+xml";
+    } else if (g_str_has_suffix(filename, ".xpm")) {
+        mime_type = "image/x-xpixmap";
+    }
+    encoded = g_base64_encode((const guchar *)contents, length);
+    uri = g_strdup_printf("data:%s;base64,%s", mime_type, encoded);
+    g_free(encoded);
+    g_free(contents);
+    g_object_unref(info);
+    return uri;
+}
+
+static void append_launcher_icon_style(GString *document,
+                                       const char *selector,
+                                       const char *uri)
+{
+    if (document == NULL || selector == NULL || uri == NULL) {
+        return;
+    }
+    g_string_append_printf(
+        document,
+        "%s .launcher-image{background-image:url(\"%s\");}"
+        "%s .launcher-fallback{visibility:hidden;}",
+        selector,
+        uri,
+        selector);
+}
+
+static bool renders_desktop(const struct renderer_state *state)
+{
+    return state != NULL && state->bundle != NULL &&
+           strcmp(state->bundle->id, "cde") == 0;
+}
+
+static bool has_render_state(const struct renderer_state *state)
+{
+    return state != NULL &&
+           (state->state_window_available ||
+            (renders_desktop(state) && state->state_shell_available));
+}
 
 static void print_usage(FILE *stream, const char *program)
 {
@@ -270,6 +360,124 @@ static gchar *set_fragment_title(const gchar *fragment,
     return g_string_free(updated, FALSE);
 }
 
+static gchar *replace_fragment_text(gchar *fragment,
+                                    const char *marker,
+                                    const char *text)
+{
+    const gchar *attribute;
+    const gchar *text_start;
+    const gchar *text_end;
+    gchar *escaped;
+    GString *updated;
+
+    if (fragment == NULL || marker == NULL || text == NULL) {
+        return fragment;
+    }
+    attribute = g_strstr_len(fragment, -1, marker);
+    text_start = attribute != NULL ? strchr(attribute, '>') : NULL;
+    text_end = text_start != NULL ? strchr(text_start + 1, '<') : NULL;
+    if (text_start == NULL || text_end == NULL) {
+        return fragment;
+    }
+    escaped = g_markup_escape_text(text, -1);
+    updated = g_string_sized_new(strlen(fragment) + strlen(escaped) + 1);
+    g_string_append_len(updated,
+                        fragment,
+                        (gssize)(text_start + 1 - fragment));
+    g_string_append(updated, escaped);
+    g_string_append(updated, text_end);
+    g_free(escaped);
+    g_free(fragment);
+    return g_string_free(updated, FALSE);
+}
+
+static gchar *replace_fragment_markup(gchar *fragment,
+                                      const char *marker,
+                                      const char *markup)
+{
+    const gchar *attribute;
+    const gchar *content_start;
+    const gchar *content_end;
+    GString *updated;
+
+    if (fragment == NULL || marker == NULL || markup == NULL) {
+        return fragment;
+    }
+    attribute = g_strstr_len(fragment, -1, marker);
+    content_start = attribute != NULL ? strchr(attribute, '>') : NULL;
+    content_end = content_start != NULL ? strchr(content_start + 1, '<')
+                                        : NULL;
+    if (content_start == NULL || content_end == NULL) {
+        return fragment;
+    }
+    updated = g_string_sized_new(strlen(fragment) + strlen(markup) + 1);
+    g_string_append_len(updated,
+                        fragment,
+                        (gssize)(content_start + 1 - fragment));
+    g_string_append(updated, markup);
+    g_string_append(updated, content_end);
+    g_free(fragment);
+    return g_string_free(updated, FALSE);
+}
+
+static gchar *build_minimized_window_markup(
+    const struct renderer_state *state)
+{
+    GString *markup = g_string_new(NULL);
+    size_t index;
+
+    if (state->minimized_window_count == 0) {
+        g_string_append(markup,
+                        "<span class=\"minimized-empty\">"
+                        "No minimized windows</span>");
+        return g_string_free(markup, FALSE);
+    }
+    for (index = 0; index < state->minimized_window_count; ++index) {
+        const struct renderer_minimized_window *window =
+            &state->minimized_windows[index];
+        gchar *escaped = g_markup_escape_text(window->title, -1);
+
+        g_string_append_printf(
+            markup,
+            "<button class=\"minimized-window\" "
+            "data-nixbench-minimized-window=\"%" G_GUINT64_FORMAT "\" "
+            "title=\"%s\">%s</button>",
+            (guint64)window->id,
+            escaped,
+            escaped);
+        g_free(escaped);
+    }
+    return g_string_free(markup, FALSE);
+}
+
+static void current_calendar_text(char month[4],
+                                  char day[3],
+                                  char weekday[4])
+{
+    static const char *const months[] = {
+        "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+        "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
+    };
+    static const char *const weekdays[] = {
+        "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"
+    };
+    const time_t now = time(NULL);
+    struct tm local_time;
+
+    if (now == (time_t)-1 || localtime_r(&now, &local_time) == NULL ||
+        local_time.tm_mon < 0 || local_time.tm_mon > 11 ||
+        local_time.tm_mday < 1 || local_time.tm_mday > 31 ||
+        local_time.tm_wday < 0 || local_time.tm_wday > 6) {
+        (void)snprintf(month, 4, "---");
+        (void)snprintf(day, 3, "--");
+        (void)snprintf(weekday, 4, "---");
+        return;
+    }
+    (void)snprintf(month, 4, "%s", months[local_time.tm_mon]);
+    (void)snprintf(day, 3, "%d", local_time.tm_mday);
+    (void)snprintf(weekday, 4, "%s", weekdays[local_time.tm_wday]);
+}
+
 static gchar *build_document(const struct nb_theme_bundle *bundle,
                              enum component_kind component,
                              const char *title,
@@ -320,12 +528,20 @@ static gchar *build_document(const struct nb_theme_bundle *bundle,
             "--nixbench-title-height:%dpx;"
             "--nixbench-footer-height:%dpx;"
             "--nixbench-gadget-margin:%dpx;"
-            "--nixbench-control-size:%dpx}",
+            "--nixbench-control-size:%dpx;"
+            "--nixbench-menu-height:%dpx}",
             NB_WINDOW_BORDER_WIDTH,
             NB_WINDOW_TITLE_HEIGHT,
             NB_WINDOW_FOOTER_HEIGHT,
             NB_WINDOW_GADGET_MARGIN,
-            NB_WINDOW_CLOSE_SIZE);
+            NB_WINDOW_CLOSE_SIZE,
+            NB_WINDOW_MENU_HEIGHT);
+    } else if (component == COMPONENT_DESKTOP) {
+        g_string_append(
+            document,
+            ":root{--nixbench-dock-x:24px;--nixbench-dock-y:24px;"
+            "--nixbench-dock-width:760px;--nixbench-dock-height:88px;"
+            "--nixbench-hour-angle:0deg;--nixbench-minute-angle:0deg}");
     }
     g_string_append_len(document, stylesheet, (gssize)stylesheet_length);
     if (component == COMPONENT_WINDOW &&
@@ -351,10 +567,8 @@ static gchar *build_document(const struct nb_theme_bundle *bundle,
     return g_string_free(document, FALSE);
 }
 
-static gchar *build_window_atlas_document(
-    const struct nb_theme_bundle *bundle,
-    const struct renderer_window *windows,
-    size_t window_count)
+static gchar *build_live_atlas_document(
+    const struct renderer_state *state)
 {
     static const char prefix[] =
         "<!doctype html><html><head><meta charset=\"utf-8\">"
@@ -377,25 +591,55 @@ static gchar *build_window_atlas_document(
     static const char suffix[] = "</body></html>";
     gchar *stylesheet = NULL;
     gchar *fragment = NULL;
+    gchar *desktop_fragment = NULL;
     gsize stylesheet_length = 0;
     gsize fragment_length = 0;
+    gsize desktop_fragment_length = 0;
     GString *document;
     size_t index;
+    int hour = 0;
+    int minute = 0;
+    char calendar_month[4];
+    char calendar_day[3];
+    char calendar_weekday[4];
+    const bool desktop = renders_desktop(state) &&
+                         state->state_shell_available;
 
-    if (windows == NULL || window_count == 0 ||
-        !read_text_file(bundle->stylesheet_path,
+    if (state == NULL || (!desktop && state->window_count == 0) ||
+        !read_text_file(state->bundle->stylesheet_path,
                         &stylesheet,
-                        &stylesheet_length) ||
-        !read_text_file(bundle->window_path,
+                        &stylesheet_length)) {
+        g_free(stylesheet);
+        return NULL;
+    }
+    if (state->window_count != 0 &&
+        !read_text_file(state->bundle->window_path,
                         &fragment,
                         &fragment_length)) {
+        g_free(stylesheet);
+        return NULL;
+    }
+    if (desktop &&
+        !read_text_file(state->bundle->desktop_path,
+                        &desktop_fragment,
+                        &desktop_fragment_length)) {
         g_free(stylesheet);
         g_free(fragment);
         return NULL;
     }
+    if (sscanf(state->clock_text, "%d:%d", &hour, &minute) != 2 ||
+        hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+        hour = 0;
+        minute = 0;
+    }
+    current_calendar_text(calendar_month,
+                          calendar_day,
+                          calendar_weekday);
     document = g_string_sized_new(sizeof(prefix) + stylesheet_length +
                                   sizeof(middle) +
-                                  window_count * (fragment_length + 256) +
+                                  desktop_fragment_length +
+                                  state->window_count *
+                                      (fragment_length + 256) +
                                   sizeof(suffix));
     g_string_append(document, prefix);
     g_string_append_printf(
@@ -404,16 +648,81 @@ static gchar *build_window_atlas_document(
         "--nixbench-title-height:%dpx;"
         "--nixbench-footer-height:%dpx;"
         "--nixbench-gadget-margin:%dpx;"
-        "--nixbench-control-size:%dpx}",
+        "--nixbench-control-size:%dpx;"
+        "--nixbench-menu-height:%dpx;"
+        "--nixbench-dock-x:%dpx;"
+        "--nixbench-dock-y:%dpx;"
+        "--nixbench-dock-width:%dpx;"
+        "--nixbench-dock-height:%dpx;"
+        "--nixbench-hour-angle:%ddeg;"
+        "--nixbench-minute-angle:%ddeg}",
         NB_WINDOW_BORDER_WIDTH,
         NB_WINDOW_TITLE_HEIGHT,
         NB_WINDOW_FOOTER_HEIGHT,
         NB_WINDOW_GADGET_MARGIN,
-        NB_WINDOW_CLOSE_SIZE);
+        NB_WINDOW_CLOSE_SIZE,
+        NB_WINDOW_MENU_HEIGHT,
+        state->dock_x,
+        state->dock_y,
+        state->dock_width,
+        state->dock_height,
+        (hour % 12) * 30 + minute / 2,
+        minute * 6);
+    if (desktop) {
+        append_launcher_icon_style(document,
+                                   ".terminal-icon",
+                                   state->sakura_icon_uri);
+        append_launcher_icon_style(document,
+                                   ".midori-icon",
+                                   state->midori_icon_uri);
+        append_launcher_icon_style(document,
+                                   ".thunar-icon",
+                                   state->thunar_icon_uri);
+    }
     g_string_append_len(document, stylesheet, (gssize)stylesheet_length);
     g_string_append(document, middle);
-    for (index = 0; index < window_count; ++index) {
-        const struct renderer_window *window = &windows[index];
+    if (desktop) {
+        gchar *clock_fragment = set_fragment_title(
+            desktop_fragment,
+            desktop_fragment_length,
+            NULL);
+        gchar *minimized_markup;
+        if (clock_fragment == NULL) {
+            g_string_free(document, TRUE);
+            g_free(stylesheet);
+            g_free(fragment);
+            g_free(desktop_fragment);
+            return NULL;
+        }
+        clock_fragment = replace_fragment_text(
+            clock_fragment, "data-nixbench-clock", state->clock_text);
+        clock_fragment = replace_fragment_text(
+            clock_fragment, "data-nixbench-date-month", calendar_month);
+        clock_fragment = replace_fragment_text(
+            clock_fragment, "data-nixbench-date-day", calendar_day);
+        clock_fragment = replace_fragment_text(
+            clock_fragment,
+            "data-nixbench-date-weekday",
+            calendar_weekday);
+        minimized_markup = build_minimized_window_markup(state);
+        clock_fragment = replace_fragment_markup(
+            clock_fragment,
+            "data-nixbench-minimized-windows",
+            minimized_markup);
+        g_free(minimized_markup);
+        g_string_append_printf(
+            document,
+            "<section class=\"nixbench-atlas-tile\" "
+            "data-nixbench-desktop-tile "
+            "style=\"left:0;top:0;width:%dpx;height:%dpx\">",
+            state->output_width,
+            state->output_height);
+        g_string_append(document, clock_fragment);
+        g_string_append(document, "</section>");
+        g_free(clock_fragment);
+    }
+    for (index = 0; index < state->window_count; ++index) {
+        const struct renderer_window *window = &state->windows[index];
         const bool show_minimize =
             (window->state &
              NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_SHOW_MINIMIZE) != 0;
@@ -453,6 +762,7 @@ static gchar *build_window_atlas_document(
     g_string_append(document, suffix);
     g_free(stylesheet);
     g_free(fragment);
+    g_free(desktop_fragment);
     return g_string_free(document, FALSE);
 }
 
@@ -461,10 +771,12 @@ static bool pack_live_windows(struct renderer_state *state)
     const int maximum_width = (int)state->maximum_width;
     const int maximum_height = (int)state->maximum_height;
     int row_limit = LIVE_ATLAS_PREFERRED_ROW_WIDTH;
-    int atlas_width = 0;
-    int atlas_height = 0;
+    const bool desktop = renders_desktop(state) &&
+                         state->state_shell_available;
+    int atlas_width = desktop ? state->output_width : 0;
+    int atlas_height = desktop ? state->output_height : 0;
     int x = 0;
-    int y = 0;
+    int y = desktop ? state->output_height : 0;
     int row_height = 0;
     size_t input_index;
     size_t packed_count = 0;
@@ -518,7 +830,7 @@ static bool pack_live_windows(struct renderer_state *state)
     state->render_width = atlas_width;
     state->render_height = atlas_height;
     state->state_window_available = packed_count != 0;
-    return state->state_window_available;
+    return has_render_state(state);
 }
 
 static void renderer_registry_global(void *data,
@@ -612,6 +924,17 @@ static gboolean publish_live_layout(gpointer user_data)
         gtk_main_quit();
         return G_SOURCE_REMOVE;
     }
+    if (renders_desktop(state) && state->state_shell_available) {
+        nixbench_html_theme_atlas_v1_tile(
+            state->theme_atlas,
+            NIXBENCH_HTML_THEME_ATLAS_V1_TILE_KIND_DESKTOP,
+            0,
+            0,
+            0,
+            0,
+            state->output_width,
+            state->output_height);
+    }
     for (index = 0; index < state->window_count; ++index) {
         const struct renderer_window *window = &state->windows[index];
 
@@ -645,16 +968,14 @@ static bool begin_live_render(struct renderer_state *state)
     uint32_t generation_hi;
     uint32_t generation_lo;
 
-    if (!state->state_theme_valid || !state->state_window_available ||
-        state->window_count == 0 || state->render_width <= 0 ||
+    if (!state->state_theme_valid || !has_render_state(state) ||
+        state->render_width <= 0 ||
         state->render_height <= 0 ||
         (uint32_t)state->render_width > state->maximum_width ||
         (uint32_t)state->render_height > state->maximum_height) {
         return false;
     }
-    document = build_window_atlas_document(state->bundle,
-                                           state->windows,
-                                           state->window_count);
+    document = build_live_atlas_document(state);
     if (document == NULL) {
         return false;
     }
@@ -692,7 +1013,7 @@ static gboolean begin_live_render_idle(gpointer user_data)
     struct renderer_state *state = user_data;
 
     state->render_source = 0;
-    if (!state->state_window_available) {
+    if (!has_render_state(state)) {
         return G_SOURCE_REMOVE;
     }
     if (!begin_live_render(state)) {
@@ -705,7 +1026,7 @@ static gboolean begin_live_render_idle(gpointer user_data)
 
 static void schedule_live_render(struct renderer_state *state)
 {
-    if (!state->gtk_window_configured || !state->state_window_available ||
+    if (!state->gtk_window_configured || !has_render_state(state) ||
         state->layout_in_flight || state->render_source != 0) {
         return;
     }
@@ -755,6 +1076,7 @@ static void atlas_configure(
     state->maximum_width = maximum_width;
     state->maximum_height = maximum_height;
     state->state_theme_valid = false;
+    state->state_shell_available = false;
     state->state_window_available = false;
     state->window_count = 0;
     state->render_width = 0;
@@ -784,6 +1106,45 @@ static void atlas_theme(void *data,
                                strcmp(directory, state->bundle->directory) == 0;
 }
 
+static void atlas_shell_state(
+    void *data,
+    struct nixbench_html_theme_atlas_v1 *atlas,
+    uint32_t serial,
+    uint32_t output_width,
+    uint32_t output_height,
+    int32_t dock_x,
+    int32_t dock_y,
+    uint32_t dock_width,
+    uint32_t dock_height,
+    const char *clock_text)
+{
+    struct renderer_state *state = data;
+
+    (void)atlas;
+    if (serial != state->state_serial || output_width == 0 ||
+        output_height == 0 || output_width > state->maximum_width ||
+        output_height > state->maximum_height || dock_width == 0 ||
+        dock_height == 0 || dock_x < 0 || dock_y < 0 ||
+        dock_width > output_width || dock_height > output_height ||
+        (uint32_t)dock_x > output_width - dock_width ||
+        (uint32_t)dock_y > output_height - dock_height ||
+        output_width > INT_MAX || output_height > INT_MAX ||
+        dock_width > INT_MAX || dock_height > INT_MAX) {
+        return;
+    }
+    state->output_width = (int)output_width;
+    state->output_height = (int)output_height;
+    state->dock_x = (int)dock_x;
+    state->dock_y = (int)dock_y;
+    state->dock_width = (int)dock_width;
+    state->dock_height = (int)dock_height;
+    (void)snprintf(state->clock_text,
+                   sizeof(state->clock_text),
+                   "%s",
+                   clock_text != NULL ? clock_text : "00:00");
+    state->state_shell_available = true;
+}
+
 static void atlas_clear_windows(
     void *data,
     struct nixbench_html_theme_atlas_v1 *atlas,
@@ -795,6 +1156,7 @@ static void atlas_clear_windows(
     if (serial == state->state_serial) {
         state->state_window_available = false;
         state->window_count = 0;
+        state->minimized_window_count = 0;
         state->render_width = 0;
         state->render_height = 0;
     }
@@ -817,12 +1179,31 @@ static void atlas_window(
         ((uint64_t)window_hi << 32U) | window_lo;
 
     (void)atlas;
-    if (serial != state->state_serial ||
-        state->window_count == NB_THEME_ATLAS_MAX_TILES || window_id == 0 ||
+    if (serial != state->state_serial || window_id == 0 ||
         width == 0 || height == 0 || width > INT_MAX || height > INT_MAX ||
         (window_state &
-         (NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_MINIMIZED |
-          NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_FULLSCREEN)) != 0) {
+         NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_FULLSCREEN) != 0) {
+        return;
+    }
+    if ((window_state &
+         NIXBENCH_HTML_THEME_ATLAS_V1_WINDOW_STATE_MINIMIZED) != 0) {
+        struct renderer_minimized_window *minimized;
+
+        if (!renders_desktop(state) ||
+            state->minimized_window_count ==
+                CDE_MINIMIZED_WINDOW_CAPACITY) {
+            return;
+        }
+        minimized =
+            &state->minimized_windows[state->minimized_window_count++];
+        minimized->id = window_id;
+        (void)snprintf(minimized->title,
+                       sizeof(minimized->title),
+                       "%s",
+                       title != NULL ? title : "Window");
+        return;
+    }
+    if (state->window_count == NB_THEME_ATLAS_MAX_TILES) {
         return;
     }
     window = &state->windows[state->window_count++];
@@ -852,10 +1233,10 @@ static void atlas_state_done(
     }
     (void)pack_live_windows(state);
     nixbench_html_theme_atlas_v1_ack_state(atlas, serial);
-    if (!state->state_window_available && state->render_source != 0) {
+    if (!has_render_state(state) && state->render_source != 0) {
         g_source_remove(state->render_source);
         state->render_source = 0;
-    } else if (state->state_window_available) {
+    } else if (has_render_state(state)) {
         /*
          * Do not enter WebKit from a Wayland listener. GTK and WebKit share
          * this display and may perform their own synchronization while a
@@ -872,6 +1253,7 @@ static const struct nixbench_html_theme_atlas_v1_listener
 atlas_listener = {
     .configure = atlas_configure,
     .theme = atlas_theme,
+    .shell_state = atlas_shell_state,
     .clear_windows = atlas_clear_windows,
     .window = atlas_window,
     .state_done = atlas_state_done
@@ -1130,6 +1512,13 @@ int main(int argc, char **argv)
     state.web_view = web_view;
     state.snapshot_path = options.snapshot_path;
     state.live_atlas = options.atlas_token != NULL;
+    if (state.live_atlas && strcmp(bundle.id, "cde") == 0) {
+        /* These are the Icon= names from the installed GTK applications. */
+        state.sakura_icon_uri = gtk_icon_data_uri("terminal-tango");
+        state.midori_icon_uri =
+            gtk_icon_data_uri("org.midori_browser.Midori");
+        state.thunar_icon_uri = gtk_icon_data_uri("org.xfce.thunar");
+    }
     if (state.live_atlas) {
         g_signal_connect(window,
                          "configure-event",
@@ -1178,6 +1567,9 @@ int main(int argc, char **argv)
     if (state.display != NULL) {
         (void)wl_display_flush(state.display);
     }
+    g_free(state.sakura_icon_uri);
+    g_free(state.midori_icon_uri);
+    g_free(state.thunar_icon_uri);
     g_object_unref(context);
     return state.exit_status;
 }

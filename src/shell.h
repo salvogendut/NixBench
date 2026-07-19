@@ -71,6 +71,7 @@ struct nb_shell {
     bool minimize_gadget_visible;
     bool maximize_gadget_visible;
     enum nb_window_control_layout window_control_layout;
+    int window_menu_height;
 };
 
 void nb_shell_init(struct nb_shell *shell,
@@ -80,10 +81,17 @@ void nb_shell_init(struct nb_shell *shell,
 /* Append shell-owned menus to every active desktop/application menu model. */
 void nb_shell_set_menu_overlay(struct nb_shell *shell,
                                const struct nb_menu_model *menu_overlay_model);
+void nb_shell_set_floating_menu(struct nb_shell *shell, bool floating);
+bool nb_shell_open_context_menu(struct nb_shell *shell,
+                                int x,
+                                int y,
+                                struct nb_rect viewport);
 void nb_shell_set_window_controls(struct nb_shell *shell,
                                   bool minimize_gadget_visible,
                                   bool maximize_gadget_visible,
                                   enum nb_window_control_layout layout);
+void nb_shell_set_window_menu_height(struct nb_shell *shell, int height);
+int nb_shell_window_menu_height(const struct nb_shell *shell);
 
 nb_window_id nb_shell_open_window(struct nb_shell *shell,
                                   const char *title,
@@ -138,6 +146,7 @@ struct nb_shell_action nb_shell_menu_key_press(struct nb_shell *shell,
 void nb_shell_pointer_cancel(struct nb_shell *shell);
 bool nb_shell_has_pointer_interaction(const struct nb_shell *shell);
 bool nb_shell_wants_pointer_motion(const struct nb_shell *shell);
+bool nb_shell_uses_floating_menu(const struct nb_shell *shell);
 
 bool nb_shell_clamp_windows(struct nb_shell *shell,
                             struct nb_rect viewport);

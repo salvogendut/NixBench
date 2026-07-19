@@ -109,7 +109,7 @@ static void test_repository_bundles(void)
         const char *name;
     } expected[] = {
         {"Fantasy", "fantasy", "Fantasy"},
-        {"Motif", "motif", "Motif"},
+        {"CDE", "cde", "CDE"},
         {"BeOS", "beos", "BeOS-inspired"}
     };
     struct nb_theme_catalog catalog;
@@ -132,7 +132,7 @@ static void test_repository_bundles(void)
         CHECK(catalog.bundles[index + 1].renderer == NB_THEME_RENDERER_HTML);
     }
     CHECK(catalog.count == 4);
-    CHECK(nb_theme_catalog_find(&catalog, "motif") == &catalog.bundles[2]);
+    CHECK(nb_theme_catalog_find(&catalog, "cde") == &catalog.bundles[2]);
     CHECK(nb_theme_catalog_resolve(&catalog, "missing") ==
           &catalog.bundles[0]);
     CHECK(nb_theme_catalog_resolve(&catalog, NULL) == &catalog.bundles[0]);

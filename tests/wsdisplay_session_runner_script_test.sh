@@ -175,7 +175,7 @@ env PATH="$temporary/bin:/usr/bin:/bin" \
     NIXBENCH_SESSION_HELPER="$installed_helper" \
     NIXBENCH_SESSION_CORE="$installed_core" \
     NIXBENCH_GTK_MENU_BRIDGE=1 \
-    NIXBENCH_HTML_THEME=motif \
+    NIXBENCH_HTML_THEME=cde \
     NB_LAUNCH_STATUS=0 \
     NB_ABSENCE_STATUS=0 \
     NB_INITIAL_VT=1 \
@@ -186,7 +186,7 @@ env PATH="$temporary/bin:/usr/bin:/bin" \
 grep -F -- "$installed_helper --acknowledge-console-takeover" \
     "$installed_log" >/dev/null
 grep -F -- 'NIXBENCH_GTK_MENU_BRIDGE=1' "$installed_log" >/dev/null
-grep -F -- 'NIXBENCH_HTML_THEME=motif' "$installed_log" >/dev/null
+grep -F -- 'NIXBENCH_HTML_THEME=cde' "$installed_log" >/dev/null
 grep -F -- 'NIXBENCH_XWAYLAND_ROOTLESS=1' "$installed_log" >/dev/null
 grep -F -- 'NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION=0' \
     "$installed_log" >/dev/null
@@ -365,7 +365,7 @@ if printf '%s\n' START-NIXBENCH | \
     echo "invalid NIXBENCH_HTML_THEME value was accepted" >&2
     exit 1
 fi
-grep -F -- 'NIXBENCH_HTML_THEME must be classic, fantasy, motif, or beos' \
+grep -F -- 'NIXBENCH_HTML_THEME must be classic, fantasy, cde, or beos' \
     "$invalid_theme_output" >/dev/null
 
 relative_application_log=$temporary/relative-application.log

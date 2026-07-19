@@ -90,6 +90,7 @@ void nb_window_init(struct nb_window *window,
     window->minimize_gadget_visible = true;
     window->maximize_gadget_visible = true;
     window->control_layout = NB_WINDOW_CONTROLS_RIGHT;
+    window->decoration_menu_height = 0;
 }
 
 void nb_window_set_title(struct nb_window *window, const char *title)
@@ -129,6 +130,15 @@ void nb_window_set_controls(struct nb_window *window,
     window->control_layout = layout;
 }
 
+void nb_window_set_decoration_menu_height(struct nb_window *window,
+                                          int height)
+{
+    if (window != NULL) {
+        window->decoration_menu_height =
+            height > 0 ? minimum(height, NB_WINDOW_MENU_HEIGHT) : 0;
+    }
+}
+
 struct nb_rect nb_window_title_rect(const struct nb_window *window)
 {
     if (window->fullscreen) {
@@ -161,12 +171,31 @@ struct nb_rect nb_window_content_rect(const struct nb_window *window)
                        NB_WINDOW_BORDER_WIDTH - NB_WINDOW_FOOTER_HEIGHT;
     struct nb_rect content = {
         title.x,
-        title.y + title.height,
+        title.y + title.height + window->decoration_menu_height,
         title.width,
-        maximum(0, bottom - (title.y + title.height))
+        maximum(0, bottom - (title.y + title.height +
+                             window->decoration_menu_height))
     };
 
     return content;
+}
+
+struct nb_rect nb_window_menu_rect(const struct nb_window *window)
+{
+    const struct nb_rect title = nb_window_title_rect(window);
+    const int available = maximum(0,
+        window->frame.y + window->frame.height -
+        NB_WINDOW_BORDER_WIDTH - NB_WINDOW_FOOTER_HEIGHT -
+        (title.y + title.height));
+    const int height = window->fullscreen
+                           ? 0
+                           : minimum(window->decoration_menu_height,
+                                     available);
+
+    return (struct nb_rect){title.x,
+                            title.y + title.height,
+                            title.width,
+                            height};
 }
 
 struct nb_rect nb_window_footer_rect(const struct nb_window *window)
@@ -236,7 +265,9 @@ struct nb_rect nb_window_minimize_rect(const struct nb_window *window)
     if (!window->minimize_gadget_visible) {
         return (struct nb_rect){0, 0, 0, 0};
     }
-    if (window->control_layout == NB_WINDOW_CONTROLS_LEFT) {
+    if (window->control_layout == NB_WINDOW_CONTROLS_SPLIT) {
+        x = title.x + NB_WINDOW_GADGET_MARGIN;
+    } else if (window->control_layout == NB_WINDOW_CONTROLS_LEFT) {
         x = close.x + close.width + NB_WINDOW_GADGET_MARGIN;
     } else {
         x = close.x - NB_WINDOW_GADGET_MARGIN - size;

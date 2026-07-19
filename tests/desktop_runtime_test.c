@@ -7,6 +7,7 @@
 
 #include "desktop_runtime.h"
 #include "menu.h"
+#include "window.h"
 
 static int failures;
 
@@ -419,6 +420,50 @@ static void test_application_launcher_menu(void)
     nb_desktop_runtime_destroy(runtime);
 }
 
+static void test_cde_dock_launchers_and_minimized_windows(void)
+{
+    static const char token[] =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    struct nb_desktop_runtime_options options;
+    struct nb_desktop_runtime *runtime;
+    struct nb_desktop_runtime_update update;
+    struct nb_rect frame;
+    nb_window_id window = NB_WINDOW_ID_NONE;
+
+    nb_desktop_runtime_options_init(&options);
+    options.enable_wayland = true;
+    options.html_theme_token = token;
+    options.html_theme_id = "cde";
+    options.html_theme_directory = "/tmp";
+    runtime = nb_desktop_runtime_create(&options, &initial_output);
+    CHECK(runtime != NULL);
+    if (runtime == NULL) {
+        return;
+    }
+
+    /* The 920px CDE dock is centered at x=52 on the 1024px test output. */
+    update = click_runtime(runtime, 265, 582, 200);
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_SAKURA);
+    update = click_runtime(runtime, 316, 582, 202);
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_MIDORI);
+    update = click_runtime(runtime, 367, 582, 204);
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_THUNAR);
+
+    CHECK(nb_desktop_runtime_active_window_frame(runtime, &window, &frame));
+    CHECK(window != NB_WINDOW_ID_NONE);
+    update = click_runtime(runtime, frame.x + 14, frame.y + 14, 206);
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_NONE);
+    CHECK(!nb_desktop_runtime_active_window_frame(runtime, &window, &frame));
+
+    /* The first minimized-title cell occupies the grid's upper-left slot. */
+    update = click_runtime(runtime, 442, 559, 208);
+    CHECK(update.launch_request == NB_DESKTOP_LAUNCH_NONE);
+    CHECK(nb_desktop_runtime_active_window_frame(runtime, &window, &frame));
+    CHECK(window != NB_WINDOW_ID_NONE);
+
+    nb_desktop_runtime_destroy(runtime);
+}
+
 static void test_settings_and_application_pins(void)
 {
     struct nb_user_preferences initial_preferences;
@@ -708,6 +753,7 @@ int main(void)
     test_software_pointer_and_escape();
     test_keyboard_menu_path();
     test_application_launcher_menu();
+    test_cde_dock_launchers_and_minimized_windows();
     test_settings_and_application_pins();
     test_screenshot_countdown();
     test_defensive_api();

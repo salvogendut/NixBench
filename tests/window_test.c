@@ -286,6 +286,14 @@ static void test_window_control_preferences(void)
 
     struct nb_rect minimize;
 
+    nb_window_set_controls(&window, true, true, NB_WINDOW_CONTROLS_SPLIT);
+    close = nb_window_close_rect(&window);
+    minimize = nb_window_minimize_rect(&window);
+    maximize = nb_window_maximize_rect(&window);
+    CHECK(minimize.x == 107);
+    CHECK(maximize.x == 377);
+    CHECK(close.x == 397);
+
     nb_window_set_controls(&window, true, true, NB_WINDOW_CONTROLS_LEFT);
     close = nb_window_close_rect(&window);
     minimize = nb_window_minimize_rect(&window);

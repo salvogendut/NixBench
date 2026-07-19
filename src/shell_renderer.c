@@ -9,6 +9,10 @@ static bool render_minimized_windows(SDL_Renderer *renderer,
 {
     size_t index;
 
+    if (shell->menu.floating) {
+        return true;
+    }
+
     for (index = 0;
          index < nb_desktop_window_count(&shell->desktop);
          ++index) {

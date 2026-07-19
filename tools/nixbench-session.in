@@ -34,8 +34,8 @@ Environment:
   NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION
                             Use the legacy surface-ID association path
                             for troubleshooting (default: 0)
-  NIXBENCH_HTML_THEME       Select classic, fantasy, motif, or beos window
-                            decorations for this session
+  NIXBENCH_HTML_THEME       Select classic, fantasy, cde, or beos desktop
+                            chrome for this session (motif aliases cde)
   NIXBENCH_VT_AWAY          One-based VT used by the lifecycle test
 EOF
         exit 0

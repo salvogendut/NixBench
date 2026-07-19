@@ -61,6 +61,8 @@ void nb_desktop_set_window_controls(struct nb_desktop *desktop,
                                     bool minimize_gadget_visible,
                                     bool maximize_gadget_visible,
                                     enum nb_window_control_layout layout);
+void nb_desktop_set_window_menu_height(struct nb_desktop *desktop,
+                                       int height);
 
 size_t nb_desktop_window_count(const struct nb_desktop *desktop);
 nb_window_id nb_desktop_window_id_at(const struct nb_desktop *desktop,

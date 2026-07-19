@@ -328,13 +328,18 @@ static const char *html_theme_directory_name(const char *id)
     if (strcmp(id, "fantasy") == 0) {
         return "Fantasy";
     }
-    if (strcmp(id, "motif") == 0) {
-        return "Motif";
+    if (strcmp(id, "cde") == 0) {
+        return "CDE";
     }
     if (strcmp(id, "beos") == 0) {
         return "BeOS";
     }
     return NULL;
+}
+
+static const char *canonical_html_theme_id(const char *id)
+{
+    return id != NULL && strcmp(id, "motif") == 0 ? "cde" : id;
 }
 
 static bool fill_random_token(
@@ -1560,6 +1565,7 @@ int nb_session_core_run(int protocol_descriptor,
         if (requested_theme == NULL || requested_theme[0] == '\0') {
             requested_theme = preferences.window_theme;
         }
+        requested_theme = canonical_html_theme_id(requested_theme);
         if (requested_theme != NULL && requested_theme[0] != '\0' &&
             strcmp(requested_theme, "classic") != 0) {
             char theme_error[256] = {0};

@@ -110,9 +110,9 @@ case "$xwayland_legacy_association" in
     *) fail "NIXBENCH_XWAYLAND_LEGACY_ASSOCIATION must be 0 or 1" ;;
 esac
 case "$html_theme" in
-    ''|classic|fantasy|motif|beos) ;;
+    ''|classic|fantasy|cde|motif|beos) ;;
     *)
-        fail "NIXBENCH_HTML_THEME must be classic, fantasy, motif, or beos"
+        fail "NIXBENCH_HTML_THEME must be classic, fantasy, cde, or beos"
         ;;
 esac
 unset NIXBENCH_TRACE_WAYLAND NIXBENCH_TRACE_WAYLAND_LOG

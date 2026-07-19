@@ -99,12 +99,20 @@ bool nb_wayland_server_enable_html_theme(
     const char *theme_directory);
 bool nb_wayland_server_html_theme_connected(
     const struct nb_wayland_server *server);
+/* True when the configured (possibly not yet connected) renderer has this ID. */
+bool nb_wayland_server_html_theme_is(
+    const struct nb_wayland_server *server,
+    const char *theme_id);
 bool nb_wayland_server_html_theme_snapshot(
     const struct nb_wayland_server *server,
     struct nb_wayland_html_theme_snapshot *snapshot);
 /* Publish current shell state after a native (non-Wayland) shell mutation. */
 void nb_wayland_server_html_theme_state_changed(
     struct nb_wayland_server *server);
+bool nb_wayland_server_set_html_theme_shell_state(
+    struct nb_wayland_server *server,
+    struct nb_rect dock,
+    const char *clock_text);
 
 /*
  * Publish a standard Wayland socket beneath XDG_RUNTIME_DIR. The returned

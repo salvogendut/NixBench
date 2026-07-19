@@ -322,6 +322,22 @@ void nb_desktop_set_window_controls(struct nb_desktop *desktop,
     }
 }
 
+void nb_desktop_set_window_menu_height(struct nb_desktop *desktop,
+                                       int height)
+{
+    size_t index;
+
+    if (desktop == NULL) {
+        return;
+    }
+    for (index = 0; index < desktop->window_count; ++index) {
+        struct nb_desktop_slot *slot =
+            &desktop->slots[desktop->stack[index]];
+
+        nb_window_set_decoration_menu_height(&slot->window, height);
+    }
+}
+
 size_t nb_desktop_window_count(const struct nb_desktop *desktop)
 {
     return desktop->window_count;

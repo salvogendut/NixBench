@@ -200,6 +200,9 @@ static void open_menu_index(struct nb_menu *menu,
         return;
     }
     menu->phase = phase;
+    if (menu->floating) {
+        menu->floating_visible = true;
+    }
     menu->open_menu = menu_index;
     menu->hot_item = select_first ? first_enabled_item(spec) : no_index;
 }
@@ -210,6 +213,10 @@ void nb_menu_init(struct nb_menu *menu)
     menu->phase = NB_MENU_CLOSED;
     menu->open_menu = no_index;
     menu->hot_item = no_index;
+    menu->floating_x = 0;
+    menu->floating_y = 0;
+    menu->floating = false;
+    menu->floating_visible = false;
 }
 
 void nb_menu_set_model(struct nb_menu *menu,
@@ -224,6 +231,83 @@ void nb_menu_cancel(struct nb_menu *menu)
     menu->phase = NB_MENU_CLOSED;
     menu->open_menu = no_index;
     menu->hot_item = no_index;
+    if (menu->floating) {
+        menu->floating_visible = false;
+    }
+}
+
+void nb_menu_set_floating(struct nb_menu *menu, bool floating)
+{
+    if (menu == NULL || menu->floating == floating) {
+        return;
+    }
+    nb_menu_cancel(menu);
+    menu->floating = floating;
+    menu->floating_visible = false;
+}
+
+static int floating_bar_width(const struct nb_menu *menu)
+{
+    int width = 2 * MENU_LABEL_INSET_X;
+    size_t index;
+
+    for (index = 0; index < menu_count(menu); ++index) {
+        width += label_natural_width(menu_spec(menu, index));
+    }
+    return width;
+}
+
+struct nb_rect nb_menu_visible_bar_rect(const struct nb_menu *menu,
+                                        struct nb_rect viewport)
+{
+    struct nb_rect bar = nb_menu_bar_rect(viewport);
+    int width;
+
+    if (menu == NULL || !menu->floating) {
+        return bar;
+    }
+    if (!menu->floating_visible) {
+        return (struct nb_rect){viewport.x, viewport.y, 0, 0};
+    }
+    width = minimum(floating_bar_width(menu), maximum(0, viewport.width));
+    bar.x = menu->floating_x;
+    bar.y = menu->floating_y;
+    bar.width = width;
+    if (bar.x < viewport.x) {
+        bar.x = viewport.x;
+    }
+    if (bar.x + bar.width > viewport.x + viewport.width) {
+        bar.x = viewport.x + viewport.width - bar.width;
+    }
+    if (bar.y < viewport.y) {
+        bar.y = viewport.y;
+    }
+    if (bar.y + bar.height > viewport.y + viewport.height) {
+        bar.y = viewport.y + viewport.height - bar.height;
+    }
+    return bar;
+}
+
+bool nb_menu_show_floating(struct nb_menu *menu,
+                           int x,
+                           int y,
+                           struct nb_rect viewport)
+{
+    if (menu == NULL || !menu->floating || menu_count(menu) == 0 ||
+        viewport.width <= 0 || viewport.height <= 0) {
+        return false;
+    }
+    nb_menu_cancel(menu);
+    menu->floating_x = x;
+    menu->floating_y = y;
+    menu->floating_visible = true;
+    (void)nb_menu_visible_bar_rect(menu, viewport);
+    return true;
+}
+
+bool nb_menu_is_visible(const struct nb_menu *menu)
+{
+    return menu != NULL && (!menu->floating || menu->floating_visible);
 }
 
 struct nb_rect nb_menu_bar_rect(struct nb_rect viewport)
@@ -269,7 +353,7 @@ struct nb_rect nb_menu_label_rect(const struct nb_menu *menu,
                                   struct nb_rect viewport,
                                   size_t menu_index)
 {
-    const struct nb_rect bar = nb_menu_bar_rect(viewport);
+    const struct nb_rect bar = nb_menu_visible_bar_rect(menu, viewport);
     const struct nb_menu_spec *spec = menu_spec(menu, menu_index);
     struct nb_rect menu_area = bar;
     size_t index;
@@ -284,7 +368,11 @@ struct nb_rect nb_menu_label_rect(const struct nb_menu *menu,
         x += label_natural_width(menu_spec(menu, index));
     }
 
-    menu_area.width = maximum(0, menu_area.width - NB_MENU_CLOCK_AREA_WIDTH);
+    if (!menu->floating) {
+        menu_area.width = maximum(0,
+                                  menu_area.width -
+                                      NB_MENU_CLOCK_AREA_WIDTH);
+    }
     label.x = x;
     label.y = bar.y + MENU_LABEL_INSET_Y;
     label.width = label_natural_width(spec);
@@ -295,7 +383,7 @@ struct nb_rect nb_menu_label_rect(const struct nb_menu *menu,
 struct nb_rect nb_menu_panel_rect(const struct nb_menu *menu,
                                   struct nb_rect viewport)
 {
-    const struct nb_rect bar = nb_menu_bar_rect(viewport);
+    const struct nb_rect bar = nb_menu_visible_bar_rect(menu, viewport);
     const struct nb_menu_spec *spec = menu_spec(menu, menu->open_menu);
     struct nb_rect label;
     struct nb_rect panel;
@@ -371,7 +459,7 @@ struct nb_menu_hit nb_menu_hit_test(const struct nb_menu *menu,
         }
     }
 
-    if (rect_contains(nb_menu_bar_rect(viewport), x, y)) {
+    if (rect_contains(nb_menu_visible_bar_rect(menu, viewport), x, y)) {
         hit.kind = NB_MENU_HIT_BAR;
     }
     return hit;

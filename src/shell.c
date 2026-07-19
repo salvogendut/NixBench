@@ -192,6 +192,7 @@ void nb_shell_init(struct nb_shell *shell,
     shell->minimize_gadget_visible = true;
     shell->maximize_gadget_visible = true;
     shell->window_control_layout = NB_WINDOW_CONTROLS_RIGHT;
+    shell->window_menu_height = 0;
     sync_active_menu(shell);
 }
 
@@ -210,6 +211,28 @@ void nb_shell_set_menu_overlay(struct nb_shell *shell,
     }
 }
 
+void nb_shell_set_floating_menu(struct nb_shell *shell, bool floating)
+{
+    if (shell != NULL) {
+        nb_shell_pointer_cancel(shell);
+        nb_menu_set_floating(&shell->menu, floating);
+    }
+}
+
+bool nb_shell_open_context_menu(struct nb_shell *shell,
+                                int x,
+                                int y,
+                                struct nb_rect viewport)
+{
+    if (shell == NULL || !shell->menu.floating) {
+        return false;
+    }
+    nb_shell_pointer_cancel(shell);
+    (void)nb_desktop_pointer_down(&shell->desktop, x, y);
+    sync_active_menu(shell);
+    return nb_menu_show_floating(&shell->menu, x, y, viewport);
+}
+
 void nb_shell_set_window_controls(struct nb_shell *shell,
                                   bool minimize_gadget_visible,
                                   bool maximize_gadget_visible,
@@ -226,6 +249,21 @@ void nb_shell_set_window_controls(struct nb_shell *shell,
                                    minimize_gadget_visible,
                                    maximize_gadget_visible,
                                    layout);
+}
+
+void nb_shell_set_window_menu_height(struct nb_shell *shell, int height)
+{
+    if (shell == NULL) {
+        return;
+    }
+    shell->window_menu_height = height > 0 ? NB_WINDOW_MENU_HEIGHT : 0;
+    nb_desktop_set_window_menu_height(&shell->desktop,
+                                      shell->window_menu_height);
+}
+
+int nb_shell_window_menu_height(const struct nb_shell *shell)
+{
+    return shell != NULL ? shell->window_menu_height : 0;
 }
 
 nb_window_id nb_shell_open_window(struct nb_shell *shell,
@@ -257,6 +295,8 @@ nb_window_id nb_shell_open_window(struct nb_shell *shell,
                                    shell->minimize_gadget_visible,
                                    shell->maximize_gadget_visible,
                                    shell->window_control_layout);
+    nb_desktop_set_window_menu_height(&shell->desktop,
+                                      shell->window_menu_height);
 
     shell->menu_bindings[binding_index].window = window;
     shell->menu_bindings[binding_index].menu_source = menu_source;
@@ -604,7 +644,8 @@ bool nb_shell_pointer_down(struct nb_shell *shell,
         return true;
     }
 
-    minimized_window = active_fullscreen || nb_menu_is_open(&shell->menu)
+    minimized_window = active_fullscreen || shell->menu.floating ||
+                               nb_menu_is_open(&shell->menu)
                            ? NB_WINDOW_ID_NONE
                            : minimized_window_at(shell, x, y, viewport);
     if (minimized_window != NB_WINDOW_ID_NONE) {
@@ -628,6 +669,10 @@ bool nb_shell_pointer_down(struct nb_shell *shell,
             shell->pointer_owner = NB_SHELL_POINTER_MENU;
         }
         return true;
+    }
+
+    if (shell->menu.floating && nb_menu_is_visible(&shell->menu)) {
+        nb_menu_cancel(&shell->menu);
     }
 
     window_hit = nb_desktop_pointer_down(&shell->desktop, x, y);
@@ -664,7 +709,9 @@ bool nb_shell_pointer_move(struct nb_shell *shell,
         return nb_desktop_pointer_move(&shell->desktop,
                                        x,
                                        y,
-                                       nb_menu_work_area(viewport));
+                                       shell->menu.floating
+                                           ? viewport
+                                           : nb_menu_work_area(viewport));
     }
     return false;
 }
@@ -775,6 +822,13 @@ bool nb_shell_clamp_windows(struct nb_shell *shell,
 {
     return nb_desktop_clamp_windows_for_viewport(
         &shell->desktop,
-        nb_menu_work_area(viewport),
+        shell != NULL && shell->menu.floating
+            ? viewport
+            : nb_menu_work_area(viewport),
         viewport);
+}
+
+bool nb_shell_uses_floating_menu(const struct nb_shell *shell)
+{
+    return shell != NULL && shell->menu.floating;
 }

@@ -794,6 +794,7 @@ _Noreturn void nb_session_credentials_drop_and_exec(
         html_theme != NULL &&
         (strcmp(html_theme, "classic") == 0 ||
          strcmp(html_theme, "fantasy") == 0 ||
+         strcmp(html_theme, "cde") == 0 ||
          strcmp(html_theme, "motif") == 0 ||
          strcmp(html_theme, "beos") == 0);
     const char *trace_wayland = getenv("NIXBENCH_TRACE_WAYLAND");
