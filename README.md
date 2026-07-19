@@ -2,21 +2,45 @@
 
 NixBench is an experimental desktop environment for NetBSD, written in C and
 built around SDL3, an internal window manager, and an embedded Wayland
-compositor. Its interaction model and visual direction draw inspiration from
-Amiga Workbench and AROS while remaining an original project.
+compositor. It runs directly on the NetBSD console, manages native Wayland,
+GTK3, SDL3, and rootless X11 applications, and can render its desktop chrome
+from HTML and CSS theme bundles.
 
-The target is a lightweight desktop that runs directly on the NetBSD console
-without X.org underneath it. NixBench already supports its own Wayland clients,
-GTK3 applications through their Wayland backend, and traditional X11
-applications through rootless Xwayland.
+Its interaction model and original visual direction draw inspiration from
+Workbench-like systems and classic Unix desktops. The native Classic theme,
+a CDE-inspired desktop, and a responsive Fantasy theme have all been exercised
+on real NetBSD hardware.
 
 ## Screenshots
 
-![NixBench running NixInfo, Sakura, NixClock, and xclock](docs/images/nixbench-desktop.png)
+### Classic
 
-*NixBench running directly on NetBSD with native NixInfo, a GTK3/Wayland
-Sakura terminal, native Wayland NixClock, and X11 xclock through rootless
-Xwayland.*
+![NixBench Classic desktop running NixInfo, Sakura, and xclock](docs/images/nixbench-classic.png)
+
+*The native Classic desktop with NixInfo, GTK3/Wayland Sakura, and X11 xclock
+through rootless Xwayland.*
+
+### CDE
+
+![NixBench CDE desktop with its front panel](docs/images/nixbench-cde.png)
+
+*The HTML/CSS-rendered CDE theme supplies beveled application frames, a
+desktop menu, launchers, an analog clock, and minimized-window slots in its
+bottom front panel.*
+
+### Fantasy
+
+![NixBench Fantasy desktop with responsive application frames](docs/images/nixbench-fantasy-windows.png)
+
+*The Fantasy theme uses full unicorn frames for normal application windows and
+a compact gnome-and-mushroom frame for small utilities such as xclock.*
+
+![NixBench Fantasy desktop and enchanted dock](docs/images/nixbench-fantasy-desktop.png)
+
+*The Fantasy desktop combines its responsive HTML/CSS decorations with an
+enchanted dock and the NixBench Woods backdrop.*
+
+### Application compatibility
 
 ![The 1984 Amstrad CPC emulator running on NixBench](docs/images/nixbench-1984.png)
 
@@ -35,11 +59,19 @@ alongside NixInfo and a Sakura terminal.*
 - Rootless Xwayland compatibility for traditional X11 applications,
   including keyboard focus, EWMH fullscreen requests, and bounded direct or
   `INCR` text clipboard interoperability with Wayland applications.
+- HTML/CSS desktop themes rendered into authenticated compositor atlases,
+  with atomic frame updates and immediate native-Classic fallback if the
+  renderer fails or disconnects.
+- Hardware-validated Classic, CDE, and Fantasy desktops. Fantasy selects a
+  compact decoration for small utility windows rather than shrinking its full
+  unicorn frame.
 - Persistent application pins, window-control preferences, configurable solid
   or gradient backdrops, and PNG wallpaper placement in `~/.nixbenchrc`.
 - Delayed PNG screenshots and live CPU/memory history in NixInfo.
 - Privilege separation between the ordinary-user desktop and the small
   root-owned console/device helper.
+- A 72-test non-destructive suite covering the desktop model, renderers,
+  Wayland protocols, X11 transfer support, session supervision, and recovery.
 
 NixBench is still experimental. Its protocol extensions and internal APIs are
 not stable, and the standalone path is not yet presented as a production login
@@ -70,6 +102,14 @@ An installed NetBSD standalone session is started from a physical console with:
 
 ```sh
 nixbench-session --local
+```
+
+Select a validated desktop for one session with:
+
+```sh
+NIXBENCH_HTML_THEME=classic nixbench-session --local
+NIXBENCH_HTML_THEME=cde nixbench-session --local
+NIXBENCH_HTML_THEME=fantasy nixbench-session --local
 ```
 
 The standalone session owns the console, so read the recovery and installation
