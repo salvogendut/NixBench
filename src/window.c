@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 static int maximum(int left, int right)
 {
@@ -159,6 +160,10 @@ void nb_window_init(struct nb_window *window,
         (struct nb_window_decoration_insets){0, 0, 0, 0};
     window->decoration_controls =
         (struct nb_window_decoration_controls){0, 0, 0, 0, 0};
+    memset(&window->decoration_pixel_profile,
+           0,
+           sizeof(window->decoration_pixel_profile));
+    window->decoration_pixel_profile_enabled = false;
     window->decoration_frame_draggable = false;
 }
 
@@ -239,8 +244,8 @@ static bool has_decoration_content_insets(const struct nb_window *window)
     const struct nb_window_decoration_insets insets =
         window->decoration_content_insets;
 
-    return insets.left != 0 || insets.top != 0 || insets.right != 0 ||
-           insets.bottom != 0;
+    return window->decoration_pixel_profile_enabled || insets.left != 0 ||
+           insets.top != 0 || insets.right != 0 || insets.bottom != 0;
 }
 
 bool nb_window_decoration_controls_are_valid(
@@ -266,6 +271,49 @@ void nb_window_set_decoration_controls(
     }
 }
 
+static bool pixel_insets_are_valid(
+    struct nb_window_decoration_insets insets)
+{
+    return insets.left >= 0 && insets.top >= 0 && insets.right >= 0 &&
+           insets.bottom >= 0 &&
+           (int64_t)insets.left + insets.right <= INT_MAX &&
+           (int64_t)insets.top + insets.bottom <= INT_MAX;
+}
+
+static bool pixel_controls_are_valid(
+    struct nb_window_decoration_controls controls)
+{
+    const int64_t cluster_width =
+        (3 * (int64_t)controls.width) + (2 * (int64_t)controls.gap);
+
+    return controls.top >= 0 && controls.right >= 0 && controls.width >= 0 &&
+           controls.height >= 0 && controls.gap >= 0 &&
+           (int64_t)controls.top + controls.height <= INT_MAX &&
+           (int64_t)controls.right + cluster_width <= INT_MAX;
+}
+
+bool nb_window_decoration_pixel_profile_is_valid(
+    struct nb_window_decoration_pixel_profile profile)
+{
+    return profile.compact_width >= NB_WINDOW_MIN_WIDTH &&
+           profile.compact_height >= NB_WINDOW_MIN_HEIGHT &&
+           pixel_insets_are_valid(profile.regular_insets) &&
+           pixel_insets_are_valid(profile.compact_insets) &&
+           pixel_controls_are_valid(profile.regular_controls) &&
+           pixel_controls_are_valid(profile.compact_controls);
+}
+
+void nb_window_set_decoration_pixel_profile(
+    struct nb_window *window,
+    struct nb_window_decoration_pixel_profile profile)
+{
+    if (window != NULL &&
+        nb_window_decoration_pixel_profile_is_valid(profile)) {
+        window->decoration_pixel_profile = profile;
+        window->decoration_pixel_profile_enabled = true;
+    }
+}
+
 void nb_window_set_decoration_frame_draggable(struct nb_window *window,
                                                bool draggable)
 {
@@ -276,23 +324,62 @@ void nb_window_set_decoration_frame_draggable(struct nb_window *window,
 
 static bool has_custom_decoration_controls(const struct nb_window *window)
 {
+    if (window->decoration_pixel_profile_enabled) {
+        return true;
+    }
     return window->decoration_controls.width > 0 &&
            window->decoration_controls.height > 0;
+}
+
+static bool uses_compact_pixel_profile(const struct nb_window *window)
+{
+    const struct nb_window_decoration_pixel_profile *profile =
+        &window->decoration_pixel_profile;
+
+    return window->decoration_pixel_profile_enabled &&
+           (window->frame.width <= profile->compact_width ||
+            window->frame.height <= profile->compact_height);
+}
+
+static struct nb_window_decoration_insets pixel_profile_insets(
+    const struct nb_window *window)
+{
+    return uses_compact_pixel_profile(window)
+               ? window->decoration_pixel_profile.compact_insets
+               : window->decoration_pixel_profile.regular_insets;
+}
+
+static struct nb_window_decoration_controls pixel_profile_controls(
+    const struct nb_window *window)
+{
+    return uses_compact_pixel_profile(window)
+               ? window->decoration_pixel_profile.compact_controls
+               : window->decoration_pixel_profile.regular_controls;
 }
 
 static struct nb_rect custom_control_rect(const struct nb_window *window,
                                           int slot_from_right)
 {
-    const int width = scaled_inset(window->frame.width,
-                                   window->decoration_controls.width);
-    const int height = scaled_inset(window->frame.height,
-                                    window->decoration_controls.height);
-    const int right = scaled_inset(window->frame.width,
-                                   window->decoration_controls.right);
-    const int top = scaled_inset(window->frame.height,
-                                 window->decoration_controls.top);
-    const int gap = scaled_inset(window->frame.width,
-                                 window->decoration_controls.gap);
+    const struct nb_window_decoration_controls controls =
+        window->decoration_pixel_profile_enabled
+            ? pixel_profile_controls(window)
+            : window->decoration_controls;
+    const int width = window->decoration_pixel_profile_enabled
+                          ? controls.width
+                          : scaled_inset(window->frame.width, controls.width);
+    const int height = window->decoration_pixel_profile_enabled
+                           ? controls.height
+                           : scaled_inset(window->frame.height,
+                                          controls.height);
+    const int right = window->decoration_pixel_profile_enabled
+                          ? controls.right
+                          : scaled_inset(window->frame.width, controls.right);
+    const int top = window->decoration_pixel_profile_enabled
+                        ? controls.top
+                        : scaled_inset(window->frame.height, controls.top);
+    const int gap = window->decoration_pixel_profile_enabled
+                        ? controls.gap
+                        : scaled_inset(window->frame.width, controls.gap);
 
     return (struct nb_rect){
         window->frame.x + window->frame.width - right - width -
@@ -331,18 +418,25 @@ struct nb_rect nb_window_content_rect(const struct nb_window *window)
         return window->frame;
     }
     if (has_decoration_content_insets(window)) {
-        const int left = scaled_inset(
-            window->frame.width,
-            window->decoration_content_insets.left);
-        const int top = scaled_inset(
-            window->frame.height,
-            window->decoration_content_insets.top);
-        const int right = scaled_inset(
-            window->frame.width,
-            window->decoration_content_insets.right);
-        const int bottom = scaled_inset(
-            window->frame.height,
-            window->decoration_content_insets.bottom);
+        const struct nb_window_decoration_insets insets =
+            window->decoration_pixel_profile_enabled
+                ? pixel_profile_insets(window)
+                : window->decoration_content_insets;
+        const int left = window->decoration_pixel_profile_enabled
+                             ? minimum(window->frame.width, insets.left)
+                             : scaled_inset(window->frame.width, insets.left);
+        const int top = window->decoration_pixel_profile_enabled
+                            ? minimum(window->frame.height, insets.top)
+                            : scaled_inset(window->frame.height, insets.top);
+        const int right_available = maximum(0, window->frame.width - left);
+        const int bottom_available = maximum(0, window->frame.height - top);
+        const int right = window->decoration_pixel_profile_enabled
+                              ? minimum(right_available, insets.right)
+                              : scaled_inset(window->frame.width, insets.right);
+        const int bottom = window->decoration_pixel_profile_enabled
+                               ? minimum(bottom_available, insets.bottom)
+                               : scaled_inset(window->frame.height,
+                                              insets.bottom);
 
         return (struct nb_rect){
             window->frame.x + left,

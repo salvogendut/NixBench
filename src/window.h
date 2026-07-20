@@ -48,6 +48,20 @@ struct nb_window_decoration_controls {
     int gap;
 };
 
+/*
+ * Pixel geometry for decorations whose artwork is nine-sliced rather than
+ * scaled with the outer frame.  Compact geometry is selected when either
+ * outer dimension is at or below its corresponding threshold.
+ */
+struct nb_window_decoration_pixel_profile {
+    int compact_width;
+    int compact_height;
+    struct nb_window_decoration_insets regular_insets;
+    struct nb_window_decoration_insets compact_insets;
+    struct nb_window_decoration_controls regular_controls;
+    struct nb_window_decoration_controls compact_controls;
+};
+
 enum nb_window_hit {
     NB_WINDOW_HIT_NONE,
     NB_WINDOW_HIT_FRAME,
@@ -102,6 +116,8 @@ struct nb_window {
     int decoration_menu_height;
     struct nb_window_decoration_insets decoration_content_insets;
     struct nb_window_decoration_controls decoration_controls;
+    struct nb_window_decoration_pixel_profile decoration_pixel_profile;
+    bool decoration_pixel_profile_enabled;
     bool decoration_frame_draggable;
 };
 
@@ -125,6 +141,11 @@ bool nb_window_decoration_controls_are_valid(
 void nb_window_set_decoration_controls(
     struct nb_window *window,
     struct nb_window_decoration_controls controls);
+bool nb_window_decoration_pixel_profile_is_valid(
+    struct nb_window_decoration_pixel_profile profile);
+void nb_window_set_decoration_pixel_profile(
+    struct nb_window *window,
+    struct nb_window_decoration_pixel_profile profile);
 void nb_window_set_decoration_frame_draggable(struct nb_window *window,
                                                bool draggable);
 

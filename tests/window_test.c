@@ -129,6 +129,63 @@ static void test_irregular_decoration_content_insets(void)
     CHECK(nb_window_hit_test(&window, 110, 200) == NB_WINDOW_HIT_TITLE);
 }
 
+static void test_fixed_decoration_geometry_does_not_scale(void)
+{
+    struct nb_window window = make_window();
+    const struct nb_window_decoration_pixel_profile profile = {
+        .compact_width = 400,
+        .compact_height = 300,
+        .regular_insets = {72, 96, 69, 46},
+        .compact_insets = {50, 46, 50, 41},
+        .regular_controls = {67, 68, 24, 30, 4},
+        .compact_controls = {25, 54, 18, 18, 3}
+    };
+    struct nb_rect content;
+    struct nb_rect close;
+
+    CHECK(nb_window_decoration_pixel_profile_is_valid(profile));
+    CHECK(!nb_window_decoration_pixel_profile_is_valid(
+        (struct nb_window_decoration_pixel_profile){0}));
+    nb_window_set_decoration_pixel_profile(&window, profile);
+
+    content = nb_window_content_rect(&window);
+    close = nb_window_close_rect(&window);
+    CHECK(content.x == 150);
+    CHECK(content.y == 126);
+    CHECK(content.width == 220);
+    CHECK(content.height == 133);
+    CHECK(close.x == 348);
+    CHECK(close.y == 105);
+    CHECK(close.width == 18);
+    CHECK(close.height == 18);
+
+    window.frame.width = 800;
+    window.frame.height = 600;
+    content = nb_window_content_rect(&window);
+    close = nb_window_close_rect(&window);
+    CHECK(content.x == 172);
+    CHECK(content.y == 176);
+    CHECK(content.width == 659);
+    CHECK(content.height == 458);
+    CHECK(close.x == 808);
+    CHECK(close.y == 147);
+    CHECK(close.width == 24);
+    CHECK(close.height == 30);
+
+    window.frame.width = 1200;
+    window.frame.height = 900;
+    content = nb_window_content_rect(&window);
+    close = nb_window_close_rect(&window);
+    CHECK(content.x == 172);
+    CHECK(content.y == 176);
+    CHECK(content.width == 1059);
+    CHECK(content.height == 758);
+    CHECK(close.x == 1208);
+    CHECK(close.y == 147);
+    CHECK(close.width == 24);
+    CHECK(close.height == 30);
+}
+
 static void test_title_ownership(void)
 {
     struct nb_window window;
@@ -572,6 +629,7 @@ int main(void)
 {
     test_geometry_and_hit_testing();
     test_irregular_decoration_content_insets();
+    test_fixed_decoration_geometry_does_not_scale();
     test_title_ownership();
     test_dragging();
     test_clamping();

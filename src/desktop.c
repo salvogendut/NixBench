@@ -374,6 +374,24 @@ void nb_desktop_set_window_decoration_controls(
     }
 }
 
+void nb_desktop_set_window_decoration_pixel_profile(
+    struct nb_desktop *desktop,
+    struct nb_window_decoration_pixel_profile profile)
+{
+    size_t index;
+
+    if (desktop == NULL ||
+        !nb_window_decoration_pixel_profile_is_valid(profile)) {
+        return;
+    }
+    for (index = 0; index < desktop->window_count; ++index) {
+        struct nb_desktop_slot *slot =
+            &desktop->slots[desktop->stack[index]];
+
+        nb_window_set_decoration_pixel_profile(&slot->window, profile);
+    }
+}
+
 void nb_desktop_set_window_decoration_frame_draggable(
     struct nb_desktop *desktop,
     bool draggable)

@@ -61,7 +61,27 @@ enum {
     NIXBENCH_FANTASY_CONTROL_RIGHT = 88,
     NIXBENCH_FANTASY_CONTROL_WIDTH = 40,
     NIXBENCH_FANTASY_CONTROL_HEIGHT = 62,
-    NIXBENCH_FANTASY_CONTROL_GAP = 6
+    NIXBENCH_FANTASY_CONTROL_GAP = 6,
+    NIXBENCH_FANTASY_COMPACT_WIDTH = 400,
+    NIXBENCH_FANTASY_COMPACT_HEIGHT = 300,
+    NIXBENCH_FANTASY_PIXEL_LEFT = 72,
+    NIXBENCH_FANTASY_PIXEL_TOP = 96,
+    NIXBENCH_FANTASY_PIXEL_RIGHT = 69,
+    NIXBENCH_FANTASY_PIXEL_BOTTOM = 46,
+    NIXBENCH_FANTASY_PIXEL_CONTROL_TOP = 67,
+    NIXBENCH_FANTASY_PIXEL_CONTROL_RIGHT = 68,
+    NIXBENCH_FANTASY_PIXEL_CONTROL_WIDTH = 24,
+    NIXBENCH_FANTASY_PIXEL_CONTROL_HEIGHT = 30,
+    NIXBENCH_FANTASY_PIXEL_CONTROL_GAP = 4,
+    NIXBENCH_FANTASY_COMPACT_PIXEL_LEFT = 50,
+    NIXBENCH_FANTASY_COMPACT_PIXEL_TOP = 46,
+    NIXBENCH_FANTASY_COMPACT_PIXEL_RIGHT = 50,
+    NIXBENCH_FANTASY_COMPACT_PIXEL_BOTTOM = 41,
+    NIXBENCH_FANTASY_COMPACT_PIXEL_CONTROL_TOP = 25,
+    NIXBENCH_FANTASY_COMPACT_PIXEL_CONTROL_RIGHT = 54,
+    NIXBENCH_FANTASY_COMPACT_PIXEL_CONTROL_WIDTH = 18,
+    NIXBENCH_FANTASY_COMPACT_PIXEL_CONTROL_HEIGHT = 18,
+    NIXBENCH_FANTASY_COMPACT_PIXEL_CONTROL_GAP = 3
 };
 
 #define NIXBENCH_MENU_SOURCE_DESKTOP UINT64_C(1)
@@ -2224,6 +2244,38 @@ struct nb_desktop_runtime *nb_desktop_runtime_create(
                 NIXBENCH_FANTASY_CONTROL_WIDTH,
                 NIXBENCH_FANTASY_CONTROL_HEIGHT,
                 NIXBENCH_FANTASY_CONTROL_GAP
+            });
+        nb_shell_set_window_decoration_pixel_profile(
+            &runtime->shell,
+            (struct nb_window_decoration_pixel_profile){
+                .compact_width = NIXBENCH_FANTASY_COMPACT_WIDTH,
+                .compact_height = NIXBENCH_FANTASY_COMPACT_HEIGHT,
+                .regular_insets = {
+                    NIXBENCH_FANTASY_PIXEL_LEFT,
+                    NIXBENCH_FANTASY_PIXEL_TOP,
+                    NIXBENCH_FANTASY_PIXEL_RIGHT,
+                    NIXBENCH_FANTASY_PIXEL_BOTTOM
+                },
+                .compact_insets = {
+                    NIXBENCH_FANTASY_COMPACT_PIXEL_LEFT,
+                    NIXBENCH_FANTASY_COMPACT_PIXEL_TOP,
+                    NIXBENCH_FANTASY_COMPACT_PIXEL_RIGHT,
+                    NIXBENCH_FANTASY_COMPACT_PIXEL_BOTTOM
+                },
+                .regular_controls = {
+                    NIXBENCH_FANTASY_PIXEL_CONTROL_TOP,
+                    NIXBENCH_FANTASY_PIXEL_CONTROL_RIGHT,
+                    NIXBENCH_FANTASY_PIXEL_CONTROL_WIDTH,
+                    NIXBENCH_FANTASY_PIXEL_CONTROL_HEIGHT,
+                    NIXBENCH_FANTASY_PIXEL_CONTROL_GAP
+                },
+                .compact_controls = {
+                    NIXBENCH_FANTASY_COMPACT_PIXEL_CONTROL_TOP,
+                    NIXBENCH_FANTASY_COMPACT_PIXEL_CONTROL_RIGHT,
+                    NIXBENCH_FANTASY_COMPACT_PIXEL_CONTROL_WIDTH,
+                    NIXBENCH_FANTASY_COMPACT_PIXEL_CONTROL_HEIGHT,
+                    NIXBENCH_FANTASY_COMPACT_PIXEL_CONTROL_GAP
+                }
             });
         nb_shell_set_window_decoration_frame_draggable(&runtime->shell,
                                                         true);

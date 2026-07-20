@@ -69,6 +69,9 @@ void nb_desktop_set_window_decoration_insets(
 void nb_desktop_set_window_decoration_controls(
     struct nb_desktop *desktop,
     struct nb_window_decoration_controls controls);
+void nb_desktop_set_window_decoration_pixel_profile(
+    struct nb_desktop *desktop,
+    struct nb_window_decoration_pixel_profile profile);
 void nb_desktop_set_window_decoration_frame_draggable(
     struct nb_desktop *desktop,
     bool draggable);
