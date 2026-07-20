@@ -62,14 +62,13 @@ portable physical scancodes through that keymap rather than exposing
 host-specific raw codes. The compositor copies committed buffers before
 releasing them, so clients and the shell do not share mutable rendering state.
 
-NixClock is the first real out-of-process NixBench application. It uses
-`wl_shm` and stable `xdg-shell` for its resizable analog-clock surface, plus a
-small versioned NixBench extension to publish the global menus associated with
-its toplevel. The focused application contributes **NixClock**, containing
-**Quit**, and **Settings**, containing the checkable **Show seconds** command.
-The seconds hand is hidden by default and appears in a distinct color when the
-setting is enabled. The earlier separate `nixbench-wayland-demo` remains a
-focused input and protocol probe.
+NixClock is the first bundled HTML application. A reusable, borderless
+WebKitGTK host supplies its ordinary Wayland toplevel while HTML and CSS draw
+the responsive white clock face and hands. A boundary-aligned JavaScript timer
+updates the hands once per minute, or once per second when the optional red
+seconds hand is enabled. Window framing remains entirely under the active
+NixBench theme. The earlier separate `nixbench-wayland-demo` remains a focused
+input and protocol probe.
 
 Socket-pair protocol tests cover configure/acknowledge, mapping, pixels, frame
 completion, output state and membership, application-menu transactions and

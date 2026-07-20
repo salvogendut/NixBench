@@ -18,8 +18,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#ifndef NB_SESSION_INSTALLED_NIXCLOCK_PATH
-#define NB_SESSION_INSTALLED_NIXCLOCK_PATH ""
+#ifndef NB_SESSION_INSTALLED_HTML_APP_PATH
+#define NB_SESSION_INSTALLED_HTML_APP_PATH ""
 #endif
 
 #ifndef NB_SESSION_INSTALLED_GTK_MODULE_PATH
@@ -1048,9 +1048,10 @@ static bool apply_runtime_update(
         break;
     case NB_DESKTOP_LAUNCH_NIXCLOCK:
         name = "NixClock";
+        software_webkit = true;
         if (!resolve_program_file(core,
-                                  "nixclock",
-                                  NB_SESSION_INSTALLED_NIXCLOCK_PATH,
+                                  "nixbench-html-app",
+                                  NB_SESSION_INSTALLED_HTML_APP_PATH,
                                   X_OK,
                                   path,
                                   sizeof(path))) {

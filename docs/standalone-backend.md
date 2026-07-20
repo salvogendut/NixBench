@@ -550,10 +550,11 @@ Xwayland clients from turning a small window update into continuous
 full-desktop rendering and copying without weakening privilege separation.
 
 The ordinary-user core also owns a bounded multi-application process table.
-The global **Applications** menu launches NixClock from beside the core and
-the pkgsrc Sakura, Midori, and Thunar executables. These GTK applications use
-the private Wayland display; separate X11 applications use the rootless
-Xwayland `DISPLAY`. Only
+The global **Applications** menu launches the bundled NixClock through the
+generic HTML application host installed beside the core, plus the pkgsrc
+Sakura, Midori, and Thunar executables. These GTK applications use the private
+Wayland display; separate X11 applications use the rootless Xwayland
+`DISPLAY`. Only
 applications pinned in `~/.nixbenchrc` are listed; the Settings entry remains
 available even when all four applications are unpinned. The
 launcher menu is appended to the focused client's menu model,

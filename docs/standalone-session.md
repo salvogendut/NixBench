@@ -25,8 +25,9 @@ from the retained second SSH session.
 
 The desktop starts empty. Use the global **Applications** menu to start
 NixClock, Sakura Terminal, Midori Web Browser, or Thunar File Manager.
-NixClock is resolved from the build tree or installed prefix; the external
-entries use `/usr/pkg/bin/sakura`, `/usr/pkg/bin/midori`, and
+NixClock's generic HTML host and bundle are resolved from the build tree or
+installed prefix; the external entries use `/usr/pkg/bin/sakura`,
+`/usr/pkg/bin/midori`, and
 `/usr/pkg/bin/thunar`. To export GTK application
 menus into the bar as well, start the session with
 `NIXBENCH_GTK_MENU_BRIDGE=1`.

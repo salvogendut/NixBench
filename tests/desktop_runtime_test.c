@@ -498,12 +498,13 @@ static void test_fantasy_dock_launchers_and_minimized_windows(void)
     CHECK(nb_desktop_runtime_active_window_frame(runtime, &window, &frame));
     CHECK(window != NB_WINDOW_ID_NONE);
     {
-        /* Fantasy places minimize in the leftmost illustrated socket. */
-        const int control_width = (frame.width * 40) / 1000;
-        const int control_height = (frame.height * 62) / 1000;
-        const int control_right = (frame.width * 88) / 1000;
-        const int control_top = (frame.height * 142) / 1000;
-        const int control_gap = (frame.width * 6) / 1000;
+        /* Fantasy controls remain pixel-sized as the window is resized. */
+        const bool compact = frame.width <= 400 || frame.height <= 300;
+        const int control_width = compact ? 18 : 24;
+        const int control_height = compact ? 18 : 30;
+        const int control_right = compact ? 54 : 68;
+        const int control_top = compact ? 25 : 67;
+        const int control_gap = compact ? 3 : 4;
         const int minimize_x = frame.x + frame.width - control_right -
                                control_width -
                                (2 * (control_width + control_gap));

@@ -53,7 +53,9 @@ alongside NixInfo and a Sakura terminal.*
   NetBSD `wsdisplay` and wscons.
 - A Workbench-style global menu bar supplied by the focused application.
 - Movable, resizable, minimizable, and maximizable managed windows.
-- Native NixBench applications including NixInfo and NixClock.
+- Built-in NixInfo plus NixClock as a bundled HTML/CSS application hosted by
+  the same small WebKitGTK application runner intended for future desktop
+  objects.
 - GTK3/Wayland applications such as Sakura and Midori, with an optional bridge
   that publishes their menus in the NixBench bar.
 - Rootless Xwayland compatibility for traditional X11 applications,
@@ -70,7 +72,7 @@ alongside NixInfo and a Sakura terminal.*
 - Delayed PNG screenshots and live CPU/memory history in NixInfo.
 - Privilege separation between the ordinary-user desktop and the small
   root-owned console/device helper.
-- A 72-test non-destructive suite covering the desktop model, renderers,
+- A 72-test non-destructive NetBSD suite covering the desktop model, renderers,
   Wayland protocols, X11 transfer support, session supervision, and recovery.
 
 NixBench is still experimental. Its protocol extensions and internal APIs are

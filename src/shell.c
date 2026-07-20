@@ -198,6 +198,10 @@ void nb_shell_init(struct nb_shell *shell,
         (struct nb_window_decoration_insets){0, 0, 0, 0};
     shell->window_decoration_controls =
         (struct nb_window_decoration_controls){0, 0, 0, 0, 0};
+    memset(&shell->window_decoration_pixel_profile,
+           0,
+           sizeof(shell->window_decoration_pixel_profile));
+    shell->window_decoration_pixel_profile_enabled = false;
     shell->window_decoration_frame_draggable = false;
     sync_active_menu(shell);
 }
@@ -300,6 +304,19 @@ void nb_shell_set_window_decoration_controls(
     nb_desktop_set_window_decoration_controls(&shell->desktop, controls);
 }
 
+void nb_shell_set_window_decoration_pixel_profile(
+    struct nb_shell *shell,
+    struct nb_window_decoration_pixel_profile profile)
+{
+    if (shell == NULL ||
+        !nb_window_decoration_pixel_profile_is_valid(profile)) {
+        return;
+    }
+    shell->window_decoration_pixel_profile = profile;
+    shell->window_decoration_pixel_profile_enabled = true;
+    nb_desktop_set_window_decoration_pixel_profile(&shell->desktop, profile);
+}
+
 void nb_shell_set_window_decoration_frame_draggable(struct nb_shell *shell,
                                                      bool draggable)
 {
@@ -385,6 +402,11 @@ nb_window_id nb_shell_open_window(struct nb_shell *shell,
     nb_desktop_set_window_decoration_controls(
         &shell->desktop,
         shell->window_decoration_controls);
+    if (shell->window_decoration_pixel_profile_enabled) {
+        nb_desktop_set_window_decoration_pixel_profile(
+            &shell->desktop,
+            shell->window_decoration_pixel_profile);
+    }
     nb_desktop_set_window_decoration_frame_draggable(
         &shell->desktop,
         shell->window_decoration_frame_draggable);

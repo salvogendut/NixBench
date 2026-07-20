@@ -27,7 +27,8 @@ static void print_usage(const char *program)
     puts("  --require-core-crash           require an observed core crash and recovery");
     puts("  --require-core-hang            require a heartbeat timeout and recovery");
     puts("  --help                         show this help without device access");
-    puts("\nThe default core and NixClock application are siblings of this executable.");
+    puts("\nThe default core and bundled HTML application host are installed "
+         "with this executable.");
 }
 
 int main(int argc, char *argv[])

@@ -74,6 +74,8 @@ struct nb_shell {
     int window_menu_height;
     struct nb_window_decoration_insets window_decoration_insets;
     struct nb_window_decoration_controls window_decoration_controls;
+    struct nb_window_decoration_pixel_profile window_decoration_pixel_profile;
+    bool window_decoration_pixel_profile_enabled;
     bool window_decoration_frame_draggable;
 };
 
@@ -101,6 +103,9 @@ void nb_shell_set_window_decoration_insets(
 void nb_shell_set_window_decoration_controls(
     struct nb_shell *shell,
     struct nb_window_decoration_controls controls);
+void nb_shell_set_window_decoration_pixel_profile(
+    struct nb_shell *shell,
+    struct nb_window_decoration_pixel_profile profile);
 void nb_shell_set_window_decoration_frame_draggable(struct nb_shell *shell,
                                                      bool draggable);
 

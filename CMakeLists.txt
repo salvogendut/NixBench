@@ -1372,59 +1372,44 @@ elseif(NOT NIXBENCH_GTK_MENU_BRIDGE STREQUAL "OFF")
   )
 endif()
 
-set(NIXBENCH_NIXCLOCK_AVAILABLE FALSE)
-if(
-  NIXBENCH_WAYLAND_ENABLED
-  AND NIXBENCH_WAYLAND_CLIENT_AVAILABLE
-  AND NIXBENCH_BUILD_APPLICATIONS
-)
-  set(NIXBENCH_NIXCLOCK_AVAILABLE TRUE)
-endif()
-
-if(BUILD_TESTING OR NIXBENCH_NIXCLOCK_AVAILABLE)
-  add_library(
-    nixbench_nixclock_ui STATIC
-    apps/nixclock/nixclock_ui.c
-  )
-  target_include_directories(
-    nixbench_nixclock_ui
-    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/apps/nixclock"
-  )
-  target_link_libraries(nixbench_nixclock_ui PUBLIC m)
-  nixbench_configure_c_target(nixbench_nixclock_ui)
-endif()
-
-if(NIXBENCH_NIXCLOCK_AVAILABLE)
+set(NIXBENCH_HTML_APPS_AVAILABLE FALSE)
+if(NIXBENCH_HTML_THEMES_AVAILABLE AND NIXBENCH_BUILD_APPLICATIONS)
+  set(NIXBENCH_HTML_APPS_AVAILABLE TRUE)
   add_executable(
-    nixclock
-    apps/nixclock/nixclock.c
-    "${NIXBENCH_XDG_SHELL_PRIVATE_CODE}"
-    "${NIXBENCH_APPLICATION_MENU_PRIVATE_CODE}"
-  )
-  add_dependencies(nixclock nixbench_wayland_protocol)
-  target_include_directories(
-    nixclock
-    PRIVATE
-      "${NIXBENCH_WAYLAND_GENERATED_DIR}"
-      "${NIXBENCH_WAYLAND_CLIENT_INCLUDE_DIR}"
+    nixbench-html-app
+    src/html_app.c
   )
   target_compile_definitions(
-    nixclock
-    PRIVATE NIXCLOCK_VERSION="${PROJECT_VERSION}"
+    nixbench-html-app
+    PRIVATE
+      NIXBENCH_HTML_APP_VERSION="${PROJECT_VERSION}"
+      "NIXBENCH_HTML_APP_SOURCE_DIRECTORY=\"${CMAKE_CURRENT_SOURCE_DIR}/apps/html\""
+      "NIXBENCH_HTML_APP_INSTALL_DIRECTORY=\"${CMAKE_INSTALL_FULL_DATADIR}/nixbench/apps\""
   )
   target_link_libraries(
-    nixclock
-    PRIVATE
-      nixbench_nixclock_ui
-      "${NIXBENCH_WAYLAND_CLIENT_LIBRARY}"
+    nixbench-html-app
+    PRIVATE "${NIXBENCH_WEBKITGTK_TARGET}"
   )
-  nixbench_configure_c_target(nixclock)
-  install(TARGETS nixclock RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
-  add_dependencies(nixbench nixclock)
+  nixbench_configure_c_target(nixbench-html-app)
+  install(
+    TARGETS nixbench-html-app
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+  )
+  install(
+    DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/apps/html/"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/nixbench/apps"
+    FILES_MATCHING
+      PATTERN "*.html"
+      PATTERN "*.css"
+      PATTERN "*.js"
+      PATTERN "*.svg"
+      PATTERN "*.png"
+  )
+  add_dependencies(nixbench nixbench-html-app)
   target_compile_definitions(
     nixbench
     PRIVATE
-      "NIXBENCH_INSTALLED_NIXCLOCK_PATH=\"${CMAKE_INSTALL_FULL_BINDIR}/nixclock\""
+      "NIXBENCH_INSTALLED_HTML_APP_PATH=\"${CMAKE_INSTALL_FULL_BINDIR}/nixbench-html-app\""
   )
 endif()
 
@@ -1503,11 +1488,11 @@ if(NIXBENCH_BUILD_WSDISPLAY_SESSION)
       "The wsdisplay session requires NIXBENCH_WAYLAND=ON"
     )
   endif()
-  if(NOT NIXBENCH_NIXCLOCK_AVAILABLE)
+  if(NOT NIXBENCH_HTML_APPS_AVAILABLE)
     message(
       FATAL_ERROR
-      "The wsdisplay session requires Wayland client development files and "
-      "NIXBENCH_BUILD_APPLICATIONS=ON for its application launcher"
+      "The wsdisplay session requires WebKitGTK, gdk-wayland-3.0, and "
+      "NIXBENCH_BUILD_APPLICATIONS=ON for its HTML application launcher"
     )
   endif()
 endif()
@@ -1533,7 +1518,7 @@ if(
   target_compile_definitions(
     nixbench_session_core
     PRIVATE
-      "NB_SESSION_INSTALLED_NIXCLOCK_PATH=\"${CMAKE_INSTALL_FULL_BINDIR}/nixclock\""
+      "NB_SESSION_INSTALLED_HTML_APP_PATH=\"${CMAKE_INSTALL_FULL_BINDIR}/nixbench-html-app\""
       "NB_SESSION_INSTALLED_GTK_MODULE_PATH=\"${CMAKE_INSTALL_FULL_LIBDIR}/gtk-3.0/modules/${CMAKE_SHARED_MODULE_PREFIX}nixbench_gtk_menu_bridge${CMAKE_SHARED_MODULE_SUFFIX}\""
   )
   if(NIXBENCH_HTML_THEMES_AVAILABLE)
@@ -2033,16 +2018,6 @@ if(BUILD_TESTING)
   )
   nixbench_configure_c_target(nixbench_wayland_demo_ui_tests)
 
-  add_executable(
-    nixbench_nixclock_ui_tests
-    tests/nixclock_ui_test.c
-  )
-  target_link_libraries(
-    nixbench_nixclock_ui_tests
-    PRIVATE nixbench_nixclock_ui
-  )
-  nixbench_configure_c_target(nixbench_nixclock_ui_tests)
-
   if(NIXBENCH_WAYLAND_CLIENT_AVAILABLE)
     add_executable(nixbench_wayland_tests tests/wayland_test.c)
     add_dependencies(nixbench_wayland_tests nixbench_wayland_protocol)
@@ -2289,10 +2264,6 @@ if(BUILD_TESTING)
     NAME nixbench.wayland.demo-ui
     COMMAND nixbench_wayland_demo_ui_tests
   )
-  add_test(
-    NAME nixbench.nixclock.ui
-    COMMAND nixbench_nixclock_ui_tests
-  )
   add_test(NAME nixbench.cli.version COMMAND nixbench --version)
   add_test(NAME nixbench.cli.help COMMAND nixbench --help)
   add_test(NAME nixbench.cli.unknown-option COMMAND nixbench --unknown-option)
@@ -2317,13 +2288,17 @@ if(BUILD_TESTING)
   if(NIXBENCH_WAYLAND_DEMO_AVAILABLE)
     add_test(NAME nixbench.wayland.demo-help COMMAND nixbench-wayland-demo --help)
   endif()
-  if(NIXBENCH_NIXCLOCK_AVAILABLE)
-    add_test(NAME nixbench.nixclock.help COMMAND nixclock --help)
-    add_test(NAME nixbench.nixclock.version COMMAND nixclock --version)
-    add_test(NAME nixbench.nixclock.unknown-option
-             COMMAND nixclock --definitely-not-an-option)
+  if(NIXBENCH_HTML_APPS_AVAILABLE)
+    add_test(NAME nixbench.html-app.help COMMAND nixbench-html-app --help)
+    add_test(NAME nixbench.html-app.version COMMAND nixbench-html-app --version)
+    add_test(
+      NAME nixbench.html-app.nixclock-bundle
+      COMMAND nixbench-html-app --app nixclock --check
+    )
+    add_test(NAME nixbench.html-app.unknown-option
+             COMMAND nixbench-html-app --definitely-not-an-option)
     set_tests_properties(
-      nixbench.nixclock.unknown-option
+      nixbench.html-app.unknown-option
       PROPERTIES WILL_FAIL TRUE
     )
   endif()

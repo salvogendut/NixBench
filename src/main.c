@@ -41,8 +41,8 @@
 #define NIXBENCH_VERSION "development"
 #endif
 
-#ifndef NIXBENCH_INSTALLED_NIXCLOCK_PATH
-#define NIXBENCH_INSTALLED_NIXCLOCK_PATH ""
+#ifndef NIXBENCH_INSTALLED_HTML_APP_PATH
+#define NIXBENCH_INSTALLED_HTML_APP_PATH ""
 #endif
 
 enum {
@@ -602,10 +602,11 @@ static bool resolve_hosted_application(
         const char *base_path = SDL_GetBasePath();
 
         *name = "NixClock";
+        *software_webkit = true;
         if (base_path != NULL) {
             const int length = snprintf(path,
                                         PATH_MAX,
-                                        "%snixclock",
+                                        "%snixbench-html-app",
                                         base_path);
 
             if (length >= 0 && length < PATH_MAX &&
@@ -613,10 +614,10 @@ static bool resolve_hosted_application(
                 return true;
             }
         }
-        if (copy_executable_path(NIXBENCH_INSTALLED_NIXCLOCK_PATH, path)) {
+        if (copy_executable_path(NIXBENCH_INSTALLED_HTML_APP_PATH, path)) {
             return true;
         }
-        program = "nixclock";
+        program = "nixbench-html-app";
         break;
     }
     case NB_DESKTOP_LAUNCH_SAKURA:

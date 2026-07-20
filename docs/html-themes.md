@@ -198,7 +198,7 @@ the wallpaper. Native geometry, clipping, control hit testing, and application
 input remain authoritative. Its shadowed dock is also treated as a topmost
 input region, matching the HTML pixels drawn above application windows.
 
-The first hardware gate requires unchanged behavior for native NixClock,
+The first hardware gate requires unchanged behavior for HTML/CSS NixClock,
 GTK/Wayland applications, SDL/Wayland applications, and Xwayland windows. A
 theme-renderer crash must not terminate the desktop or compromise console
 restoration.
