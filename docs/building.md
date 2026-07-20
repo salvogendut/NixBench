@@ -11,8 +11,8 @@ Required development dependencies:
 - A video backend supported by SDL3; Xorg is the initial NetBSD host
 
 The compositor path additionally uses the Wayland server library and scanner,
-libxkbcommon, and the stable `xdg-shell.xml` from `wayland-protocols`. NixClock
-and the separate demo also require the Wayland client development library.
+libxkbcommon, and the stable `xdg-shell.xml` from `wayland-protocols`. The
+separate protocol demo also requires the Wayland client development library.
 Configuration defaults to `-DNIXBENCH_WAYLAND=AUTO`: it enables the feature
 when all server components are found and otherwise builds the SDL-only desktop.
 Use `-DNIXBENCH_WAYLAND=ON` to require it, or `OFF` to omit it explicitly.
@@ -21,8 +21,8 @@ Use `-DNIXBENCH_WAYLAND=ON` to require it, or `OFF` to omit it explicitly.
 `wayland`, `libxkbcommon`, and `wayland-protocols` packages provide these
 components; no `pkg-config` executable is required by this build.
 `NIXBENCH_BUILD_APPLICATIONS` also defaults to `ON`; set it to `OFF` to omit
-NixClock. Application targets are built only when the Wayland client and
-compositor dependencies are available.
+the generic HTML application host and bundled NixClock. HTML application
+targets require the WebKitGTK dependencies described below.
 
 The experimental HTML decoration renderer is controlled by
 `-DNIXBENCH_HTML_THEMES=AUTO|ON|OFF`. `AUTO`, the default, enables its targets
@@ -56,7 +56,8 @@ builds:
 - `nixbench-wsdisplay-session`, the root recovery supervisor and device-helper
   launcher;
 - `nixbench-session-core`, its internal ordinary-user desktop process; and
-- `nixclock`, a native application available from the desktop launcher.
+- `nixbench-html-app`, the generic WebKitGTK host used by the bundled HTML/CSS
+  NixClock and future NixBench desktop objects.
 
 `nixbench-wsdisplay-smoke` is the older, explicitly opt-in root hardware
 harness and is not built by default. Enable it separately with
@@ -170,20 +171,19 @@ layout to clients. NixBench does not yet import the active host Xorg layout
 automatically; a desktop keyboard setting is planned.
 
 In another terminal, use the display name logged by NixBench (normally
-`wayland-0`) to start NixClock:
+`wayland-0`) to start the HTML/CSS NixClock:
 
 ```sh
 XDG_RUNTIME_DIR="$HOME/.nixbench-runtime" \
 WAYLAND_DISPLAY=wayland-0 \
-./build/nixclock
+./build/nixbench-html-app --app nixclock
 ```
 
-Focus the clock to place its **NixClock** and **Settings** menus in the global
-bar. Choose **Settings > Show seconds** to toggle the colored seconds hand; the
-item's check mark follows the setting. Choose **NixClock > Quit** to terminate
-only the clock application. Pass `--show-seconds` to enable that hand at
-startup. NixClock currently connects only to NixBench because its required
-global-menu extension is deliberately still private and experimental.
+The face and hands are HTML/CSS. A small JavaScript timer aligns updates to
+wall-clock second or minute boundaries instead of animating continuously.
+Click the face to toggle the red seconds hand, or pass `--show-seconds` to
+enable it at startup. The WebKit host supplies only the ordinary Wayland
+window; NixBench continues to own the themed outer decoration.
 
 The earlier separate protocol probe can be started in the same way:
 

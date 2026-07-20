@@ -149,16 +149,14 @@ Exit criteria:
 - Malformed messages and terminated applications cannot destabilize the shell.
 - Public integration surfaces have protocol tests and versioning rules.
 
-Current checkpoint: NixClock is the first real out-of-process native
-application. Under the hosted desktop it maps a release-aware `wl_shm`
-analog-clock surface through stable `xdg-shell` and publishes its focused
-global menu through the private, versioned
-`nixbench-application-menu-v1` extension. The application-named **NixClock**
-menu contains **Quit**; **Settings** contains the checkable **Show seconds**
-command, which toggles a differently colored seconds hand. Transactional menu
-publication, checked and enabled state, command delivery, surface lifetime,
-clock geometry, redraw timing, and command-line behavior have dedicated tests.
-The earlier `nixbench-wayland-demo` remains an input/protocol probe.
+Current checkpoint: NixClock has moved from its original native `wl_shm`
+prototype to the reusable `nixbench-html-app` host. Its white circular face,
+black hour/minute hands, and optional red seconds hand are bundled HTML/CSS;
+a boundary-aligned JavaScript timer avoids continuous animation. The host
+supplies only a borderless Wayland/WebKit surface, leaving every outer frame to
+the active NixBench theme. The earlier `nixbench-wayland-demo` remains an
+input/protocol probe, and the original clock remains documented below as an
+important physical-validation milestone rather than current architecture.
 
 NixClock is now physically validated in both the hosted desktop and the
 privilege-separated standalone session. The root `wsdisplay` research harness

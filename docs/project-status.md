@@ -48,16 +48,14 @@ remains a useful GTK2/Xwayland compatibility probe; its override-redirect
 menus and context menus exceed the current rootless XWM coverage, so it is no
 longer the default launcher choice.
 
-NixClock is the first real out-of-process application. It creates an
-`xdg_toplevel`, manages release-aware shared-memory buffers and frame callbacks,
-and draws a scalable analog clock with continuous hour and minute hands. Its
-redraw schedule follows local wall-clock boundaries instead of accumulating
-timer drift. The focused window publishes an application-named **NixClock**
-menu with **Quit** and a **Settings** menu whose checkable **Show seconds** item
-toggles a differently colored third hand. The
-`nixbench-application-menu-v1` extension sends activated commands back to the
-owning process and switches the global bar to that surface's committed menu.
-The separate `nixbench-wayland-demo` remains the smaller pointer and keyboard
+NixClock is now a bundled HTML/CSS application rather than a bespoke C
+renderer. The reusable `nixbench-html-app` WebKitGTK host creates a borderless
+Wayland toplevel and loads the clock bundle; HTML/CSS draw a white circular
+face inscribed in its square content area, black hour and minute hands, and an
+optional red seconds hand. A small JavaScript timer follows wall-clock
+boundaries without a continuous animation loop. Clicking the face toggles the
+seconds hand. The active NixBench theme supplies every outer frame. The
+separate `nixbench-wayland-demo` remains the smaller pointer and keyboard
 protocol probe.
 
 The desktop runtime now talks to a backend-neutral host contract rather than
@@ -75,9 +73,10 @@ rendering, buffer scale/transform or input-region handling, subsurfaces,
 accelerated buffers, or resize negotiation. Its popup support is deliberately
 narrow: full pointer
 routing into popups, outside-click dismissal policy, and positioner constraint
-adjustment are not implemented yet. NixClock exercises the first private
-application-menu protocol. Existing GTK/SDL Wayland clients are still only
-partially supported; the standalone initial-application selector permits
+adjustment are not implemented yet. Existing GTK applications exercise the
+private application-menu protocol through the optional toolkit bridge.
+Existing GTK/SDL Wayland clients are still only partially supported; the
+standalone initial-application selector permits
 diagnostic compatibility probes that are expected to expose the remaining
 gaps.
 
