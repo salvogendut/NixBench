@@ -644,13 +644,15 @@ static gchar *build_document(const struct nb_theme_bundle *bundle,
             "--nixbench-footer-height:%dpx;"
             "--nixbench-gadget-margin:%dpx;"
             "--nixbench-control-size:%dpx;"
-            "--nixbench-menu-height:%dpx}",
+            "--nixbench-menu-height:%dpx;"
+            "--nixbench-resize-size:%dpx}",
             NB_WINDOW_BORDER_WIDTH,
             NB_WINDOW_TITLE_HEIGHT,
             NB_WINDOW_FOOTER_HEIGHT,
             NB_WINDOW_GADGET_MARGIN,
             NB_WINDOW_CLOSE_SIZE,
-            NB_WINDOW_MENU_HEIGHT);
+            NB_WINDOW_MENU_HEIGHT,
+            NB_WINDOW_RESIZE_SIZE);
     } else if (component == COMPONENT_DESKTOP) {
         g_string_append(
             document,
@@ -766,6 +768,7 @@ static gchar *build_live_atlas_document(
         "--nixbench-gadget-margin:%dpx;"
         "--nixbench-control-size:%dpx;"
         "--nixbench-menu-height:%dpx;"
+        "--nixbench-resize-size:%dpx;"
         "--nixbench-dock-x:%dpx;"
         "--nixbench-dock-y:%dpx;"
         "--nixbench-dock-width:%dpx;"
@@ -778,6 +781,7 @@ static gchar *build_live_atlas_document(
         NB_WINDOW_GADGET_MARGIN,
         NB_WINDOW_CLOSE_SIZE,
         NB_WINDOW_MENU_HEIGHT,
+        NB_WINDOW_RESIZE_SIZE,
         state->dock_x,
         state->dock_y,
         state->dock_width,

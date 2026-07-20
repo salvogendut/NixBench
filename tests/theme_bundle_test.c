@@ -59,6 +59,22 @@ static bool write_file(const char *path, const char *text)
     return close(descriptor) == 0;
 }
 
+static bool file_contains(const char *path, const char *needle)
+{
+    FILE *file;
+    char buffer[8192];
+    size_t count;
+
+    file = fopen(path, "rb");
+    if (file == NULL) {
+        return false;
+    }
+    count = fread(buffer, 1, sizeof(buffer) - 1, file);
+    buffer[count] = '\0';
+    (void)fclose(file);
+    return strstr(buffer, needle) != NULL;
+}
+
 static bool write_manifest(const char *directory, const char *text)
 {
     char path[1024];
@@ -138,6 +154,17 @@ static void test_repository_bundles(void)
     CHECK(nb_theme_catalog_resolve(&catalog, NULL) == &catalog.bundles[0]);
     CHECK(!nb_theme_catalog_add(&catalog, path, error, sizeof(error)));
     CHECK(strstr(error, "duplicate") != NULL);
+
+    CHECK(snprintf(path,
+                   sizeof(path),
+                   "%s/CDE/window.html",
+                   NIXBENCH_SOURCE_THEME_DIR) > 0);
+    CHECK(file_contains(path, "data-nixbench-action=\"resize_south_east\""));
+    CHECK(snprintf(path,
+                   sizeof(path),
+                   "%s/CDE/theme.css",
+                   NIXBENCH_SOURCE_THEME_DIR) > 0);
+    CHECK(file_contains(path, "width: var(--nixbench-resize-size)"));
 }
 
 static void test_manifest_rejection(void)

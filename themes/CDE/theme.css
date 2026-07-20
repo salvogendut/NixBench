@@ -116,6 +116,33 @@ html, body {
   text-shadow: 1px 1px 0 rgba(0,0,0,.35);
 }
 
+/*
+ * This occupies the same bottom-right square as nb_window_resize_rect().
+ * Input remains compositor-owned; the HTML element is the CDE affordance
+ * painted over that native southeast-resize target.
+ */
+.resize-grip {
+  position: absolute;
+  z-index: 4;
+  right: 0;
+  bottom: 0;
+  width: var(--nixbench-resize-size);
+  height: var(--nixbench-resize-size);
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(135deg,
+      transparent 0 3px,
+      var(--cde-shadow) 3px 4px,
+      var(--cde-light) 4px 5px);
+  border: 2px solid;
+  border-color: var(--cde-light) var(--cde-dark)
+                var(--cde-dark) var(--cde-light);
+}
+
+.nixbench-maximized .resize-grip {
+  display: none;
+}
+
 .cde-desktop {
   position: relative;
   width: 100%;
